@@ -41,6 +41,19 @@ impl RoleAgent {
         }
     }
 
+    /// Claude, Codex: those installed, `have` = (Claude, Codex).
+    pub fn choices((claude, codex): (bool, bool)) -> Vec<RoleAgent> {
+        [(RoleAgent::Claude, claude), (RoleAgent::Codex, codex)].into_iter().filter(|(_, on)| *on).map(|(r, _)| r).collect()
+    }
+
+    pub fn of(agent: Agent) -> Option<RoleAgent> {
+        match agent {
+            Agent::Claude => Some(RoleAgent::Claude),
+            Agent::Codex => Some(RoleAgent::Codex),
+            _ => None,
+        }
+    }
+
     pub fn from_label(label: &str) -> Option<RoleAgent> {
         match label {
             "claude" => Some(RoleAgent::Claude),
@@ -62,21 +75,29 @@ pub struct ChatRoles {
 }
 
 impl ChatRoles {
-    /// The next worker choice (Claude ↔ Codex; Claude only while Codex is not installed).
-    pub fn next_worker(self, codex: bool) -> ChatRoles {
-        let worker = match self.worker {
-            RoleAgent::Claude if codex => RoleAgent::Codex,
-            _ => RoleAgent::Claude,
+    /// The roles of a new chat: everyone runs as its lead.
+    pub fn led_by(lead: RoleAgent) -> ChatRoles {
+        ChatRoles { worker: lead, reviewer: None }
+    }
+
+    /// The next worker choice, Claude ↔ Codex among those `have` (installed: Claude, Codex).
+    pub fn next_worker(self, have: (bool, bool)) -> ChatRoles {
+        let choices = RoleAgent::choices(have);
+        let at = choices.iter().position(|r| *r == self.worker);
+        let worker = match at {
+            Some(at) => choices[(at + 1) % choices.len()],
+            None => choices.first().copied().unwrap_or(self.worker),
         };
         ChatRoles { worker, ..self }
     }
 
-    /// The next reviewer choice: off → Claude → Codex → off (Codex left out while not installed).
-    pub fn next_reviewer(self, codex: bool) -> ChatRoles {
-        let reviewer = match self.reviewer {
-            None => Some(RoleAgent::Claude),
-            Some(RoleAgent::Claude) if codex => Some(RoleAgent::Codex),
-            Some(_) => None,
+    /// The next reviewer choice: off → Claude → Codex → off, among those `have`.
+    pub fn next_reviewer(self, have: (bool, bool)) -> ChatRoles {
+        let choices = RoleAgent::choices(have);
+        let reviewer = match self.reviewer.and_then(|r| choices.iter().position(|c| *c == r)) {
+            None if self.reviewer.is_none() => choices.first().copied(),
+            None => None,
+            Some(at) => choices.get(at + 1).copied(),
         };
         ChatRoles { reviewer, ..self }
     }
@@ -177,14 +198,20 @@ mod tests {
         let roles = ChatRoles::default();
         assert_eq!(roles.worker, RoleAgent::Claude);
         assert_eq!(roles.reviewer, None);
-        assert_eq!(roles.next_worker(true).worker, RoleAgent::Codex);
-        assert_eq!(roles.next_worker(true).next_worker(true).worker, RoleAgent::Claude);
-        assert_eq!(roles.next_worker(false).worker, RoleAgent::Claude);
-        let on = roles.next_reviewer(true);
+        let both = (true, true);
+        assert_eq!(roles.next_worker(both).worker, RoleAgent::Codex);
+        assert_eq!(roles.next_worker(both).next_worker(both).worker, RoleAgent::Claude);
+        assert_eq!(roles.next_worker((true, false)).worker, RoleAgent::Claude);
+        // Without Claude Code, a chat's roles are Codex's.
+        assert_eq!(ChatRoles::led_by(RoleAgent::Codex).next_worker((false, true)).worker, RoleAgent::Codex);
+        assert_eq!(roles.next_worker((false, true)).worker, RoleAgent::Codex);
+        assert_eq!(roles.next_reviewer((false, true)).reviewer, Some(RoleAgent::Codex));
+        assert_eq!(roles.next_reviewer((false, true)).next_reviewer((false, true)).reviewer, None);
+        let on = roles.next_reviewer(both);
         assert_eq!(on.reviewer, Some(RoleAgent::Claude));
-        assert_eq!(on.next_reviewer(true).reviewer, Some(RoleAgent::Codex));
-        assert_eq!(on.next_reviewer(true).next_reviewer(true).reviewer, None);
-        assert_eq!(on.next_reviewer(false).reviewer, None);
+        assert_eq!(on.next_reviewer(both).reviewer, Some(RoleAgent::Codex));
+        assert_eq!(on.next_reviewer(both).next_reviewer(both).reviewer, None);
+        assert_eq!(on.next_reviewer((true, false)).reviewer, None);
     }
 
     #[test]

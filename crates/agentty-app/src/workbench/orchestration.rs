@@ -49,8 +49,15 @@ pub enum Stage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub id: u64,
-    /// The orchestrator's Claude Code session: how its pane is found again after a restart.
+    /// The orchestrator's session: how its pane is found again after a restart. Empty until the
+    /// lead's agent names it (Codex does after its first turn); `lead_pane` finds it until then.
     pub session: String,
+    /// The agent that leads: Claude Code, or Codex where Claude Code is not installed.
+    #[serde(default = "claude")]
+    pub lead: agentty_bridge::model::Agent,
+    /// The lead's pane while its session is not known yet.
+    #[serde(skip)]
+    pub lead_pane: Option<u64>,
     pub goal: String,
     pub folder: PathBuf,
     pub started_ms: u64,
@@ -68,6 +75,10 @@ pub struct Record {
     /// of them starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan: Vec<PlanAgent>,
+}
+
+fn claude() -> agentty_bridge::model::Agent {
+    agentty_bridge::model::Agent::Claude
 }
 
 /// One agent of an orchestration's plan. Its subagent is found by name (the Agent tool's
@@ -250,13 +261,16 @@ impl Workbench {
     /// A new orchestration, led by the agent in `pane_id`.
     pub(super) fn add_orchestration(&mut self, pane_id: u64, goal: String, folder: PathBuf, cx: &mut Context<Self>) -> Option<u64> {
         let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id)?;
-        let session = pane.read(cx).current_session()?;
+        let lead = pane.read(cx).spec.kind.agent()?;
+        let session = pane.read(cx).current_session().unwrap_or_default();
         let now = crate::ui::now_ms();
         let records = self.orchestrations();
         let id = records.iter().map(|r| r.id + 1).max().unwrap_or(1).max(now);
         records.push(Record {
             id,
             session,
+            lead,
+            lead_pane: Some(pane_id),
             goal,
             folder,
             started_ms: now,
@@ -278,11 +292,19 @@ impl Workbench {
             return None;
         }
         let (current, started) = (view.current_session(), view.spec.session_id.clone());
-        self.session_board.records.iter().find(|r| Some(&r.session) == current.as_ref() || Some(&r.session) == started.as_ref())
+        self.session_board.records.iter().find(|r| {
+            (!r.session.is_empty() && (Some(&r.session) == current.as_ref() || Some(&r.session) == started.as_ref()))
+                || (r.session.is_empty() && r.lead_pane == Some(view.pane_id))
+        })
     }
 
     /// `agentty plan` from a pane: the plan of the orchestration that pane leads (no other).
     pub fn answer_plan(&mut self, request: crate::agent_signal::PlanRequest, cx: &mut Context<Self>) {
+        if let Some(step) = request.plan.get("step").and_then(|s| s.as_str()).map(str::to_string) {
+            let result = self.plan_step(request.pane, &step, request.plan.get("name").and_then(|n| n.as_str()).unwrap_or(""), cx);
+            let _ = request.reply.send(crate::agent_signal::browser_reply(result));
+            return cx.notify();
+        }
         let result = (|| {
             let plan = parse_plan(&request.plan)?;
             let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == request.pane).ok_or("the asking pane is gone")?;
@@ -301,6 +323,47 @@ impl Workbench {
         })();
         let _ = request.reply.send(crate::agent_signal::browser_reply(result));
         cx.notify();
+    }
+
+    /// `agentty plan --start <name>` / `--done <name>`: an agent of the plan started or finished.
+    /// A lead without subagents of its own (Codex runs its agents as processes) says so itself;
+    /// the run is kept with the pane like a subagent its hooks report.
+    fn plan_step(&mut self, pane_id: u64, step: &str, name: &str, cx: &mut Context<Self>) -> Result<String, String> {
+        let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id).ok_or("the asking pane is gone")?;
+        let record = self
+            .record_of_pane(&pane, cx)
+            .ok_or("this agent does not lead an orchestration (agentty plan is for one started from Agentty's Orchestrator)")?;
+        if !record.plan.iter().any(|a| a.name == name) {
+            return Err(format!("no agent named \"{name}\" in the plan: send the plan first (agentty plan)"));
+        }
+        let name = name.to_string();
+        let now = std::time::Instant::now();
+        match step {
+            "start" => pane.update(cx, |view, _| {
+                // Started again: the earlier run under its name is over (it failed, or was given up).
+                for run in view.subagents.iter_mut().filter(|r| r.task.as_deref() == Some(name.as_str()) && r.finished.is_none()) {
+                    run.finished = Some(now);
+                }
+                let id = format!("plan:{name}:{}", view.subagents.len());
+                view.subagents.push(crate::terminal::SubagentRun {
+                    id,
+                    kind: "plan".into(),
+                    task: Some(name.clone()),
+                    started: now,
+                    finished: None,
+                    last_tool: None,
+                    result: None,
+                    last_active: now,
+                });
+            }),
+            "done" => pane.update(cx, |view, _| {
+                for run in view.subagents.iter_mut().filter(|r| r.task.as_deref() == Some(name.as_str()) && r.finished.is_none()) {
+                    run.finished = Some(now);
+                }
+            }),
+            _ => return Err(format!("unknown step {step}: use --start or --done")),
+        }
+        Ok(serde_json::json!({ "agent": name, "step": step }).to_string())
     }
 
     /// The colour of the orchestration mark for workspace `index`, when an orchestration is led
@@ -353,6 +416,9 @@ impl Workbench {
     pub(super) fn pane_of_record(&self, record: &Record, cx: &gpui::App) -> Option<Pane> {
         self.all_panes().into_iter().find(|p| {
             let view = p.read(cx);
+            if record.session.is_empty() {
+                return record.lead_pane == Some(view.pane_id);
+            }
             view.current_session().as_deref() == Some(record.session.as_str())
                 || view.spec.session_id.as_deref() == Some(record.session.as_str())
         })
@@ -363,6 +429,18 @@ impl Workbench {
         self.orchestrations();
         let now = crate::ui::now_ms();
         let mut changed = false;
+        // A lead that had no session yet (Codex names it after its first turn) has one now.
+        for index in 0..self.session_board.records.len() {
+            let record = &self.session_board.records[index];
+            if !record.session.is_empty() {
+                continue;
+            }
+            let found = self.pane_of_record(record, cx).and_then(|pane| pane.read(cx).current_session());
+            if let Some(session) = found {
+                self.session_board.records[index].session = session;
+                changed = true;
+            }
+        }
         for index in 0..self.session_board.records.len() {
             let record = self.session_board.records[index].clone();
             let settling = now < record.settling_until;
@@ -493,7 +571,7 @@ impl Workbench {
         let title: String = record.goal.lines().next().unwrap_or("").chars().take(40).collect();
         let spec = || {
             let folder = if record.folder.is_dir() { record.folder.clone() } else { crate::launch::home_dir() };
-            crate::launch::LaunchSpec::resume(agentty_bridge::model::Agent::Claude, record.session.clone(), title.clone(), folder)
+            crate::launch::LaunchSpec::resume(record.lead, record.session.clone(), title.clone(), folder)
         };
         let pane = match self.pane_of_record(&record, cx) {
             // Its agent quit: the session starts again in its place.
@@ -538,7 +616,7 @@ impl Workbench {
         }
         let title: String = record.goal.lines().next().unwrap_or("").chars().take(40).collect();
         let folder = if record.folder.is_dir() { record.folder.clone() } else { crate::launch::home_dir() };
-        let spec = crate::launch::LaunchSpec::resume(agentty_bridge::model::Agent::Claude, record.session.clone(), title.clone(), folder);
+        let spec = crate::launch::LaunchSpec::resume(record.lead, record.session.clone(), title.clone(), folder);
         self.create_workspace(spec, window, cx);
         self.name_new_workspace(title);
         let group = self.orchestration_group(cx);
@@ -816,6 +894,8 @@ mod tests {
         let record = Record {
             id: 7,
             session: "00000000-0000-0000-0000-000000000000".into(),
+            lead: agentty_bridge::model::Agent::Codex,
+            lead_pane: None,
             goal: "Compare note apps".into(),
             folder: PathBuf::from("/tmp/example"),
             started_ms: 1,
@@ -831,8 +911,11 @@ mod tests {
         // Records written before plans existed read back with none.
         let mut old = serde_json::to_value(std::slice::from_ref(&record)).unwrap();
         old[0].as_object_mut().unwrap().remove("plan");
+        old[0].as_object_mut().unwrap().remove("lead");
         let old: Vec<Record> = serde_json::from_value(old).unwrap();
         assert!(old[0].plan.is_empty());
+        // and, from before a lead could be Codex, Claude Code as their lead.
+        assert_eq!(old[0].lead, agentty_bridge::model::Agent::Claude);
     }
 
     #[test]

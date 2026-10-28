@@ -99,7 +99,8 @@ impl Workbench {
     pub(super) fn open_harness_dialog(&mut self, pane: Pane, harness: Arc<Harness>, window: &mut Window, cx: &mut Context<Self>) {
         self.resume_menu = None;
         let prefs = crate::settings::settings(cx);
-        let agent = prefs.harness_agent.resolve(&harness);
+        let wanted = prefs.harness_agent.resolve(&harness);
+        let agent = self.pick_agent(Some(wanted.id()), true, cx).and_then(crate::agents::AgentPick::first_class).unwrap_or(wanted);
         let submit = prefs.harness_submit;
         let input = cx.new(|cx| TextInput::localized("", "harness.input_placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this: &mut Self, _, event: &TextInputEvent, window, cx| match event {

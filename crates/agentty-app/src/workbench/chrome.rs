@@ -2589,10 +2589,10 @@ impl Workbench {
                 Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
                 cx,
             ))
-            .when(self.is_installed("claude"), |menu| {
+            .when_some(self.pick_agent(None, true, cx), |menu, lead| {
                 menu.child(entry(
                     "launch-chat-workspace".into(),
-                    Some("claude"),
+                    Some(lead.id()),
                     t(cx, "new.chat_workspace").into(),
                     "",
                     Box::new(|this, w, cx| this.request_launch(LaunchChoice::Chat, LaunchTarget::NewWorkspace, w, cx)),
@@ -2732,8 +2732,8 @@ impl Workbench {
                 cx,
             ));
         }
-        // An orchestrator: Claude Code leading a team of agents for one goal.
-        if self.offers_agent("claude", cx) && settings(cx).orchestration {
+        // An orchestrator: Claude Code (or Codex) leading a team of agents for one goal.
+        if self.pick_agent(None, true, cx).is_some() && settings(cx).orchestration {
             let group = self.new_workspace_group;
             let body = t(cx, "orch.card_body").to_string();
             cards = cards.child(
@@ -2744,8 +2744,8 @@ impl Workbench {
                 ),
             );
         }
-        // A chat runs Claude Code as its lead, but gets its own icon and color so the two cards don't look alike.
-        if self.offers_agent("claude", cx) {
+        // A chat runs Claude Code or Codex as its lead, but gets its own icon and color so the cards don't look alike.
+        if self.pick_agent(None, true, cx).is_some() {
             let body = t(cx, "welcome.chat_body").to_string();
             let art = glyph_tile("message-square-code", Chrome::PURPLE);
             cards = cards.child(card("welcome-chat".into(), art, t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));

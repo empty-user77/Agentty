@@ -18,6 +18,8 @@ pub const HELP: &str = "agentty tasks — start work in parallel sessions next t
   agentty tasks review --worker <title> [--prompt <focus>] [--agent claude|codex]
 
 A plan is a JSON array of up to 6 tasks: [{\"title\": \"…\", \"prompt\": \"…\", \"agent\": \"claude\"}, …].
+Without an agent, a task runs as the asking agent does; when the one named is not installed, as
+the other one, and with neither, as another agent CLI that is installed.
 Agentty shows the tasks to the user, who starts or declines them. Each started task runs in a
 split pane (from three tasks on, in a tab of its own), in its own git worktree on a new branch
 from the project's default branch (the project is this folder, or the asking agent's folder
@@ -133,12 +135,17 @@ pub const PLAN_HELP: &str = "agentty plan — hand an orchestration's plan to Ag
 
   agentty plan --file <plan.json>
   agentty plan < plan.json
+  agentty plan --start <name>
+  agentty plan --done <name>
 
 The plan is JSON: {\"agents\": [{\"name\": \"survey\", \"wave\": 1, \"role\": \"…\", \"agent\": \"claude\",
 \"model\": \"opus\", \"depends_on\": []}, …]}. Names are unique and are the Agent tool's description of
 that agent; waves run from 1; depends_on names agents of earlier waves. The page draws every agent
 of the plan at once (those not started yet as pending) and fills each in as it runs. Send the plan
-again whenever it changes. Only the orchestrator Agentty started can send one.";
+again whenever it changes. Only the orchestrator Agentty started can send one.
+
+An orchestrator that runs its agents as processes (not as subagents Agentty sees) says when each
+one starts and finishes with --start and --done, so the page follows it.";
 
 /// `agentty plan`: reads the plan (a file, or standard input) and sends it on.
 pub fn run_plan(args: &[String]) -> i32 {
@@ -148,6 +155,8 @@ pub fn run_plan(args: &[String]) -> i32 {
             return 0;
         }
         [flag, path] if flag == "--file" => std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")),
+        // A step of the plan, from a lead whose agents are processes rather than subagents.
+        [flag, name] if flag == "--start" || flag == "--done" => Ok(serde_json::json!({ "step": &flag[2..], "name": name }).to_string()),
         [] => {
             let mut text = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map(|_| text).map_err(|e| e.to_string())

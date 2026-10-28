@@ -55,6 +55,73 @@ pub const OTHER_AGENTS: &[AgentCli] = &[
     AgentCli { primary: false, id: "grok", name: "Grok Build", binary: "grok", color: 0xe5e5e5, package: "grok-cli", maker: "xAI" },
 ];
 
+/// An agent a feature starts for the user: Claude Code and Codex (first-class panes with hooks and
+/// sessions), or another agent CLI run as a command in a shell pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentPick {
+    Claude,
+    Codex,
+    Other(&'static AgentCli),
+}
+
+impl AgentPick {
+    /// `claude`, `codex`, or the other agent's id (`gemini`, `cursor`, …), also found by its binary.
+    pub fn from_id(id: &str) -> Option<AgentPick> {
+        match id {
+            "claude" => Some(AgentPick::Claude),
+            "codex" => Some(AgentPick::Codex),
+            _ => OTHER_AGENTS.iter().find(|a| a.id == id || a.binary == id).map(AgentPick::Other),
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            AgentPick::Claude => "claude",
+            AgentPick::Codex => "codex",
+            AgentPick::Other(agent) => agent.id,
+        }
+    }
+
+    pub fn binary(self) -> &'static str {
+        match self {
+            AgentPick::Claude => "claude",
+            AgentPick::Codex => "codex",
+            AgentPick::Other(agent) => agent.binary,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentPick::Claude => "Claude Code",
+            AgentPick::Codex => "Codex",
+            AgentPick::Other(agent) => agent.name,
+        }
+    }
+
+    /// Every agent in the launcher's order: Claude Code, Codex, then the other agent CLIs.
+    pub fn all() -> impl Iterator<Item = AgentPick> {
+        [AgentPick::Claude, AgentPick::Codex].into_iter().chain(OTHER_AGENTS.iter().map(AgentPick::Other))
+    }
+
+    /// Claude Code or Codex: a pane of its own kind, which takes a first message and reports its status.
+    pub fn first_class(self) -> Option<agentty_bridge::model::Agent> {
+        match self {
+            AgentPick::Claude => Some(agentty_bridge::model::Agent::Claude),
+            AgentPick::Codex => Some(agentty_bridge::model::Agent::Codex),
+            AgentPick::Other(_) => None,
+        }
+    }
+}
+
+/// The agent a feature starts: `wanted` when it can run here, else the first that can of Claude
+/// Code, Codex and then the other agents in the launcher's order (only the first two when
+/// `first_class_only`). `usable` says whether an agent (by id) is installed and turned on. Claude
+/// Code is one choice among the others, not a requirement.
+pub fn pick_agent(wanted: Option<AgentPick>, first_class_only: bool, usable: impl Fn(AgentPick) -> bool) -> Option<AgentPick> {
+    let allowed = |pick: &AgentPick| !first_class_only || pick.first_class().is_some();
+    wanted.filter(allowed).filter(|pick| usable(*pick)).or_else(|| AgentPick::all().filter(allowed).find(|pick| usable(*pick)))
+}
+
 /// Fallback when nothing is configured or used locally: aliases `claude --model` always accepts.
 const CLAUDE_ALIASES: &[(&str, &str)] = &[("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")];
 
@@ -302,6 +369,26 @@ mod tests {
         // A CLI from the list counts, anything else on PATH does not.
         assert_eq!(with(&["claude", "gemini"]).agent_count(), 2);
         assert_eq!(with(&["claude", "git", "node"]).agent_count(), 1);
+    }
+
+    /// Claude Code is a choice, not a requirement: the wanted agent when it runs here, else the
+    /// first of Claude Code, Codex and the others that does.
+    #[test]
+    fn the_agent_a_feature_starts_is_one_that_runs_here() {
+        let on = |ids: &'static [&'static str]| move |pick: AgentPick| ids.contains(&pick.id());
+        let gemini = AgentPick::from_id("gemini").unwrap();
+        assert_eq!(pick_agent(None, false, on(&["claude", "codex"])), Some(AgentPick::Claude));
+        assert_eq!(pick_agent(None, false, on(&["codex", "gemini"])), Some(AgentPick::Codex));
+        assert_eq!(pick_agent(None, false, on(&["gemini"])), Some(gemini));
+        assert_eq!(pick_agent(Some(AgentPick::Claude), false, on(&["gemini"])), Some(gemini));
+        assert_eq!(pick_agent(Some(gemini), false, on(&["claude", "gemini"])), Some(gemini));
+        assert_eq!(pick_agent(None, false, on(&[])), None);
+        // Features that need status hooks or sessions take only Claude Code or Codex.
+        assert_eq!(pick_agent(Some(gemini), true, on(&["codex", "gemini"])), Some(AgentPick::Codex));
+        assert_eq!(pick_agent(None, true, on(&["gemini"])), None);
+        // Found by id or binary.
+        assert_eq!(AgentPick::from_id("cursor-agent").map(AgentPick::id), Some("cursor"));
+        assert_eq!(AgentPick::from_id("nothing"), None);
     }
 
     #[test]

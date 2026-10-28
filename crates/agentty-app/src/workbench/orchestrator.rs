@@ -1,8 +1,8 @@
-//! Starting an orchestrator: one goal, and a Claude Code session that plans a team of agents for
-//! it, shows the plan, runs it in waves and has the result checked — drawn as it goes on the
-//! Orchestrator page.
+//! Starting an orchestrator: one goal, and an agent session (Claude Code, or Codex where Claude Code
+//! is not installed) that plans a team of agents for it, shows the plan, runs it in waves and has the
+//! result checked — drawn as it goes on the Orchestrator page.
 //!
-//! As in Orca, the agent stays the user's own Claude Code; what Agentty adds is the first message
+//! As in Orca, the agent stays the user's own; what Agentty adds is the first message
 //! that teaches it to orchestrate (and `agentty tasks` for work that wants its own branches). From
 //! omo: the plan is shown and approved before anything runs, every role has a model (set by a
 //! profile), work goes in waves, and a reviewer checks the result against the goal at the end.
@@ -12,6 +12,7 @@ use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
+use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::{PromptRequest, PromptTarget};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, SharedString, Subscription, Window};
 use std::path::PathBuf;
@@ -69,8 +70,14 @@ pub struct Helper {
     run: &'static str,
 }
 
-/// The agents an orchestration can use besides Claude Code, when they are installed.
+/// The agents an orchestration can use besides its lead, when they are installed.
 pub const HELPERS: &[Helper] = &[
+    Helper {
+        binary: "claude",
+        name: "Claude Code",
+        strength: "planning, research and writing, and building across many files",
+        run: "`{cmd} -p \"<task>\" < /dev/null` (add `--permission-mode acceptEdits` when it has to change files in this folder)",
+    },
     Helper {
         binary: "codex",
         name: "Codex",
@@ -92,41 +99,83 @@ pub const HELPERS: &[Helper] = &[
 ];
 
 /// The first message: the goal, then how to orchestrate it. English whatever the app's language;
-/// the last line says which language to talk in. `helpers` are the other agents the team may use.
-/// `helpers`: the other agents the team may use, each with the command that runs it (its whole path
-/// when known).
-pub fn prompt(goal: &str, profile: Profile, helpers: &[(&Helper, String)], confirm_plan: bool, language: &str) -> String {
+/// the last line says which language to talk in. `lead` is the agent it goes to (Claude Code runs
+/// the team as subagents; another agent runs each as a process of an agent CLI). `helpers`: the
+/// other agents the team may use, each with the command that runs it (its whole path when known);
+/// for a lead other than Claude Code, its own comes first.
+pub fn prompt(goal: &str, lead: Agent, profile: Profile, helpers: &[(&Helper, String)], confirm_plan: bool, language: &str) -> String {
     let go = if confirm_plan {
         "End with \"Start?\" and wait for the user's answer; change the plan if they ask."
     } else {
         "Then start it right away, without waiting for an answer."
     };
-    let models = profile.models().iter().map(|(role, model)| format!("- {role}: `{model}`")).collect::<Vec<_>>().join("\n");
-    let helpers = if helpers.is_empty() {
-        String::new()
-    } else {
-        let list = helpers
+    let subagents = lead == Agent::Claude;
+    let others: Vec<&(&Helper, String)> = helpers.iter().filter(|(h, _)| h.binary != lead.id()).collect();
+    let list = |items: &[&(&Helper, String)]| {
+        items
             .iter()
             .map(|(h, cmd)| format!("- {} (`{cmd}`): {}. Run: {}.", h.name, h.strength, h.run.replace("{cmd}", cmd)))
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n")
+    };
+    let helpers_text = if others.is_empty() {
+        String::new()
+    } else if subagents {
         format!(
             "Other AI agents on this machine. Give them the parts their strength fits, and say so in the plan (an `agent` \
 column: claude, or one of these):
-{list}
+{}
 Run one from a subagent's Bash (or your own), in this folder, with everything it needs in its prompt; read what it \
 produces and have it checked like any other agent's work. A change that should land as its own branch in a git \
 repository can go to a Codex session instead: `\"agent\": \"codex\"` in that task of `agentty tasks --plan`. Never \
 turn off their permission or sandbox checks (no `--yolo`, no `--dangerously-…` flags).
 
-"
+",
+            list(&others)
+        )
+    } else {
+        format!(
+            "Other AI agents on this machine. Give them the parts their strength fits, and say so in the plan (the `agent` \
+column: {}, or one of these):
+{}
+
+",
+            lead.id(),
+            list(&others)
         )
     };
+    let own = helpers.iter().find(|(h, _)| h.binary == lead.id()).map(|(h, cmd)| h.run.replace("{cmd}", cmd));
+    let run = if subagents {
+        "2. Run it wave by wave. Start every agent of a wave in ONE message (one Agent tool call each, so they run in \
+parallel), with its name from the plan, exactly, as the description, the model from the plan, and a prompt that says exactly what to do, \
+what to hand over and where (files with their paths), and the earlier results it needs. Wait for a wave before \
+starting the next."
+            .to_string()
+    } else {
+        format!(
+            "2. Run it wave by wave. Every agent runs as a process of its own: an agent CLI started from your shell in this \
+folder, in the background, every agent of a wave at once{own}, with a prompt that says exactly what to do, what to \
+hand over and where (files with their paths), and the earlier results it needs, its output going to a log file of \
+its own. Right before starting an agent, run `agentty plan --start <name>` with its name from the plan; once it has \
+finished and you have read what it produced, run `agentty plan --done <name>`: Agentty's page follows the agents \
+by these. Wait for every agent of a wave before starting the next. These CLIs reach the network: when your sandbox \
+blocks them, ask to run them outside it. Never turn off their permission or sandbox checks (no `--yolo`, no \
+`--dangerously-…` flags).",
+            own = own.map(|run| format!(" (yours: {run})")).unwrap_or_default()
+        )
+    };
+    let models = if subagents {
+        let models = profile.models().iter().map(|(role, model)| format!("- {role}: `{model}`")).collect::<Vec<_>>().join("\n");
+        format!("Models by role (the Agent tool's `model`):\n{models}")
+    } else {
+        "Models: leave `model` empty for each CLI's default, unless the goal calls for another.".to_string()
+    };
+    let lead_id = lead.id();
     format!(
         "Goal: {goal}
 
 You are the orchestrator of a team of agents for this goal, started from Agentty's Orchestrator. Agentty draws \
-your subagents as waves on its Orchestrator page, so work in the shape described here. You plan, hand out, check \
+your agents as waves on its Orchestrator page, so work in the shape described here. You plan, hand out, check \
 and combine; you do not do the agents' work yourself.
 
 1. Plan first. Read what you need of this folder and of the goal; ask the user only what you truly cannot decide. \
@@ -137,15 +186,12 @@ checks the result against the goal. Hand the same plan to Agentty, which draws e
 each in as it runs (run it again whenever the plan changes):
 ```
 agentty plan <<'PLAN'
-{{\"agents\": [{{\"name\": \"market-scan-1\", \"wave\": 1, \"role\": \"…\", \"agent\": \"claude\", \"model\": \"…\", \"depends_on\": []}}, …]}}
+{{\"agents\": [{{\"name\": \"market-scan-1\", \"wave\": 1, \"role\": \"…\", \"agent\": \"{lead_id}\", \"model\": \"…\", \"depends_on\": []}}, …]}}
 PLAN
 ```
 `depends_on` lists the names of agents in earlier waves whose results it needs. {go}
 
-2. Run it wave by wave. Start every agent of a wave in ONE message (one Agent tool call each, so they run in \
-parallel), with its name from the plan, exactly, as the description, the model from the plan, and a prompt that says exactly what to do, \
-what to hand over and where (files with their paths), and the earlier results it needs. Wait for a wave before \
-starting the next. Work that changes code in a git repository and should land as its own branch or pull request \
+{run} Work that changes code in a git repository and should land as its own branch or pull request \
 goes to parallel sessions instead: `agentty tasks --plan plan.json` (see `agentty tasks --help`), one task per \
 change. An agent that needs a browser uses `agentty browser` (see `agentty browser --help`) to open pages, click, \
 type, read them and take screenshots.
@@ -156,8 +202,7 @@ what is not, with what to fix, at most twice.
 4. Finish with a short report: the conclusion, what each agent produced (files with their paths), what the reviewer \
 confirmed, and what is left open.
 
-{helpers}Models by role (the Agent tool's `model`):
-{models}
+{helpers_text}{models}
 
 Talk to me in {language}."
     )
@@ -181,6 +226,8 @@ pub struct OrchestratorDialog {
     profile: Profile,
     pub folder: PathBuf,
     place: Place,
+    /// The agent that leads: Claude Code, else Codex (`None`: neither runs here).
+    lead: Option<Agent>,
     /// Other agents installed here, by binary, and whether this team uses them.
     helpers: Vec<(&'static str, bool)>,
 }
@@ -200,9 +247,11 @@ impl Workbench {
         let folder = self.default_cwd(cx);
         let prefs = crate::settings::settings(cx);
         let off = &prefs.orchestration_helpers_off;
+        let lead = self.pick_agent(None, true, cx).and_then(crate::agents::AgentPick::first_class);
         let helpers = HELPERS
             .iter()
-            .filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary)))
+            .filter(|h| Some(h.binary) != lead.map(Agent::id))
+            .filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary)) && prefs.agent_enabled(h.binary))
             .map(|h| (h.binary, !off.iter().any(|o| o == h.binary)))
             .collect();
         let profile = prefs.orchestration_profile;
@@ -211,7 +260,7 @@ impl Workbench {
             Place::NewWorkspace { group: None } if prefs.orchestration_in_tab && !self.workspaces.is_empty() => Place::NewTab,
             place => place,
         };
-        self.orchestrator_dialog = Some(OrchestratorDialog { goal, _goal_events: events, profile, folder, place, helpers });
+        self.orchestrator_dialog = Some(OrchestratorDialog { goal, _goal_events: events, profile, folder, place, lead, helpers });
         self.tab_menu = None;
         cx.notify();
     }
@@ -233,35 +282,39 @@ impl Workbench {
         .detach();
     }
 
-    /// Starts the orchestrator: a Claude Code session with the goal and how to orchestrate it.
+    /// Starts the orchestrator: a session of its lead with the goal and how to orchestrate it.
     fn start_orchestrator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.orchestrator_dialog.as_ref() else { return };
         let goal = dialog.goal.read(cx).text().trim().to_string();
         if goal.is_empty() {
             return self.show_toast(t(cx, "orch.goal_empty"), cx);
         }
+        let Some(lead) = dialog.lead else {
+            return self.show_toast(t(cx, "orch.no_lead"), cx);
+        };
         let (profile, folder, place) = (dialog.profile, dialog.folder.clone(), dialog.place);
         let paths = self.installed.as_ref().map(|i| i.paths.clone()).unwrap_or_default();
-        let helpers: Vec<(&Helper, String)> = dialog
-            .helpers
-            .iter()
-            .filter(|(_, on)| *on)
-            .filter_map(|(binary, _)| HELPERS.iter().find(|h| h.binary == *binary))
+        // A lead other than Claude Code runs its agents with its own CLI too: that one comes first.
+        let own = (lead != Agent::Claude).then_some(lead.id());
+        let helpers: Vec<(&Helper, String)> = own
+            .into_iter()
+            .chain(dialog.helpers.iter().filter(|(_, on)| *on).map(|(binary, _)| *binary))
+            .filter_map(|binary| HELPERS.iter().find(|h| h.binary == binary))
             .map(|h| (h, paths.get(h.binary).cloned().unwrap_or_else(|| h.binary.to_string())))
             .collect();
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.code());
         let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
         let request = PromptRequest {
-            text: prompt(&goal, profile, &helpers, crate::settings::settings(cx).orchestration_confirm_plan, language),
+            text: prompt(&goal, lead, profile, &helpers, crate::settings::settings(cx).orchestration_confirm_plan, language),
             title: Some(title),
             target: match place {
                 Place::NewWorkspace { .. } => PromptTarget::NewWorkspace,
                 Place::NewTab => PromptTarget::NewTab,
             },
-            agent: Some("claude".into()),
+            agent: Some(lead.id().into()),
             cwd: Some(folder.clone()),
             submit: true,
-            model: profile.lead_model(),
+            model: profile.lead_model().filter(|_| lead == Agent::Claude),
             ..Default::default()
         };
         match self.deliver_prompt(request, window, cx) {
@@ -370,7 +423,7 @@ impl Workbench {
                     cx.notify();
                 }))
         }));
-        // Claude Code always; the others installed here, each switched on or off.
+        // The lead always; the others installed here, each switched on or off.
         let helpers = (!dialog.helpers.is_empty()).then(|| {
             let chip = |id: SharedString, logo: &'static str, name: &'static str, on: bool| {
                 div()
@@ -390,7 +443,8 @@ impl Workbench {
                     .child(crate::brand::avatar(logo, 14.))
                     .child(name)
             };
-            div().flex().flex_wrap().gap_1p5().child(chip("orch-helper-claude".into(), "claude", "Claude Code", true)).children(
+            let lead = dialog.lead.unwrap_or(Agent::Claude);
+            div().flex().flex_wrap().gap_1p5().child(chip("orch-helper-lead".into(), lead.id(), lead.display_name(), true)).children(
                 dialog.helpers.iter().filter_map(|(binary, on)| {
                     let helper = HELPERS.iter().find(|h| h.binary == *binary)?;
                     let binary = *binary;
@@ -459,8 +513,10 @@ impl Workbench {
                                 .child(dialog.goal.clone()),
                         )
                         .child(examples)
-                        .child(section(t(cx, "orch.profile")))
-                        .child(profiles)
+                        // The profiles pick Claude Code's models: another lead uses each CLI's own.
+                        .when(dialog.lead.is_none_or(|lead| lead == Agent::Claude), |d| {
+                            d.child(section(t(cx, "orch.profile"))).child(profiles)
+                        })
                         .when_some(helpers, |d, helpers| d.child(section(t(cx, "orch.helpers"))).child(helpers))
                         .child(section(t(cx, "orch.folder")))
                         .child(
@@ -533,7 +589,7 @@ mod tests {
 
     #[test]
     fn the_first_message_carries_the_goal_the_models_and_the_language() {
-        let text = prompt("Compare AI coding agents", Profile::Economy, &[], true, "Korean");
+        let text = prompt("Compare AI coding agents", Agent::Claude, Profile::Economy, &[], true, "Korean");
         assert!(text.starts_with("Goal: Compare AI coding agents\n"));
         assert!(text.contains("- research, building, writing: `haiku`"));
         assert!(text.contains("- review: `sonnet`"));
@@ -547,9 +603,10 @@ mod tests {
     #[test]
     fn other_agents_come_with_their_strength_and_how_to_run_them() {
         let codex = HELPERS.iter().find(|h| h.binary == "codex").unwrap();
-        let text = prompt("Fix the failing tests", Profile::Balanced, &[(codex, "/opt/example/bin/codex".into())], true, "English");
+        let text =
+            prompt("Fix the failing tests", Agent::Claude, Profile::Balanced, &[(codex, "/opt/example/bin/codex".into())], true, "English");
         assert!(text.contains("\"Start?\""));
-        let straight = prompt("Fix the failing tests", Profile::Balanced, &[], false, "English");
+        let straight = prompt("Fix the failing tests", Agent::Claude, Profile::Balanced, &[], false, "English");
         assert!(!straight.contains("\"Start?\""));
         assert!(straight.contains("start it right away"));
         assert!(text.contains("- Codex (`/opt/example/bin/codex`): precise code changes"));
@@ -558,5 +615,30 @@ mod tests {
         assert!(text.contains("an `agent`"));
         assert!(text.contains("no `--yolo`"));
         assert!(text.ends_with("Talk to me in English."));
+    }
+
+    /// Without Claude Code, Codex leads: its agents are processes of agent CLIs, each reported to
+    /// Agentty as it starts and finishes, and the models are each CLI's own.
+    #[test]
+    fn a_codex_lead_runs_its_agents_as_processes_and_reports_them() {
+        let codex = HELPERS.iter().find(|h| h.binary == "codex").unwrap();
+        let gemini = HELPERS.iter().find(|h| h.binary == "gemini").unwrap();
+        let helpers = [(codex, "/opt/example/bin/codex".to_string()), (gemini, "gemini".to_string())];
+        let text = prompt("Fix the failing tests", Agent::Codex, Profile::Balanced, &helpers, true, "English");
+        assert!(text.contains("agentty plan --start <name>"));
+        assert!(text.contains("agentty plan --done <name>"));
+        assert!(text.contains("(yours: `/opt/example/bin/codex exec --skip-git-repo-check"));
+        assert!(text.contains("\"agent\": \"codex\""));
+        assert!(text.contains("- Gemini CLI (`gemini`)"));
+        assert!(!text.contains("- Codex (`"));
+        assert!(!text.contains("Agent tool"));
+        assert!(!text.contains("`haiku`"));
+        assert!(text.contains("no `--yolo`"));
+        assert!(text.ends_with("Talk to me in English."));
+        // Claude Code, as a helper of another lead, is never the lead's own entry.
+        let claude = HELPERS.iter().find(|h| h.binary == "claude").unwrap();
+        let with_claude =
+            prompt("x", Agent::Codex, Profile::Balanced, &[(codex, "codex".into()), (claude, "claude".into())], false, "English");
+        assert!(with_claude.contains("- Claude Code (`claude`)"));
     }
 }

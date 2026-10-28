@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Claude Code is one of the agents, not a requirement. Features that start an agent use the one asked for when it is
+  installed and turned on, and otherwise the first that is of Claude Code, Codex and the other agent CLIs:
+  - Orchestration: Codex leads when Claude Code is not installed. It runs the plan's agents as processes of agent CLIs
+    and reports each with `agentty plan --start` / `--done`, so the page follows them as it does Claude Code's
+    subagents. The model profiles show only when Claude Code leads.
+  - Chat workspaces: Codex can be the lead; workers and reviewers offer only the agents installed.
+  - `agentty tasks`: a task without `--agent` runs as the asking agent does, and one naming an agent that is not
+    installed runs as the other; with neither installed, as another agent CLI.
+  - Board tickets, plugin prompts, "Make with AI" and "Develop with AI" on the Plugins page, the harness, idea
+    projects, the remote page's new tabs, "Resolve with AI" on the Git page and ⌥⌘C / ⌥⌘X start an agent that is
+    installed instead of one that is not. The "Send to…" dialog for prompts from plugins and links offers every
+    installed agent, and the Plugins page names the agent that will build the plugin.
+  - Another agent CLI gets its first message typed in once it is ready for input, and never while it is still asking
+    whether to trust the folder.
+
 ### Fixed
 - The GitHub CLI installed with Homebrew showed as not installed in Settings → Integrations when Agentty was opened
   from the Finder or the Dock, and cloning from GitHub and the pull requests of branches did not work. `gh` is now

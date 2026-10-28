@@ -4,13 +4,11 @@
 
 use super::{LaunchTarget, Page, Workbench};
 use crate::i18n::{t, tf};
-use crate::launch::{LaunchSpec, PaneKind};
 use crate::plugins::{self, RunState};
 use crate::settings::settings;
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, chip, hint, icon, icon_named, tilde, IconSize, TypeScale};
-use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, Runtime, Surface, PERMISSIONS};
 use agentty_bridge::plugins::market;
 use agentty_bridge::plugins::store::{self, InstalledPlugin, Source};
@@ -18,8 +16,8 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWei
 
 /// First message to the agent that builds a new plugin. Prompts are English whatever the UI
 /// language is; `{language}` tells the agent which one to talk in.
-const AI_PROMPT: &str = "Build the Agentty plugin \"{name}\" in this folder. It should: {idea}\n\nRead CLAUDE.md and PLUGIN_GUIDE.md first. Keep agentty-plugin.json in sync with main.mjs, check the code with `node --check main.mjs`, and when you are done tell me to press Restart on the plugin in Agentty's Plugins page.\n\nTalk to me in {language}.";
-const AI_PROMPT_ASK: &str = "We are building the Agentty plugin \"{name}\" in this folder. Read CLAUDE.md and PLUGIN_GUIDE.md, then ask me what the plugin should do.\n\nTalk to me in {language}.";
+const AI_PROMPT: &str = "Build the Agentty plugin \"{name}\" in this folder. It should: {idea}\n\nRead AGENTS.md and PLUGIN_GUIDE.md first. Keep agentty-plugin.json in sync with main.mjs, check the code with `node --check main.mjs`, and when you are done tell me to press Restart on the plugin in Agentty's Plugins page.\n\nTalk to me in {language}.";
+const AI_PROMPT_ASK: &str = "We are building the Agentty plugin \"{name}\" in this folder. Read AGENTS.md and PLUGIN_GUIDE.md, then ask me what the plugin should do.\n\nTalk to me in {language}.";
 
 /// Width of the list beside the details.
 const LIST_WIDTH: f32 = 290.;
@@ -388,7 +386,8 @@ impl Workbench {
         .detach();
     }
 
-    /// Creates a plugin from the template and opens Claude Code in its folder to build it.
+    /// Creates a plugin from the template and opens an agent in its folder to build it (the first
+    /// installed of Claude Code, Codex and the others).
     fn create_plugin_with_ai(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(inputs) = self.plugins_page.inputs.as_ref() else { return };
         let name = inputs.name.read(cx).text().trim().to_string();
@@ -404,8 +403,13 @@ impl Workbench {
                 let language = agentty_bridge::idea::language_name(settings(cx).language.code());
                 let prompt = template.replace("{name}", plugin.name()).replace("{idea}", &idea).replace("{language}", language);
                 let title = tf(cx, "plugins.ai_workspace", &[("name", plugin.name())]);
+                let Some(pick) = self.pick_agent(None, false, cx) else {
+                    return self.plugins_message(t(cx, "agent.none_installed").to_string(), true, cx);
+                };
                 self.page = None;
-                self.create_workspace(LaunchSpec::with_prompt(Agent::Claude, prompt, title.clone(), plugin.dir.clone()), window, cx);
+                let (spec, later) = super::agent_start::prompt_spec(pick, prompt, title.clone(), plugin.dir.clone());
+                self.create_workspace(spec, window, cx);
+                self.type_first_message(later, cx);
                 if let Some(ws) = self.workspaces.last_mut() {
                     ws.name = Some(title);
                 }
@@ -413,6 +417,23 @@ impl Workbench {
             }
             Err(err) => self.plugins_message(format!("{err:#}"), true, cx),
         }
+    }
+
+    /// `plugin-create <name>[: idea]` (debug driver): fills in "Create a plugin with AI" and presses it.
+    pub(super) fn debug_create_plugin(&mut self, argument: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = Some(super::Page::Plugins);
+        self.plugins_page.creating = true;
+        let Some(inputs) = self.plugins_page.inputs.as_ref() else { return eprintln!("plugin-create: the page was not drawn yet") };
+        let (name, idea) = argument.split_once(':').unwrap_or((argument, ""));
+        let (name, idea) = (name.trim().to_string(), idea.trim().to_string());
+        inputs.name.update(cx, |input, cx| input.set_text(name, cx));
+        inputs.idea.update(cx, |input, cx| input.set_text(idea, cx));
+        self.create_plugin_with_ai(window, cx);
+    }
+
+    /// The agent that builds or edits a plugin here (named in the buttons).
+    fn plugin_agent_name(&self, cx: &gpui::App) -> String {
+        self.pick_agent(None, false, cx).map_or("Claude Code", crate::agents::AgentPick::name).to_string()
     }
 
     fn set_plugin_enabled(&mut self, id: &str, enabled: bool, cx: &mut Context<Self>) {
@@ -1256,10 +1277,13 @@ impl Workbench {
             let dir = plugin.dir.clone();
             row = row.child(action_button(
                 button_id("develop"),
-                t(cx, "plugins.develop_ai"),
+                tf(cx, "plugins.develop_ai", &[("agent", &self.plugin_agent_name(cx))]),
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    let Some(pick) = this.pick_agent(None, false, cx) else {
+                        return this.show_toast(t(cx, "agent.none_installed"), cx);
+                    };
                     this.page = None;
-                    this.request_launch_in(PaneKind::Claude, dir.clone(), window, cx);
+                    this.launch(super::agent_start::launch_choice(pick), LaunchTarget::NewWorkspace, dir.clone(), window, cx);
                 }),
             ));
         }
@@ -1755,7 +1779,11 @@ impl Workbench {
                                 .child(t(cx, "plugins.create_title")),
                         ),
                     )
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.create_body")))
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
+                        cx,
+                        "plugins.create_body",
+                        &[("agent", &self.plugin_agent_name(cx))],
+                    )))
                     .child(
                         div()
                             .flex()
@@ -1765,7 +1793,7 @@ impl Workbench {
                     )
                     .child(div().flex().gap_2().child(action_button(
                         "plugins-create",
-                        t(cx, "plugins.create_button"),
+                        tf(cx, "plugins.create_button", &[("agent", &self.plugin_agent_name(cx))]),
                         cx.listener(|this, _: &ClickEvent, window, cx| this.create_plugin_with_ai(window, cx)),
                     ))),
             )
@@ -1776,11 +1804,6 @@ impl Workbench {
                     cx.listener(|this, _: &ClickEvent, window, cx| this.install_plugin_git(window, cx)),
                 )),
             ))
-    }
-
-    /// A new tab (or workspace when none is open) running `kind` in `dir`.
-    fn request_launch_in(&mut self, kind: PaneKind, dir: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.launch(kind.into(), LaunchTarget::NewWorkspace, dir, window, cx);
     }
 }
 

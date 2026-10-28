@@ -576,13 +576,13 @@ impl Workbench {
             name: "orchestrator".into(),
             state: stage_node(record.stage),
             seconds: last.saturating_sub(record.started_ms) / 1000,
-            role: "Claude Code".into(),
+            role: record.lead.display_name().into(),
             model: None,
             line: Some(t(cx, super::orchestration::stage_key(record.stage)).to_string()),
             open: Open::Nothing,
             from: None,
         };
-        let waves = self.waves_after(orchestrator, nodes, &record.plan, cx);
+        let waves = self.waves_after(orchestrator, nodes, &record.plan, record.lead.id(), cx);
         let buttons = if matches!(record.stage, Stage::Interrupted | Stage::Stopped) {
             self.stage_buttons(id, record.stage, "closed", cx)
         } else {
@@ -729,6 +729,7 @@ impl Workbench {
         orchestrator: Node,
         nodes: Vec<(u64, Node)>,
         plan: &[super::orchestration::PlanAgent],
+        lead: &str,
         cx: &gpui::App,
     ) -> Vec<Wave> {
         let mut waves = vec![Wave { title: t(cx, "sessions.orchestrator").to_string(), nodes: vec![orchestrator] }];
@@ -764,7 +765,7 @@ impl Workbench {
                     },
                 };
                 // Who does the work, as the plan says, before and after it starts.
-                node.role = agent.agent.clone().unwrap_or_else(|| "claude".into());
+                node.role = agent.agent.clone().unwrap_or_else(|| lead.into());
                 let sources: Vec<(usize, usize)> = agent.depends_on.iter().filter_map(|name| placed.get(name.as_str()).copied()).collect();
                 node.from = (!sources.is_empty()).then_some(sources);
                 placed.insert(agent.name.as_str(), (col, wave.nodes.len()));
@@ -837,7 +838,8 @@ impl Workbench {
             from: None,
         };
         let plan = record.as_ref().map(|r| r.plan.as_slice()).unwrap_or_default();
-        let waves = self.waves_after(orchestrator, nodes, plan, cx);
+        let lead = record.as_ref().map_or("claude", |r| r.lead.id());
+        let waves = self.waves_after(orchestrator, nodes, plan, lead, cx);
         let subagents: Vec<&Node> = waves.iter().skip(1).flat_map(|w| &w.nodes).collect();
         let (done, all) = (subagents.iter().filter(|n| n.state == NodeState::Done).count(), subagents.len());
         let models = {

@@ -115,7 +115,7 @@ pub enum LaunchChoice {
         title: String,
         command: String,
     },
-    /// A chat workspace: Claude Code as the lead the user chats with, starting workers below it.
+    /// A chat workspace: Claude Code (or Codex) as the lead the user chats with, starting workers below it.
     Chat,
 }
 

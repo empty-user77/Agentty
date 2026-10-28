@@ -30,7 +30,7 @@ impl Workbench {
     }
 
     pub(super) fn idea_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<IdeaView> {
-        let (claude, codex) = (self.is_installed("claude"), self.is_installed("codex"));
+        let (claude, codex) = (self.offers_agent("claude", cx), self.offers_agent("codex", cx));
         let view = match &self.idea {
             Some(view) => view.clone(),
             None => {
@@ -45,7 +45,8 @@ impl Workbench {
         };
         // Before detection finishes, offer both.
         let detected = self.installed.is_some();
-        view.update(cx, |v, cx| v.set_agents(claude || !detected, codex || !detected, cx));
+        let other = self.pick_agent(None, false, cx).filter(|pick| pick.first_class().is_none()).map(crate::agents::AgentPick::name);
+        view.update(cx, |v, cx| v.set_agents(claude || !detected, codex || !detected, other, cx));
         view
     }
 
