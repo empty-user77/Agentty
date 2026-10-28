@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-28
+
 ### Added
 - Workspace Options → Show agent state, time and usage on cards: the line under a detailed card's path (state,
   agents, time, tokens, cost) can be turned off.
