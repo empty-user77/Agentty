@@ -133,10 +133,17 @@ and combine; you do not do the agents' work yourself.
 Then reply with the plan as a table, one row per agent: name (short and kebab-case, e.g. `market-scan-1`), role, \
 model, wave, depends on, and what it hands over. Use as many agents as the work needs and no more: independent work \
 side by side in one wave, work that needs another's result in a later wave, and a reviewer in the last wave who \
-checks the result against the goal. {go}
+checks the result against the goal. Hand the same plan to Agentty, which draws every agent of it at once and fills \
+each in as it runs (run it again whenever the plan changes):
+```
+agentty plan <<'PLAN'
+{{\"agents\": [{{\"name\": \"market-scan-1\", \"wave\": 1, \"role\": \"…\", \"agent\": \"claude\", \"model\": \"…\", \"depends_on\": []}}, …]}}
+PLAN
+```
+`depends_on` lists the names of agents in earlier waves whose results it needs. {go}
 
 2. Run it wave by wave. Start every agent of a wave in ONE message (one Agent tool call each, so they run in \
-parallel), with its name as the description, the model from the plan, and a prompt that says exactly what to do, \
+parallel), with its name from the plan, exactly, as the description, the model from the plan, and a prompt that says exactly what to do, \
 what to hand over and where (files with their paths), and the earlier results it needs. Wait for a wave before \
 starting the next. Work that changes code in a git repository and should land as its own branch or pull request \
 goes to parallel sessions instead: `agentty tasks --plan plan.json` (see `agentty tasks --help`), one task per \

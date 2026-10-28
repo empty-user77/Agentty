@@ -1,9 +1,10 @@
 //! The session page's workflow view, laid out like omo's: the threads on the left (every agent
 //! session running in Agentty, and the parallel runs agents started with `agentty tasks`); for the
 //! one picked, what was asked (`$ …`), the orchestrator's state, and its subagents as a graph of
-//! waves — those started together form a wave — each node saying whether it is done, how long it
-//! took, what kind of agent on which model, and its last word; under it a feed of their latest
-//! steps. The connection map the page always had is one click away in its header.
+//! waves — an orchestration's from its plan, every agent drawn from the start and those yet to run
+//! as pending; otherwise those that ran at the same time — each node saying whether it is done, how
+//! long it took, what kind of agent on which model, and its last word; under it a feed of their
+//! latest steps. The connection map the page always had is one click away in its header.
 
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
@@ -34,7 +35,7 @@ const WAVE_HEAD: f32 = 30.;
 /// How far the chart zooms out and in, and one step of the buttons (as on the connection map).
 const ZOOM_RANGE: (f32, f32) = (0.3, 2.);
 const ZOOM_STEP: f32 = 1.2;
-/// Subagents started within this long of the one before them are one wave.
+/// Subagents started within this long of a wave's first are in it, whatever else.
 const WAVE_GAP_MS: u64 = 8_000;
 /// Claude Code reports background subagents stopped while they still work: such a report counts
 /// once the transcript has been quiet this long.
@@ -173,6 +174,9 @@ struct Node {
     model: Option<String>,
     line: Option<String>,
     open: Open,
+    /// The nodes its lines come from, as (column, row): the agents of the plan it depends on. None:
+    /// the whole column before it.
+    from: Option<Vec<(usize, usize)>>,
 }
 
 /// A running subagent on a workspace card: its name, what it does now, when it started (ms).
@@ -225,13 +229,21 @@ fn step_words(step: &Step) -> String {
     }
 }
 
-/// Groups starts (ms, in order) into waves: a new one when the gap to the previous is long.
-fn waves_of(starts: &[u64]) -> Vec<usize> {
+/// Groups agents (start and end in ms, in order of start; a running one ends at `u64::MAX`) into
+/// waves the way an orchestrator runs them: the next wave starts once the one before has finished.
+/// An agent that starts while one of the current wave still runs, or soon after its first, is in it.
+fn waves_of(spans: &[(u64, u64)]) -> Vec<usize> {
     let mut wave = 0;
-    let mut out = Vec::with_capacity(starts.len());
-    for (i, at) in starts.iter().enumerate() {
-        if i > 0 && at.saturating_sub(starts[i - 1]) > WAVE_GAP_MS {
+    let (mut first, mut end) = (0, 0);
+    let mut out = Vec::with_capacity(spans.len());
+    for (i, &(start, stop)) in spans.iter().enumerate() {
+        if i == 0 {
+            (first, end) = (start, stop);
+        } else if start < end || start.saturating_sub(first) <= WAVE_GAP_MS {
+            end = end.max(stop);
+        } else {
             wave += 1;
+            (first, end) = (start, stop);
         }
         out.push(wave);
     }
@@ -466,7 +478,7 @@ impl Workbench {
             let team = self.team_of(&record.session, pane.as_ref(), cx);
             let (_, color) = self.stage_words(record.stage, team, cx);
             let stage = t(cx, super::orchestration::stage_key(record.stage));
-            let all = if record.stage == super::orchestration::Stage::Done { team.all - team.cut_off } else { team.all };
+            let all = team.pending + if record.stage == super::orchestration::Stage::Done { team.all - team.cut_off } else { team.all };
             let sub = if all > 0 { format!("{stage} · {}/{all}", team.done) } else { stage.to_string() };
             list = list.child(
                 row(
@@ -568,8 +580,9 @@ impl Workbench {
             model: None,
             line: Some(t(cx, super::orchestration::stage_key(record.stage)).to_string()),
             open: Open::Nothing,
+            from: None,
         };
-        let waves = self.waves_after(orchestrator, nodes, cx);
+        let waves = self.waves_after(orchestrator, nodes, &record.plan, cx);
         let buttons = if matches!(record.stage, Stage::Interrupted | Stage::Stopped) {
             self.stage_buttons(id, record.stage, "closed", cx)
         } else {
@@ -669,6 +682,7 @@ impl Workbench {
                     model: file.model.clone(),
                     line,
                     open: open(&file.id),
+                    from: None,
                 },
             ));
         }
@@ -686,6 +700,7 @@ impl Workbench {
                     model: None,
                     line: run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref())),
                     open: open(&run.id),
+                    from: None,
                 },
             ));
         }
@@ -705,16 +720,67 @@ impl Workbench {
         (nodes, feed)
     }
 
-    /// The orchestrator's column, then a column per wave of `nodes`, each titled with how far it got.
-    fn waves_after(&self, orchestrator: Node, nodes: Vec<(u64, Node)>, cx: &gpui::App) -> Vec<Wave> {
-        let starts: Vec<u64> = nodes.iter().map(|(at, _)| *at).collect();
-        let wave_of = waves_of(&starts);
+    /// The orchestrator's column, then a column per wave, each titled with how far it got. With a
+    /// plan, its waves: every agent of it, the ones not started yet as pending, lines from the agents
+    /// each depends on; subagents outside the plan follow in waves of their own. Without one, the
+    /// subagents in the waves they ran in.
+    fn waves_after(
+        &self,
+        orchestrator: Node,
+        nodes: Vec<(u64, Node)>,
+        plan: &[super::orchestration::PlanAgent],
+        cx: &gpui::App,
+    ) -> Vec<Wave> {
         let mut waves = vec![Wave { title: t(cx, "sessions.orchestrator").to_string(), nodes: vec![orchestrator] }];
-        for ((_, node), wave) in nodes.into_iter().zip(wave_of) {
-            if waves.len() <= wave + 1 {
+        let mut nodes = nodes;
+        let mut numbers: Vec<u32> = plan.iter().map(|a| a.wave).collect();
+        numbers.sort_unstable();
+        numbers.dedup();
+        let mut placed: HashMap<&str, (usize, usize)> = HashMap::new();
+        for number in &numbers {
+            let col = waves.len();
+            let mut wave = Wave { title: String::new(), nodes: Vec::new() };
+            for agent in plan.iter().filter(|a| a.wave == *number) {
+                // Its subagent: the last one started under its name (a rerun stands for it).
+                let ran = nodes.iter().rposition(|(_, n)| n.name == agent.name);
+                let mut node = match ran {
+                    Some(index) => {
+                        let (_, mut node) = nodes.remove(index);
+                        nodes.retain(|(_, n)| n.name != agent.name);
+                        if node.model.is_none() {
+                            node.model = agent.model.clone();
+                        }
+                        node
+                    }
+                    None => Node {
+                        name: agent.name.clone(),
+                        state: NodeState::Pending,
+                        seconds: 0,
+                        role: String::new(),
+                        model: agent.model.clone(),
+                        line: agent.role.clone(),
+                        open: Open::Nothing,
+                        from: None,
+                    },
+                };
+                // Who does the work, as the plan says, before and after it starts.
+                node.role = agent.agent.clone().unwrap_or_else(|| "claude".into());
+                let sources: Vec<(usize, usize)> = agent.depends_on.iter().filter_map(|name| placed.get(name.as_str()).copied()).collect();
+                node.from = (!sources.is_empty()).then_some(sources);
+                placed.insert(agent.name.as_str(), (col, wave.nodes.len()));
+                wave.nodes.push(node);
+            }
+            waves.push(wave);
+        }
+        // The rest (no plan, or subagents it does not name), in the waves they ran in.
+        let spans: Vec<(u64, u64)> =
+            nodes.iter().map(|(at, n)| (*at, if n.state == NodeState::Running { u64::MAX } else { at + n.seconds * 1000 })).collect();
+        let first = waves.len();
+        for ((_, node), wave) in nodes.into_iter().zip(waves_of(&spans)) {
+            if waves.len() <= first + wave {
                 waves.push(Wave { title: String::new(), nodes: Vec::new() });
             }
-            waves[wave + 1].nodes.push(node);
+            waves[first + wave].nodes.push(node);
         }
         for (index, wave) in waves.iter_mut().enumerate().skip(1) {
             let done = wave.nodes.iter().filter(|n| n.state == NodeState::Done).count();
@@ -768,8 +834,10 @@ impl Workbench {
                 ),
             },
             open: Open::Pane(pane.clone()),
+            from: None,
         };
-        let waves = self.waves_after(orchestrator, nodes, cx);
+        let plan = record.as_ref().map(|r| r.plan.as_slice()).unwrap_or_default();
+        let waves = self.waves_after(orchestrator, nodes, plan, cx);
         let subagents: Vec<&Node> = waves.iter().skip(1).flat_map(|w| &w.nodes).collect();
         let (done, all) = (subagents.iter().filter(|n| n.state == NodeState::Done).count(), subagents.len());
         let models = {
@@ -940,6 +1008,7 @@ impl Workbench {
                     Some(pane) => Open::Pane(pane),
                     None => continue,
                 },
+                from: None,
             });
         }
         let (done, all) = self.run_progress(run, cx);
@@ -1017,16 +1086,20 @@ impl Workbench {
                 pan.y + px((WAVE_HEAD + 8. + row as f32 * (NODE_H + ROW_GAP)) * z),
             )
         };
-        // Lines: from the right of a node to the left of one in the next wave, in the target's state.
+        // Lines: from the right of a node to the left of one in a later wave, in the target's state —
+        // from the agents it depends on, else from the wave before.
         let mut lines: Vec<(Point<Pixels>, Point<Pixels>, NodeState)> = Vec::new();
-        for col in 0..waves.len().saturating_sub(1) {
-            for (a, b) in edges_between(waves[col].nodes.len(), waves[col + 1].nodes.len()) {
-                let (from, to) = (at(col, a), at(col + 1, b));
-                lines.push((
-                    point(from.x + s(NODE_W), from.y + s(NODE_H / 2.)),
-                    point(to.x, to.y + s(NODE_H / 2.)),
-                    waves[col + 1].nodes[b].state,
-                ));
+        for col in 1..waves.len() {
+            let before = edges_between(waves[col - 1].nodes.len(), waves[col].nodes.len());
+            for (b, node) in waves[col].nodes.iter().enumerate() {
+                let sources: Vec<(usize, usize)> = match &node.from {
+                    Some(sources) => sources.clone(),
+                    None => before.iter().filter(|(_, to)| *to == b).map(|(a, _)| (col - 1, *a)).collect(),
+                };
+                for (from_col, a) in sources {
+                    let (from, to) = (at(from_col, a), at(col, b));
+                    lines.push((point(from.x + s(NODE_W), from.y + s(NODE_H / 2.)), point(to.x, to.y + s(NODE_H / 2.)), node.state));
+                }
             }
         }
         board.animating.set(lines.iter().any(|(_, _, state)| *state == NodeState::Running));
@@ -1280,7 +1353,11 @@ impl Workbench {
                             .child(node.name),
                     ),
             )
-            .child(div().text_size(s(Type::CAPTION)).text_color(hex(color)).child(format!("{state_word} · {}", span(node.seconds))))
+            .child(div().text_size(s(Type::CAPTION)).text_color(hex(color)).child(if node.state == NodeState::Pending {
+                state_word.to_string()
+            } else {
+                format!("{state_word} · {}", span(node.seconds))
+            }))
             .child(
                 // One line: a long model name is cut, not wrapped onto the line below.
                 div()
@@ -1346,21 +1423,22 @@ impl Workbench {
     }
 
     /// A session's team: its subagents from their transcripts (the hooks' word for one whose
-    /// transcript has not shown up yet).
+    /// transcript has not shown up yet). For an orchestration with a plan, counted as its page draws
+    /// them: an agent run again under its name is one agent (as its last run is), and the plan's
+    /// agents not started yet are pending.
     pub(super) fn team_of(&self, session: &str, pane: Option<&Pane>, cx: &gpui::App) -> super::orchestration::Team {
-        let mut team = super::orchestration::Team::default();
         let now = crate::ui::now_ms();
         let reported = |id: &str| pane.is_some_and(|p| p.read(cx).subagents.iter().any(|r| r.id == id && r.finished.is_some()));
+        // Every subagent: its name (when known), when it started, where it is.
+        let mut runs: Vec<(Option<String>, u64, NodeState)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         if let Some(followed) = self.session_board.watched.get(session) {
             let traces = followed.traces.lock().unwrap_or_else(|e| e.into_inner());
             for file in &followed.files {
                 seen.insert(file.id.clone());
-                match sub_state(traces.get(&file.id).map(|r| &r.trace), reported(&file.id), now) {
-                    NodeState::Done => team.done += 1,
-                    NodeState::Stopped => team.cut_off += 1,
-                    NodeState::Running | NodeState::Pending => team.running += 1,
-                }
+                let trace = traces.get(&file.id).map(|r| &r.trace);
+                let name = (!file.description.is_empty()).then(|| file.description.clone());
+                runs.push((name, trace.and_then(|t| t.started_ms).unwrap_or(now), sub_state(trace, reported(&file.id), now)));
             }
         }
         if let Some(pane) = pane {
@@ -1368,13 +1446,41 @@ impl Workbench {
             // Only this process's: the hooks of an earlier one are gone with it.
             let alive = view.live_agent.is_some();
             for run in view.subagents.iter().filter(|r| !seen.contains(&r.id)) {
-                if run.finished.is_some() {
-                    team.done += 1;
+                let state = if run.finished.is_some() {
+                    NodeState::Done
                 } else if alive {
-                    team.running += 1;
+                    NodeState::Running
                 } else {
-                    team.cut_off += 1;
+                    NodeState::Stopped
+                };
+                runs.push((run.task.clone(), now.saturating_sub(run.started.elapsed().as_millis() as u64), state));
+            }
+        }
+        let plan = self.session_board.records.iter().find(|r| r.session == session).map(|r| r.plan.as_slice()).unwrap_or_default();
+        let mut pending = 0;
+        if !plan.is_empty() {
+            // A plan's agent is its last run.
+            runs.sort_by_key(|(_, at, _)| *at);
+            let planned = |name: &Option<String>| name.as_ref().is_some_and(|n| plan.iter().any(|a| &a.name == n));
+            let mut last: Vec<(Option<String>, u64, NodeState)> = Vec::new();
+            for run in runs {
+                match last.iter_mut().find(|(name, ..)| planned(name) && *name == run.0) {
+                    Some(earlier) => *earlier = run,
+                    None => last.push(run),
                 }
+            }
+            runs = last;
+            // A subagent just started can be known by the hooks before its name is: never more to
+            // come than the plan has left.
+            let unseen = plan.iter().filter(|a| !runs.iter().any(|(name, ..)| name.as_ref() == Some(&a.name))).count();
+            pending = unseen.min(plan.len().saturating_sub(runs.len()));
+        }
+        let mut team = super::orchestration::Team { pending, ..Default::default() };
+        for (_, _, state) in &runs {
+            match state {
+                NodeState::Done => team.done += 1,
+                NodeState::Stopped => team.cut_off += 1,
+                NodeState::Running | NodeState::Pending => team.running += 1,
             }
         }
         team.all = team.running + team.done + team.cut_off;
@@ -1687,8 +1793,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagents_started_together_are_one_wave() {
-        assert_eq!(waves_of(&[0, 1_000, 2_500, 30_000, 31_000, 90_000]), [0, 0, 0, 1, 1, 2]);
+    fn subagents_that_ran_together_are_one_wave() {
+        const RUNS: u64 = u64::MAX;
+        // Three started one after another within a minute, all at work together: one wave; the
+        // next starts once they have all finished.
+        let spans = [(0, 340_000), (20_000, 92_000), (45_000, 270_000), (350_000, 500_000), (352_000, 420_000), (510_000, RUNS)];
+        assert_eq!(waves_of(&spans), [0, 0, 0, 1, 1, 2]);
+        // Started in one message and one already done: still the same wave.
+        assert_eq!(waves_of(&[(0, 1_000), (2_000, 9_000)]), [0, 0]);
         assert!(waves_of(&[]).is_empty());
     }
 

@@ -64,6 +64,71 @@ pub struct Record {
     /// pane still shows the state before (or its session is still coming up), which says nothing.
     #[serde(skip)]
     pub settling_until: u64,
+    /// The plan the orchestrator handed over with `agentty plan`: every agent, by wave, before any
+    /// of them starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan: Vec<PlanAgent>,
+}
+
+/// One agent of an orchestration's plan. Its subagent is found by name (the Agent tool's
+/// description).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanAgent {
+    pub name: String,
+    /// 1 for the first wave.
+    pub wave: u32,
+    /// What it does, in a few words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Who does the work: claude, or another AI agent (codex, gemini, agy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The names of the agents whose results it needs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+/// Bounds on a plan: it comes from an agent and is drawn on the page.
+const PLAN_AGENTS: usize = 40;
+const PLAN_WAVES: u32 = 20;
+const PLAN_TEXT: usize = 200;
+
+/// A plan as `agentty plan` sends it: `{"agents": [...]}` or the bare list. Names are unique, waves
+/// run from 1, and a dependency names another agent of an earlier wave.
+pub fn parse_plan(value: &serde_json::Value) -> Result<Vec<PlanAgent>, String> {
+    let list = value.get("agents").unwrap_or(value);
+    let agents: Vec<PlanAgent> = serde_json::from_value(list.clone()).map_err(|e| format!("not a plan: {e}"))?;
+    if agents.is_empty() {
+        return Err("the plan has no agents".into());
+    }
+    if agents.len() > PLAN_AGENTS {
+        return Err(format!("at most {PLAN_AGENTS} agents"));
+    }
+    let mut names = std::collections::HashSet::new();
+    for agent in &agents {
+        let texts = [Some(&agent.name), agent.role.as_ref(), agent.agent.as_ref(), agent.model.as_ref()];
+        if agent.name.trim().is_empty() || texts.into_iter().flatten().chain(&agent.depends_on).any(|t| t.chars().count() > PLAN_TEXT) {
+            return Err(format!("agent {:?}: a name is needed, and every text is at most {PLAN_TEXT} characters", agent.name));
+        }
+        if !(1..=PLAN_WAVES).contains(&agent.wave) {
+            return Err(format!("agent {:?}: wave runs from 1 to {PLAN_WAVES}", agent.name));
+        }
+        if !names.insert(agent.name.as_str()) {
+            return Err(format!("agent {:?} is in the plan twice", agent.name));
+        }
+    }
+    for agent in &agents {
+        for needed in &agent.depends_on {
+            match agents.iter().find(|a| &a.name == needed) {
+                Some(other) if other.wave < agent.wave => {}
+                Some(_) => return Err(format!("agent {:?} depends on {needed:?}, which is not in an earlier wave", agent.name)),
+                None => return Err(format!("agent {:?} depends on {needed:?}, which is not in the plan", agent.name)),
+            }
+        }
+    }
+    Ok(agents)
 }
 
 /// The team's subagents now.
@@ -73,7 +138,10 @@ pub struct Team {
     pub done: usize,
     /// Not finished, and their process is gone.
     pub cut_off: usize,
+    /// Started subagents (running, done or cut off).
     pub all: usize,
+    /// Agents of its plan that have not started yet (not in `all`).
+    pub pending: usize,
 }
 
 /// The orchestrator's pane as seen now.
@@ -127,7 +195,7 @@ pub fn next_stage(stage: Stage, seen_since: Option<u64>, seen: &Seen) -> (Stage,
         } else {
             Stage::Done
         }
-    } else if stage == Stage::Running && team.all > 0 && team.cut_off == 0 {
+    } else if stage == Stage::Running && team.all > 0 && team.cut_off == 0 && team.pending == 0 {
         // Resting in the same process with its whole team done (the last agent's report came in
         // after its turn, so the pane says idle rather than finished): done.
         Stage::Done
@@ -186,7 +254,17 @@ impl Workbench {
         let now = crate::ui::now_ms();
         let records = self.orchestrations();
         let id = records.iter().map(|r| r.id + 1).max().unwrap_or(1).max(now);
-        records.push(Record { id, session, goal, folder, started_ms: now, stage: Stage::Planning, seen_since: None, settling_until: 0 });
+        records.push(Record {
+            id,
+            session,
+            goal,
+            folder,
+            started_ms: now,
+            stage: Stage::Planning,
+            seen_since: None,
+            settling_until: 0,
+            plan: Vec::new(),
+        });
         save_records(records);
         Some(id)
     }
@@ -201,6 +279,28 @@ impl Workbench {
         }
         let (current, started) = (view.current_session(), view.spec.session_id.clone());
         self.session_board.records.iter().find(|r| Some(&r.session) == current.as_ref() || Some(&r.session) == started.as_ref())
+    }
+
+    /// `agentty plan` from a pane: the plan of the orchestration that pane leads (no other).
+    pub fn answer_plan(&mut self, request: crate::agent_signal::PlanRequest, cx: &mut Context<Self>) {
+        let result = (|| {
+            let plan = parse_plan(&request.plan)?;
+            let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == request.pane).ok_or("the asking pane is gone")?;
+            let id = self
+                .record_of_pane(&pane, cx)
+                .map(|r| r.id)
+                .ok_or("this agent does not lead an orchestration (agentty plan is for one started from Agentty's Orchestrator)")?;
+            let waves = plan.iter().map(|a| a.wave).max().unwrap_or(0);
+            let agents = plan.len();
+            let records = self.orchestrations();
+            if let Some(record) = records.iter_mut().find(|r| r.id == id) {
+                record.plan = plan;
+            }
+            save_records(records);
+            Ok::<_, String>(serde_json::json!({ "agents": agents, "waves": waves }).to_string())
+        })();
+        let _ = request.reply.send(crate::agent_signal::browser_reply(result));
+        cx.notify();
     }
 
     /// The colour of the orchestration mark for workspace `index`, when an orchestration is led
@@ -313,20 +413,22 @@ impl Workbench {
 
     /// The stage in words, with its colour — the same on the pane's strip and on the page.
     pub(super) fn stage_words(&self, stage: Stage, team: Team, cx: &gpui::App) -> (String, u32) {
-        let (done, all) = (team.done.to_string(), team.all.to_string());
+        let (done, all) = (team.done.to_string(), (team.all + team.pending).to_string());
         match stage {
             Stage::Planning => (t(cx, "orch.stage_planning").to_string(), RUNNING),
             Stage::Ready => (t(cx, "orch.plan_ready_hint_pane").to_string(), RUNNING),
             Stage::Running if team.running > 0 => {
                 (tf(cx, "orch.stage_running", &[("running", &team.running.to_string()), ("done", &done), ("all", &all)]), RUNNING)
             }
-            Stage::Running if team.all == 0 => (t(cx, "orch.stage_running_short").to_string(), RUNNING),
+            Stage::Running if team.all + team.pending == 0 => (t(cx, "orch.stage_running_short").to_string(), RUNNING),
             Stage::Running => (tf(cx, "orch.stage_running_lead", &[("done", &done), ("all", &all)]), RUNNING),
             // Nothing known of its team (its terminal is closed): the stage alone.
             Stage::Done if team.all == 0 => (t(cx, "orch.stage_done_short").to_string(), DONE),
             Stage::Stopped if team.all == 0 => (t(cx, "orch.stage_stopped_short").to_string(), Chrome::MUTED),
             // Done: agents a crash cut off were run again, so they are not the team's any more.
-            Stage::Done => (tf(cx, "orch.stage_done", &[("done", &done), ("all", &(team.all - team.cut_off).to_string())]), DONE),
+            Stage::Done => {
+                (tf(cx, "orch.stage_done", &[("done", &done), ("all", &(team.all - team.cut_off + team.pending).to_string())]), DONE)
+            }
             Stage::Interrupted if team.cut_off > 0 => {
                 (tf(cx, "orch.stage_interrupted", &[("cut", &team.cut_off.to_string()), ("done", &done), ("all", &all)]), CUT)
             }
@@ -637,7 +739,7 @@ mod tests {
 
     fn seen(in_turn: bool, turn_over: bool, team: (usize, usize, usize, usize)) -> Seen {
         let (running, done, cut_off, all) = team;
-        Seen { alive: true, since: Some(100), in_turn, turn_over, team: Team { running, done, cut_off, all }, settling: false }
+        Seen { alive: true, since: Some(100), in_turn, turn_over, team: Team { running, done, cut_off, all, pending: 0 }, settling: false }
     }
 
     #[test]
@@ -720,10 +822,52 @@ mod tests {
             stage: Stage::Interrupted,
             seen_since: Some(5),
             settling_until: 0,
+            plan: parse_plan(&serde_json::json!([{ "name": "scan", "wave": 1, "model": "sonnet" }])).unwrap(),
         };
         let text = serde_json::to_string(std::slice::from_ref(&record)).unwrap();
         assert!(text.contains("\"interrupted\""));
         let back: Vec<Record> = serde_json::from_str(&text).unwrap();
-        assert_eq!(back, [record]);
+        assert_eq!(back, std::slice::from_ref(&record));
+        // Records written before plans existed read back with none.
+        let mut old = serde_json::to_value(std::slice::from_ref(&record)).unwrap();
+        old[0].as_object_mut().unwrap().remove("plan");
+        let old: Vec<Record> = serde_json::from_value(old).unwrap();
+        assert!(old[0].plan.is_empty());
+    }
+
+    #[test]
+    fn a_plan_names_each_agent_once_by_wave_with_earlier_dependencies() {
+        let plan = parse_plan(&serde_json::json!({ "agents": [
+            { "name": "survey", "wave": 1, "role": "Read the current tools", "model": "opus" },
+            { "name": "ideas", "wave": 1 },
+            { "name": "architect", "wave": 2, "depends_on": ["survey", "ideas"] },
+            { "name": "critic", "wave": 2, "agent": "codex", "depends_on": ["survey"] },
+            { "name": "review", "wave": 3, "depends_on": ["architect", "critic"] },
+        ]}))
+        .unwrap();
+        assert_eq!(plan.len(), 5);
+        assert_eq!(plan[3].agent.as_deref(), Some("codex"));
+        assert_eq!(plan[4].depends_on, ["architect", "critic"]);
+
+        let bad = |value: serde_json::Value| parse_plan(&value).unwrap_err();
+        assert!(bad(serde_json::json!([])).contains("no agents"));
+        assert!(bad(serde_json::json!([{ "name": "a", "wave": 0 }])).contains("wave"));
+        assert!(bad(serde_json::json!([{ "name": "a", "wave": 1 }, { "name": "a", "wave": 2 }])).contains("twice"));
+        assert!(
+            bad(serde_json::json!([{ "name": "a", "wave": 1, "depends_on": ["b"] }, { "name": "b", "wave": 1 }])).contains("earlier wave")
+        );
+        assert!(bad(serde_json::json!([{ "name": "a", "wave": 2, "depends_on": ["zz"] }])).contains("not in the plan"));
+        assert!(bad(serde_json::json!([{ "name": " ", "wave": 1 }])).contains("name"));
+        assert!(bad(serde_json::json!({ "agents": "x" })).contains("not a plan"));
+    }
+
+    #[test]
+    fn a_running_team_with_agents_yet_to_start_is_not_done() {
+        let mut team = Team { running: 0, done: 2, cut_off: 0, all: 2, pending: 3 };
+        let seen = Seen { alive: true, since: Some(100), in_turn: false, turn_over: false, team, settling: false };
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen).0, Stage::Running);
+        team.pending = 0;
+        let seen = Seen { team, ..seen };
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen).0, Stage::Done);
     }
 }

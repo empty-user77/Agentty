@@ -586,6 +586,11 @@ fn main() {
         std::process::exit(tasks_cli::run(&args[2..]));
     }
 
+    // `agentty plan`: an orchestrator hands its plan to the Orchestration page.
+    if args.get(1).map(String::as_str) == Some("plan") {
+        std::process::exit(tasks_cli::run_plan(&args[2..]));
+    }
+
     // `agentty db …`: an agent reads the project's databases (writes wait for the user).
     if args.get(1).map(String::as_str) == Some("db") {
         std::process::exit(db_cli::run(&args[2..]));
@@ -900,6 +905,16 @@ fn main() {
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
                                     Some(window) => {
                                         let _ = window.update(cx, |workbench, _, cx| workbench.answer_tasks_ctl(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Plan(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_plan(request, cx));
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
