@@ -96,8 +96,12 @@ fn control_from_args(args: &[String]) -> Result<serde_json::Value, String> {
 
 /// Sends one line to Agentty and prints its answer; `wait` is how long the answer may take.
 fn ask(line: String, wait: Duration) -> i32 {
+    ask_as("agentty tasks", line, wait)
+}
+
+fn ask_as(who: &str, line: String, wait: Duration) -> i32 {
     let Ok(socket) = std::env::var("AGENTTY_SOCKET") else {
-        eprintln!("agentty tasks: not running inside an Agentty terminal ($AGENTTY_SOCKET is not set)");
+        eprintln!("{who}: not running inside an Agentty terminal ($AGENTTY_SOCKET is not set)");
         return 1;
     };
     let reply = (|| -> std::io::Result<String> {
@@ -111,7 +115,7 @@ fn ask(line: String, wait: Duration) -> i32 {
     let line = match reply {
         Ok(line) => line,
         Err(err) => {
-            eprintln!("agentty tasks: {err}");
+            eprintln!("{who}: {err}");
             return 1;
         }
     };
@@ -120,8 +124,43 @@ fn ask(line: String, wait: Duration) -> i32 {
         println!("{}", reply["result"]);
         0
     } else {
-        eprintln!("agentty tasks: {}", reply["error"].as_str().unwrap_or("no response from Agentty"));
+        eprintln!("{who}: {}", reply["error"].as_str().unwrap_or("no response from Agentty"));
         1
+    }
+}
+
+pub const PLAN_HELP: &str = "agentty plan — hand an orchestration's plan to Agentty's Orchestration page
+
+  agentty plan --file <plan.json>
+  agentty plan < plan.json
+
+The plan is JSON: {\"agents\": [{\"name\": \"survey\", \"wave\": 1, \"role\": \"…\", \"agent\": \"claude\",
+\"model\": \"opus\", \"depends_on\": []}, …]}. Names are unique and are the Agent tool's description of
+that agent; waves run from 1; depends_on names agents of earlier waves. The page draws every agent
+of the plan at once (those not started yet as pending) and fills each in as it runs. Send the plan
+again whenever it changes. Only the orchestrator Agentty started can send one.";
+
+/// `agentty plan`: reads the plan (a file, or standard input) and sends it on.
+pub fn run_plan(args: &[String]) -> i32 {
+    let text = match args {
+        [flag, ..] if flag == "--help" || flag == "-h" => {
+            println!("{PLAN_HELP}");
+            return 0;
+        }
+        [flag, path] if flag == "--file" => std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")),
+        [] => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map(|_| text).map_err(|e| e.to_string())
+        }
+        _ => Err("use --file <plan.json>, or pass the plan on standard input (see agentty plan --help)".into()),
+    };
+    let plan = text.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).map_err(|e| format!("not JSON: {e}")));
+    match plan {
+        Ok(plan) => ask_as("agentty plan", format!("plan\t{plan}"), Duration::from_secs(15)),
+        Err(err) => {
+            eprintln!("agentty plan: {err}");
+            1
+        }
     }
 }
 

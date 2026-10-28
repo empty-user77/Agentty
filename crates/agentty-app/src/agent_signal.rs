@@ -186,6 +186,9 @@ pub enum SocketMessage {
     /// `tasksctl\t{"action":"status"|"send",…}` from `agentty tasks status|send`: a chat's lead
     /// asks about its workers or sends one a message; answered on `reply`.
     TasksCtl(TasksCtlRequest),
+    /// `plan\t{"agents":[…]}` from `agentty plan`: an orchestrator hands over its plan, for the
+    /// Orchestration page to draw every agent before it starts; answered on `reply`.
+    Plan(PlanRequest),
     /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
     /// change it; answered on `reply` (writes only after the user approved the exact statement).
     Db(DbRequest),
@@ -348,6 +351,16 @@ pub struct TasksCtl {
     pub prompt: String,
     /// `claude` or `codex` for a reviewer (`review`, optional: the chat's choice otherwise).
     pub agent: Option<String>,
+}
+
+/// An orchestration plan from a pane, answered on `reply`. Only the pane's own orchestration takes it.
+#[derive(Debug, Clone)]
+pub struct PlanRequest {
+    /// The pane the connection belongs to (the orchestrator).
+    pub pane: u64,
+    pub plan: serde_json::Value,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
 }
 
 /// A [`TasksCtl`] from a pane, answered on `reply`.
@@ -682,6 +695,19 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 }
                 Err(error) => browser_reply(Err(error)),
             };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("plan\t"), pane) {
+            let plan: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let (reply, answer) = std::sync::mpsc::channel();
+            if tx.unbounded_send(SocketMessage::Plan(PlanRequest { pane, plan, reply })).is_err() {
+                return;
+            }
+            let response = answer.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
             if let Some(writer) = writer.as_mut() {
                 use std::io::Write;
                 let _ = writeln!(writer, "{response}");

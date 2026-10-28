@@ -32,7 +32,7 @@ On the left are the threads: every agent session running in Agentty, with a dot 
 
 - At the top, what you last asked it (`$ …`) and the session's name.
 - The orchestrator's line: the main agent's state, how many waves, how many subagents are done, and how many models are at work. **Open** goes to its pane, **Message** sends it a line as if typed there, and **Interrupt** stops its current turn (as Esc does in its pane).
-- The graph: the orchestrator first, then its subagents in waves. Subagents started together form a wave; the wave at work is underlined. Each card says whether it is running, completed or pending and for how long, what kind of agent it is and on which model, and its current step or its last word. Lines into a running wave move. Click a card to open that subagent's log.
+- The graph: the orchestrator first, then its subagents in waves, each wave a column. An orchestration's waves come from its plan: every agent of it is on the graph from the moment the plan is ready, those that have not started as pending, with lines from the agents each one waits for, so you see the work pass from wave to wave. For another session, subagents that ran at the same time form a wave. The wave at work is underlined. Each card says whether it is running, completed or pending and for how long, what kind of agent it is and on which model, and its current step or its last word. Lines into a running wave move. Click a card to open that subagent's log.
 - At the bottom, the latest steps of its subagents as they happen.
 
 A parallel run shows its tasks as one wave, each with its branch (or folder) and its pane's state; click one to go to its pane.

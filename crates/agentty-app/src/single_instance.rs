@@ -25,6 +25,7 @@ pub const CLI_COMMANDS: &[&str] = &[
     "browser",
     "signal",
     "tasks",
+    "plan",
     "db",
     "worktree-for",
     "notify",
