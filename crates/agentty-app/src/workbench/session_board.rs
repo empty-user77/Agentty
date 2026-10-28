@@ -32,6 +32,10 @@ const COL_GAP: f32 = 64.;
 const ROW_GAP: f32 = 14.;
 /// Room above the nodes for a wave's title.
 const WAVE_HEAD: f32 = 30.;
+/// Room between two rows of waves, when they wrap.
+const BAND_GAP: f32 = 36.;
+/// Room left of the first wave: a row running back turns there.
+const LEFT: f32 = 48.;
 /// How far the chart zooms out and in, and one step of the buttons (as on the connection map).
 const ZOOM_RANGE: (f32, f32) = (0.3, 2.);
 const ZOOM_STEP: f32 = 1.2;
@@ -153,6 +157,57 @@ impl SessionBoard {
         }
         self.zoom = ((vw - 16.) / w).min((vh - 16.) / h).clamp(ZOOM_RANGE.0, 1.);
         self.pan = point(px(8.), px(8.));
+    }
+}
+
+/// Where the waves go on the chart: side by side as many as fit across the page, then on in a
+/// row (a band) below, each band as tall as its tallest wave. The rows run in an S: left to right,
+/// then right to left, so the work goes down to the next row where the one above ends.
+struct Grid {
+    /// Waves in a band.
+    per_band: usize,
+    /// Where each band starts (its waves' titles).
+    tops: Vec<f32>,
+    width: f32,
+    height: f32,
+}
+
+impl Grid {
+    /// `sizes`: the nodes in each wave; `width`: the page's width in chart units (0 before the
+    /// first frame: one band).
+    fn new(sizes: &[usize], width: f32) -> Grid {
+        let across = ((width - LEFT) / (NODE_W + COL_GAP)).floor();
+        let per_band = if across >= 1. { across as usize } else { sizes.len().max(1) };
+        let (mut tops, mut top) = (Vec::new(), 0.);
+        for chunk in sizes.chunks(per_band) {
+            tops.push(top);
+            let tallest = chunk.iter().copied().max().unwrap_or(1).max(1);
+            top += WAVE_HEAD + 8. + tallest as f32 * (NODE_H + ROW_GAP) + BAND_GAP;
+        }
+        let columns = sizes.len().clamp(1, per_band);
+        Grid { per_band, tops, width: LEFT + columns as f32 * (NODE_W + COL_GAP), height: (top - BAND_GAP).max(WAVE_HEAD) + 8. }
+    }
+
+    fn band(&self, col: usize) -> usize {
+        col / self.per_band
+    }
+
+    /// Whether wave `col`'s row runs right to left.
+    fn backwards(&self, col: usize) -> bool {
+        self.band(col) % 2 == 1
+    }
+
+    /// The top left of the node in wave `col`, row `row`.
+    fn at(&self, col: usize, row: usize) -> (f32, f32) {
+        let top = self.tops.get(self.band(col)).copied().unwrap_or(0.);
+        let place = col % self.per_band;
+        let place = if self.backwards(col) { self.per_band - 1 - place } else { place };
+        (LEFT + place as f32 * (NODE_W + COL_GAP), top + WAVE_HEAD + 8. + row as f32 * (NODE_H + ROW_GAP))
+    }
+
+    /// The whole chart (for Fit).
+    fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
     }
 }
 
@@ -1070,7 +1125,8 @@ impl Workbench {
 
     /// The waves side by side, nodes stacked in each, lines from each wave to the next — on a
     /// chart moved and zoomed like the connection map's: drag the empty space or use the wheel to
-    /// move it, ⌘/Ctrl + wheel or the buttons at the bottom right to zoom.
+    /// move it, ⌘/Ctrl + wheel or the buttons at the bottom right to zoom. Waves that do not fit
+    /// across the page go on in a row below, so a long plan uses the page instead of running off it.
     fn render_waves(&self, waves: Vec<Wave>, cx: &mut Context<Self>) -> AnyElement {
         let board = &self.session_board;
         let (z, pan) = (board.zoom(), board.pan);
@@ -1079,18 +1135,18 @@ impl Workbench {
         let now = crate::ui::now_ms();
         let phase = (now % 700) as f32 / 700.;
         let travel = (now % 1600) as f32 / 1600.;
-        let tallest = waves.iter().map(|w| w.nodes.len()).max().unwrap_or(1).max(1);
-        board.chart_size.set((24. + waves.len() as f32 * (NODE_W + COL_GAP), WAVE_HEAD + 16. + tallest as f32 * (NODE_H + ROW_GAP)));
+        let width = f32::from(board.canvas.get().size.width) / z;
+        let grid = Grid::new(&waves.iter().map(|w| w.nodes.len()).collect::<Vec<_>>(), width);
+        board.chart_size.set(grid.size());
         // A chart point, on the canvas.
-        let at = move |col: usize, row: usize| {
-            point(
-                pan.x + px((24. + col as f32 * (NODE_W + COL_GAP)) * z),
-                pan.y + px((WAVE_HEAD + 8. + row as f32 * (NODE_H + ROW_GAP)) * z),
-            )
+        let at = |col: usize, row: usize| {
+            let (x, y) = grid.at(col, row);
+            point(pan.x + px(x * z), pan.y + px(y * z))
         };
         // Lines: from the right of a node to the left of one in a later wave, in the target's state —
-        // from the agents it depends on, else from the wave before.
-        let mut lines: Vec<(Point<Pixels>, Point<Pixels>, NodeState)> = Vec::new();
+        // from the agents it depends on, else from the wave before. To a wave on a row below, from
+        // the node's bottom to the target's top. Each with its two control points.
+        let mut lines: Vec<([Point<Pixels>; 4], NodeState)> = Vec::new();
         for col in 1..waves.len() {
             let before = edges_between(waves[col - 1].nodes.len(), waves[col].nodes.len());
             for (b, node) in waves[col].nodes.iter().enumerate() {
@@ -1100,11 +1156,25 @@ impl Workbench {
                 };
                 for (from_col, a) in sources {
                     let (from, to) = (at(from_col, a), at(col, b));
-                    lines.push((point(from.x + s(NODE_W), from.y + s(NODE_H / 2.)), point(to.x, to.y + s(NODE_H / 2.)), node.state));
+                    // Out of the side the source's row runs to, into the side the target's row comes
+                    // from. Down to the next row, both are the same side: the line turns around the
+                    // row's end, outside the waves, instead of crossing the nodes below.
+                    let right = |yes: bool| if yes { s(NODE_W) } else { s(0.) };
+                    let start = point(from.x + right(!grid.backwards(from_col)), from.y + s(NODE_H / 2.));
+                    let end = point(to.x + right(grid.backwards(col)), to.y + s(NODE_H / 2.));
+                    let bend = s(COL_GAP / 2.);
+                    let curve = if grid.band(from_col) == grid.band(col) {
+                        let bend = if grid.backwards(col) { -bend } else { bend };
+                        [start, point(start.x + bend, start.y), point(end.x - bend, end.y), end]
+                    } else {
+                        let bend = if grid.backwards(from_col) { -bend } else { bend } * 1.6;
+                        [start, point(start.x + bend, start.y), point(end.x + bend, end.y), end]
+                    };
+                    lines.push((curve, node.state));
                 }
             }
         }
-        board.animating.set(lines.iter().any(|(_, _, state)| *state == NodeState::Running));
+        board.animating.set(lines.iter().any(|(_, state)| *state == NodeState::Running));
         let canvas_bounds = board.canvas.clone();
         let entity = cx.entity().downgrade();
         let mut area = div()
@@ -1166,9 +1236,8 @@ impl Workbench {
                             cx.stop_propagation();
                         });
                         let o = bounds.origin;
-                        for (start, end, state) in &lines {
-                            let (s, e) = (point(o.x + start.x, o.y + start.y), point(o.x + end.x, o.y + end.y));
-                            let bend = px(COL_GAP / 2. * z);
+                        for (curve, state) in &lines {
+                            let [s, c1, c2, e] = curve.map(|p| point(o.x + p.x, o.y + p.y));
                             let color = state_color(*state);
                             let alpha = if *state == NodeState::Pending { 0.35 } else { 0.8 };
                             let width = px((1.5 * z).max(1.));
@@ -1176,15 +1245,13 @@ impl Workbench {
                                 // Dashes that move along the line while the work runs.
                                 let curve = |t: f32| {
                                     let u = 1. - t;
-                                    let x = u * u * u * f32::from(s.x)
-                                        + 3. * u * u * t * f32::from(s.x + bend)
-                                        + 3. * u * t * t * f32::from(e.x - bend)
-                                        + t * t * t * f32::from(e.x);
-                                    let y = u * u * u * f32::from(s.y)
-                                        + 3. * u * u * t * f32::from(s.y)
-                                        + 3. * u * t * t * f32::from(e.y)
-                                        + t * t * t * f32::from(e.y);
-                                    point(px(x), px(y))
+                                    let along = |a: Pixels, b: Pixels, c: Pixels, d: Pixels| {
+                                        u * u * u * f32::from(a)
+                                            + 3. * u * u * t * f32::from(b)
+                                            + 3. * u * t * t * f32::from(c)
+                                            + t * t * t * f32::from(d)
+                                    };
+                                    point(px(along(s.x, c1.x, c2.x, e.x)), px(along(s.y, c1.y, c2.y, e.y)))
                                 };
                                 let steps = 18;
                                 for i in 0..steps {
@@ -1210,7 +1277,7 @@ impl Workbench {
                             } else {
                                 let mut path = PathBuilder::stroke(width);
                                 path.move_to(s);
-                                path.cubic_bezier_to(e, point(s.x + bend, s.y), point(e.x - bend, e.y));
+                                path.cubic_bezier_to(e, c1, c2);
                                 if let Ok(path) = path.build() {
                                     window.paint_path(path, hex_alpha(color, alpha));
                                 }
@@ -1228,7 +1295,7 @@ impl Workbench {
                 div()
                     .absolute()
                     .left(head.x)
-                    .top(pan.y + s(4.))
+                    .top(head.y - s(WAVE_HEAD + 4.))
                     .w(s(NODE_W))
                     .pb(s(4.))
                     .text_size(s(Type::CAPTION))
@@ -1793,6 +1860,28 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ten waves on a page four waves wide: three rows, each starting at the left, the next row
+    /// below the tallest wave of the one before; before the first frame, one row.
+    #[test]
+    fn waves_that_do_not_fit_across_go_on_below() {
+        let sizes = [1, 3, 1, 1, 2, 1, 1, 1, 1, 1];
+        let width = LEFT + 4. * (NODE_W + COL_GAP) + 10.;
+        let grid = Grid::new(&sizes, width);
+        assert_eq!((grid.band(3), grid.band(4), grid.band(9)), (0, 1, 2));
+        // An S: the second row starts under the end of the first and runs back; the third runs on again.
+        assert!(grid.backwards(4) && !grid.backwards(8));
+        assert_eq!(grid.at(4, 0).0, grid.at(3, 0).0);
+        assert_eq!(grid.at(7, 0).0, grid.at(0, 0).0);
+        assert_eq!(grid.at(8, 0).0, LEFT);
+        let row = NODE_H + ROW_GAP;
+        assert_eq!(grid.at(4, 0).1, grid.at(0, 0).1 + WAVE_HEAD + 8. + 3. * row + BAND_GAP);
+        assert_eq!(grid.size().0, width - 10.);
+        assert!(grid.size().1 > grid.at(9, 0).1 + NODE_H);
+        let first_frame = Grid::new(&sizes, 0.);
+        assert_eq!(first_frame.band(9), 0);
+        assert_eq!(first_frame.size().0, LEFT + 10. * (NODE_W + COL_GAP));
+    }
 
     #[test]
     fn subagents_that_ran_together_are_one_wave() {

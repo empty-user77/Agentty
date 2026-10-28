@@ -7,6 +7,7 @@ use crate::idea_view::{IdeaEvent, IdeaView};
 use crate::launch::PaneKind;
 use crate::plugins;
 use agentty_bridge::idea::IdeaInput;
+use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::{store, PromptRequest, PromptTarget};
 use gpui::{AppContext, Context, Entity, Window};
 use serde_json::json;
@@ -36,7 +37,9 @@ impl Workbench {
             None => {
                 let view = cx.new(|cx| IdeaView::new(window, cx));
                 cx.subscribe_in(&view, window, |this, _, event: &IdeaEvent, window, cx| match event {
-                    IdeaEvent::Start { input, root, agent } => this.start_idea(input.clone(), root.clone(), *agent, window, cx),
+                    IdeaEvent::Start { input, root, agent, team } => {
+                        this.start_idea(input.clone(), root.clone(), *agent, *team, window, cx)
+                    }
                 })
                 .detach();
                 self.idea = Some(view.clone());
@@ -46,12 +49,14 @@ impl Workbench {
         // Before detection finishes, offer both.
         let detected = self.installed.is_some();
         let other = self.pick_agent(None, false, cx).filter(|pick| pick.first_class().is_none()).map(crate::agents::AgentPick::name);
-        view.update(cx, |v, cx| v.set_agents(claude || !detected, codex || !detected, other, cx));
+        let orchestration = crate::settings::settings(cx).orchestration;
+        view.update(cx, |v, cx| v.set_agents(claude || !detected, codex || !detected, other, orchestration, cx));
         view
     }
 
-    /// Creates the project folder, then starts the agent there with the build prompt.
-    fn start_idea(&mut self, input: IdeaInput, root: PathBuf, agent: PaneKind, window: &mut Window, cx: &mut Context<Self>) {
+    /// Creates the project folder, then starts the agent there: with the build prompt, or (`team`) as
+    /// the orchestrator of a team that goes from analysis and design documents to the code.
+    fn start_idea(&mut self, input: IdeaInput, root: PathBuf, agent: PaneKind, team: bool, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::settings::settings(cx).language.code().to_string();
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M").to_string();
         let task = cx.background_spawn(async move {
@@ -85,17 +90,32 @@ impl Workbench {
                             return;
                         }
                     };
-                    let request = PromptRequest {
+                    let lead = if agent == PaneKind::Codex { Agent::Codex } else { Agent::Claude };
+                    let mut request = PromptRequest {
                         text: project.prompt.clone(),
                         title: Some(project.title.clone()),
                         target: PromptTarget::NewWorkspace,
-                        agent: Some(if agent == PaneKind::Codex { "codex" } else { "claude" }.into()),
+                        agent: Some(lead.id().into()),
                         cwd: Some(project.dir.clone()),
                         submit: true,
                         ..Default::default()
                     };
+                    if team {
+                        let prefs = crate::settings::settings(cx);
+                        let profile = prefs.orchestration_profile;
+                        let language = agentty_bridge::idea::language_name(prefs.language.code());
+                        let helpers = this.default_helpers(lead, cx);
+                        let goal = agentty_bridge::idea::team_goal(&project.title);
+                        // The owner handed over the idea: the team starts without waiting for a yes.
+                        request.text = super::orchestrator::prompt(&goal, lead, profile, &helpers, false, language);
+                        request.model = profile.lead_model().filter(|_| lead == Agent::Claude);
+                    }
                     match this.deliver_prompt(request, window, cx) {
-                        Ok(_) => {
+                        Ok(pane) => {
+                            // Its stages and agents show on the Orchestration page like any other's.
+                            if team {
+                                this.add_orchestration(pane, project.title.clone(), project.dir.clone(), cx);
+                            }
                             let group = this.idea_group();
                             if let Some(ws) = this.workspaces.last_mut() {
                                 ws.group = Some(group);
@@ -106,7 +126,7 @@ impl Workbench {
                                 idea.update(cx, |v, cx| v.reset(cx));
                             }
                             let folder = crate::ui::tilde(&project.dir);
-                            let mut message = tf(cx, "idea.started", &[("folder", &folder)]);
+                            let mut message = tf(cx, if team { "idea.started_team" } else { "idea.started" }, &[("folder", &folder)]);
                             if !project.skipped.is_empty() {
                                 message.push_str(&tf(cx, "idea.skipped", &[("n", &project.skipped.len().to_string())]));
                             }

@@ -15,7 +15,8 @@ use gpui::{
 use std::path::PathBuf;
 
 pub enum IdeaEvent {
-    Start { input: IdeaInput, root: PathBuf, agent: PaneKind },
+    /// `team`: the agent leads an orchestration (a team of agents) instead of building alone.
+    Start { input: IdeaInput, root: PathBuf, agent: PaneKind, team: bool },
 }
 
 struct Message {
@@ -36,6 +37,10 @@ pub struct IdeaView {
     available: (bool, bool),
     /// Another agent CLI that builds the project when neither Claude Code nor Codex is installed.
     other: Option<&'static str>,
+    /// Built by a team of agents the chosen one leads (an orchestration), or by that agent alone.
+    team: bool,
+    /// Whether orchestration is turned on in the settings.
+    orchestration: bool,
     root: PathBuf,
     error: Option<String>,
     /// Waiting for the project folder: a second click must not create another one.
@@ -81,6 +86,8 @@ impl IdeaView {
             agent: PaneKind::Claude,
             available: (true, true),
             other: None,
+            team: true,
+            orchestration: true,
             root: agentty_bridge::idea::default_root(),
             error: None,
             starting: false,
@@ -90,12 +97,13 @@ impl IdeaView {
     }
 
     /// Installed agents; picks one that is there.
-    pub fn set_agents(&mut self, claude: bool, codex: bool, other: Option<&'static str>, cx: &mut Context<Self>) {
-        if self.available == (claude, codex) && self.other == other {
+    pub fn set_agents(&mut self, claude: bool, codex: bool, other: Option<&'static str>, orchestration: bool, cx: &mut Context<Self>) {
+        if self.available == (claude, codex) && self.other == other && self.orchestration == orchestration {
             return;
         }
         self.available = (claude, codex);
         self.other = other;
+        self.orchestration = orchestration;
         if self.agent == PaneKind::Claude && !claude && codex {
             self.agent = PaneKind::Codex;
         } else if self.agent == PaneKind::Codex && !codex && claude {
@@ -155,6 +163,11 @@ impl IdeaView {
         .detach();
     }
 
+    /// A team needs a lead that runs one: Claude Code or Codex, with orchestration turned on.
+    fn team_possible(&self) -> bool {
+        self.orchestration && self.available != (false, false)
+    }
+
     fn can_start(&self, cx: &gpui::App) -> bool {
         !self.messages.is_empty() || !self.attachments.is_empty() || !self.input.read(cx).text().trim().is_empty()
     }
@@ -182,15 +195,21 @@ impl IdeaView {
         };
         self.starting = true;
         cx.notify();
-        cx.emit(IdeaEvent::Start { input, root: self.root.clone(), agent: self.agent });
+        let team = self.team && self.team_possible();
+        cx.emit(IdeaEvent::Start { input, root: self.root.clone(), agent: self.agent, team });
     }
 
-    /// `AGENTTY_DEBUG` driver: `msg:<text>`, `paste:<text>`, `file:<path>`, `start`.
+    /// `AGENTTY_DEBUG` driver: `msg:<text>`, `paste:<text>`, `file:<path>`, `root:<folder>`, `team:on|off`, `start`.
     pub fn debug_action(&mut self, argument: &str, cx: &mut Context<Self>) {
         match argument.split_once(':').unwrap_or((argument, "")) {
             ("msg", text) => self.push_message(text.to_string(), false, cx),
             ("paste", text) => self.push_message(crate::debug::unescape(text).replace('\r', "\n"), true, cx),
             ("file", path) => self.add_files(&[PathBuf::from(path)], cx),
+            ("root", path) => self.root = PathBuf::from(path),
+            ("team", on) => {
+                self.team = on != "off";
+                cx.notify();
+            }
             ("start", _) => self.start(cx),
             _ => {}
         }
@@ -507,6 +526,20 @@ impl IdeaView {
                 ),
             )
             .child(div().flex().items_center().gap_2().child(label("idea.agent", cx)).child(agents))
+            .when(self.team_possible(), |d| {
+                let mode = div().flex().gap_1().children([(true, "idea.mode_team"), (false, "idea.mode_solo")].map(|(team, key)| {
+                    chip(
+                        SharedString::from(format!("idea-mode-{team}")),
+                        t(cx, key),
+                        self.team == team,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.team = team;
+                            cx.notify();
+                        }),
+                    )
+                }));
+                d.child(div().flex().items_center().gap_2().child(label("idea.mode", cx)).child(mode))
+            })
             .child(
                 div()
                     .flex()

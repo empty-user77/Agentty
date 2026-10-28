@@ -5,7 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Build my idea: an agent team can build the idea. With **How → Agent team** (the default when Claude Code or Codex
+  builds it), the agent leads an orchestration that goes from the idea to the code one stage at a time: idea
+  analysis, idea derivation, a PRD, a high-level and a low-level design (each a document in `docs/design/`), then the
+  team composed from the design's build units, and development in waves (foundation, build units side by side, a
+  quality check in the browser and a review against the PRD). Inside each stage several agents work side by side.
+  The stages show on the Orchestration page; the live
+  preview and the 🚀 Launch button stay as they were. **One agent** builds it alone as before.
+
+### Fixed
+- The GitHub CLI installed with Homebrew showed as not installed in Settings → Integrations when Agentty was opened
+  from the Finder or the Dock, and cloning from GitHub and the pull requests of branches did not work. `gh` is now
+  found where the login shell and Homebrew put it.
+- On a page (Orchestration, Settings, Git, Plugins, …) the workspace's tabs disappeared from the top bar, so a tab
+  could not be clicked to go back to it. They now stay on every screen, with the page as one more tab after them.
+
 ### Changed
+- Orchestration page: waves that do not fit across the page go on in rows below, in an S (every other row runs back),
+  so a long plan fills the page instead of running off it to the right. Zooming out fits more waves in a row.
 - Claude Code is one of the agents, not a requirement. Features that start an agent use the one asked for when it is
   installed and turned on, and otherwise the first that is of Claude Code, Codex and the other agent CLIs:
   - Orchestration: Codex leads when Claude Code is not installed. It runs the plan's agents as processes of agent CLIs
@@ -20,11 +38,6 @@ All notable changes to this project are documented here. The format follows
     installed agent, and the Plugins page names the agent that will build the plugin.
   - Another agent CLI gets its first message typed in once it is ready for input, and never while it is still asking
     whether to trust the folder.
-
-### Fixed
-- The GitHub CLI installed with Homebrew showed as not installed in Settings → Integrations when Agentty was opened
-  from the Finder or the Dock, and cloning from GitHub and the pull requests of branches did not work. `gh` is now
-  found where the login shell and Homebrew put it.
 
 ## [0.3.3] - 2026-10-28
 

@@ -24,6 +24,19 @@ Attachments are limited to 20 files and 20 MB each.
 
 ## Then what
 
-Agentty opens an agent in that folder with the first prompt already prepared. From there it is an ordinary project: the agent plans, builds, and you watch the result in the [in-app browser](/docs/in-app-browser).
+Agentty opens an agent in that folder with the first prompt already prepared, and you watch the result take shape in the [in-app browser](/docs/in-app-browser). **How** picks who builds it:
+
+- **Agent team** (the default when Claude Code or Codex builds it and orchestration is on in Settings): the agent leads an [orchestration](/docs/session-flow). Its team goes from the idea to the code one stage at a time, each stage leaving a document in `docs/design/` for the next:
+  1. Idea analysis: the problem, the users, alternatives, risks, and the assumptions it made
+  2. Idea derivation: the value, the features ranked, and the scope of the demo
+  3. PRD: user stories with acceptance criteria, screens and flows
+  4. High-level design: stack, architecture, data model, pages
+  5. Low-level design: files, components and interfaces, and the work split into build units
+  6. Team composition: the project's harness, and one developer per build unit
+  7. Development: the foundation first, the build units side by side, then a quality check in the browser and a review against the PRD
+
+  Inside a stage several agents work side by side (users, market and feasibility in the analysis, for example); the
+  stages pass the work on in order. They show as waves on the Orchestration page.
+- **One agent**: the agent plans and builds it on its own.
 
 When it is ready to go online, [Launch](/docs/launch) publishes it.

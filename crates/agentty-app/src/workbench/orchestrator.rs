@@ -40,7 +40,7 @@ impl Profile {
     }
 
     /// The orchestrator's own model: the user's default, except when quality is asked for.
-    fn lead_model(self) -> Option<String> {
+    pub(super) fn lead_model(self) -> Option<String> {
         (self == Profile::Quality).then(|| "opus".to_string())
     }
 
@@ -248,12 +248,7 @@ impl Workbench {
         let prefs = crate::settings::settings(cx);
         let off = &prefs.orchestration_helpers_off;
         let lead = self.pick_agent(None, true, cx).and_then(crate::agents::AgentPick::first_class);
-        let helpers = HELPERS
-            .iter()
-            .filter(|h| Some(h.binary) != lead.map(Agent::id))
-            .filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary)) && prefs.agent_enabled(h.binary))
-            .map(|h| (h.binary, !off.iter().any(|o| o == h.binary)))
-            .collect();
+        let helpers = self.helpers_here(lead, cx).into_iter().map(|binary| (binary, !off.iter().any(|o| o == binary))).collect();
         let profile = prefs.orchestration_profile;
         // From the home page or the page: a tab of the workspace in front, when that is the setting.
         let place = match place {
@@ -263,6 +258,36 @@ impl Workbench {
         self.orchestrator_dialog = Some(OrchestratorDialog { goal, _goal_events: events, profile, folder, place, lead, helpers });
         self.tab_menu = None;
         cx.notify();
+    }
+
+    /// The agents besides `lead` installed and turned on here that a team can bring in (by binary).
+    fn helpers_here(&self, lead: Option<Agent>, cx: &gpui::App) -> Vec<&'static str> {
+        let prefs = crate::settings::settings(cx);
+        HELPERS
+            .iter()
+            .filter(|h| Some(h.binary) != lead.map(Agent::id))
+            .filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary)) && prefs.agent_enabled(h.binary))
+            .map(|h| h.binary)
+            .collect()
+    }
+
+    /// The helpers a team uses without a dialog: those here that the settings don't leave out.
+    pub(super) fn default_helpers(&self, lead: Agent, cx: &gpui::App) -> Vec<(&'static Helper, String)> {
+        let off = crate::settings::settings(cx).orchestration_helpers_off.clone();
+        let on = self.helpers_here(Some(lead), cx).into_iter().filter(|binary| !off.iter().any(|o| o == binary));
+        self.helper_commands(lead, on)
+    }
+
+    /// `chosen` helpers with the command that runs each (its whole path when known). A lead other
+    /// than Claude Code runs its agents with its own CLI too: that one comes first.
+    fn helper_commands(&self, lead: Agent, chosen: impl Iterator<Item = &'static str>) -> Vec<(&'static Helper, String)> {
+        let paths = self.installed.as_ref().map(|i| i.paths.clone()).unwrap_or_default();
+        let own = (lead != Agent::Claude).then_some(lead.id());
+        own.into_iter()
+            .chain(chosen)
+            .filter_map(|binary| HELPERS.iter().find(|h| h.binary == binary))
+            .map(|h| (h, paths.get(h.binary).cloned().unwrap_or_else(|| h.binary.to_string())))
+            .collect()
     }
 
     fn pick_orchestrator_folder(&mut self, cx: &mut Context<Self>) {
@@ -293,15 +318,7 @@ impl Workbench {
             return self.show_toast(t(cx, "orch.no_lead"), cx);
         };
         let (profile, folder, place) = (dialog.profile, dialog.folder.clone(), dialog.place);
-        let paths = self.installed.as_ref().map(|i| i.paths.clone()).unwrap_or_default();
-        // A lead other than Claude Code runs its agents with its own CLI too: that one comes first.
-        let own = (lead != Agent::Claude).then_some(lead.id());
-        let helpers: Vec<(&Helper, String)> = own
-            .into_iter()
-            .chain(dialog.helpers.iter().filter(|(_, on)| *on).map(|(binary, _)| *binary))
-            .filter_map(|binary| HELPERS.iter().find(|h| h.binary == binary))
-            .map(|h| (h, paths.get(h.binary).cloned().unwrap_or_else(|| h.binary.to_string())))
-            .collect();
+        let helpers = self.helper_commands(lead, dialog.helpers.iter().filter(|(_, on)| *on).map(|(binary, _)| *binary));
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.code());
         let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
         let request = PromptRequest {

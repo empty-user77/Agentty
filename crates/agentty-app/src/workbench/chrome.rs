@@ -1998,82 +1998,12 @@ impl Workbench {
         );
         // Tabs set aside for later in this workspace, right after the start page.
         tabs = tabs.children(self.render_todo_button(cx));
-        if let Some(page) = self.page {
-            // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
-            // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
-            // category they open, since they are all the same page underneath.
-            let category = self.extensions_category(cx);
-            let monitoring = || {
-                let mut tabs = vec![
-                    (Page::Browsers, None, t(cx, "page.browsers")),
-                    (Page::Usage, None, t(cx, "page.usage")),
-                    (Page::Processes, None, t(cx, "page.processes")),
-                    (Page::Worktrees, None, t(cx, "page.worktrees")),
-                    (Page::Disk, None, t(cx, "page.disk")),
-                    (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
-                    (Page::Extensions, Some("agents"), t(cx, "ext.agents")),
-                    (Page::Extensions, Some("mcp"), t(cx, "ext.mcp")),
-                ];
-                // Everything else the extensions page can show (all of them, commands, plugins,
-                // connectors) keeps one tab of its own, so no category is left unreachable.
-                if page == Page::Extensions && !matches!(category, "skills" | "agents" | "mcp") {
-                    tabs.push((Page::Extensions, Some(category), t(cx, "page.extensions")));
-                }
-                tabs
-            };
-            let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => monitoring(),
-                Page::Git => vec![(page, None, t(cx, "page.git"))],
-                Page::Flow => vec![(page, None, t(cx, "page.flow"))],
-                Page::Settings => vec![(page, None, t(cx, "page.settings"))],
-                Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
-                Page::Remote => vec![(page, None, t(cx, "page.remote"))],
-                Page::Idea => vec![(page, None, t(cx, "page.idea"))],
-                Page::Database => vec![(page, None, t(cx, "page.database"))],
-                Page::Board => vec![(page, None, t(cx, "page.board"))],
-            };
-            for (tab_page, tab_category, label) in pages {
-                let active = tab_page == page && tab_category.is_none_or(|c| c == category);
-                let key = SharedString::from(format!("page-tab-{label}"));
-                tabs = tabs.child(
-                    self.tab_card(div().id(key.clone()), key, active, &mut run, cx)
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .pl_3()
-                        .pr(if active { px(8.) } else { px(12.) })
-                        .t_body()
-                        .when(active, |d| d.text_color(hex(Chrome::BRIGHT)))
-                        .when(!active, |d| {
-                            d.text_color(hex(Chrome::MUTED)).cursor_pointer().hover(|s| s.text_color(hex(Chrome::BRIGHT))).on_click(
-                                cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
-                                    Some(category) => this.open_extensions(category, window, cx),
-                                    None => {
-                                        this.page = Some(tab_page);
-                                        cx.notify();
-                                    }
-                                }),
-                            )
-                        })
-                        .child(label.to_string())
-                        .when(active, |d| {
-                            d.child(icon_only(
-                                "page-close",
-                                "x",
-                                cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.page = None;
-                                    this.focus_active(window, cx);
-                                    cx.notify();
-                                }),
-                            ))
-                        }),
-                );
-            }
-        } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
+        // The workspace's tabs, on every screen: a click on one goes back to it from a page.
+        if let Some(ws) = self.workspaces.get(self.active_workspace) {
             // While a file is shown in the editor, its tab is the active one.
             let editing = self.editor_visible(cx);
             for (index, tab) in ws.tabs.iter().enumerate() {
-                let active = index == ws.active_tab && !editing;
+                let active = index == ws.active_tab && !editing && self.page.is_none() && !home_active;
                 let card = self.tab_card(div().id(("tab", index)), SharedString::from(format!("tab-{index}")), active, &mut run, cx);
                 let view = tab.active.read(cx);
                 let leaves = tab.root.leaves();
@@ -2191,10 +2121,82 @@ impl Workbench {
             }
         }
 
-        // Files open in the editor, after the terminals.
-        if self.page.is_none() {
-            tabs = tabs.children(self.render_file_tabs(&mut run, cx));
+        // A page open in front is a tab of its own, after the workspace's.
+        if let Some(page) = self.page {
+            // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
+            // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
+            // category they open, since they are all the same page underneath.
+            let category = self.extensions_category(cx);
+            let monitoring = || {
+                let mut tabs = vec![
+                    (Page::Browsers, None, t(cx, "page.browsers")),
+                    (Page::Usage, None, t(cx, "page.usage")),
+                    (Page::Processes, None, t(cx, "page.processes")),
+                    (Page::Worktrees, None, t(cx, "page.worktrees")),
+                    (Page::Disk, None, t(cx, "page.disk")),
+                    (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
+                    (Page::Extensions, Some("agents"), t(cx, "ext.agents")),
+                    (Page::Extensions, Some("mcp"), t(cx, "ext.mcp")),
+                ];
+                // Everything else the extensions page can show (all of them, commands, plugins,
+                // connectors) keeps one tab of its own, so no category is left unreachable.
+                if page == Page::Extensions && !matches!(category, "skills" | "agents" | "mcp") {
+                    tabs.push((Page::Extensions, Some(category), t(cx, "page.extensions")));
+                }
+                tabs
+            };
+            let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
+                Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => monitoring(),
+                Page::Git => vec![(page, None, t(cx, "page.git"))],
+                Page::Flow => vec![(page, None, t(cx, "page.flow"))],
+                Page::Settings => vec![(page, None, t(cx, "page.settings"))],
+                Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
+                Page::Remote => vec![(page, None, t(cx, "page.remote"))],
+                Page::Idea => vec![(page, None, t(cx, "page.idea"))],
+                Page::Database => vec![(page, None, t(cx, "page.database"))],
+                Page::Board => vec![(page, None, t(cx, "page.board"))],
+            };
+            for (tab_page, tab_category, label) in pages {
+                let active = tab_page == page && tab_category.is_none_or(|c| c == category);
+                let key = SharedString::from(format!("page-tab-{label}"));
+                tabs = tabs.child(
+                    self.tab_card(div().id(key.clone()), key, active, &mut run, cx)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pl_3()
+                        .pr(if active { px(8.) } else { px(12.) })
+                        .t_body()
+                        .when(active, |d| d.text_color(hex(Chrome::BRIGHT)))
+                        .when(!active, |d| {
+                            d.text_color(hex(Chrome::MUTED)).cursor_pointer().hover(|s| s.text_color(hex(Chrome::BRIGHT))).on_click(
+                                cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
+                                    Some(category) => this.open_extensions(category, window, cx),
+                                    None => {
+                                        this.page = Some(tab_page);
+                                        cx.notify();
+                                    }
+                                }),
+                            )
+                        })
+                        .child(label.to_string())
+                        .when(active, |d| {
+                            d.child(icon_only(
+                                "page-close",
+                                "x",
+                                cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.page = None;
+                                    this.focus_active(window, cx);
+                                    cx.notify();
+                                }),
+                            ))
+                        }),
+                );
+            }
         }
+
+        // Files open in the editor, after the terminals.
+        tabs = tabs.children(self.render_file_tabs(&mut run, cx));
 
         let _header_button =
             |id: &'static str, glyph: &'static str, label: String, active: bool, on_click: WindowAction, cx: &mut Context<Self>| {
