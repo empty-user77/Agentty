@@ -5,14 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-28
+
 ### Added
 - Build my idea: an agent team can build the idea. With **How → Agent team** (the default when Claude Code or Codex
   builds it), the agent leads an orchestration that goes from the idea to the code one stage at a time: idea
   analysis, idea derivation, a PRD, a high-level and a low-level design (each a document in `docs/design/`), then the
   team composed from the design's build units, and development in waves (foundation, build units side by side, a
   quality check in the browser and a review against the PRD). Inside each stage several agents work side by side.
-  The stages show on the Orchestration page; the live
-  preview and the 🚀 Launch button stay as they were. **One agent** builds it alone as before.
+  The stages show on the Orchestration page; the live preview and the 🚀 Launch button stay as they were. **One agent** builds it alone as before.
 
 ### Fixed
 - The GitHub CLI installed with Homebrew showed as not installed in Settings → Integrations when Agentty was opened
