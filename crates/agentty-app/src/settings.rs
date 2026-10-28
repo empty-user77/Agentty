@@ -456,6 +456,10 @@ pub struct Settings {
     /// A detailed card lists its agents' running subagents. On by default.
     #[serde(default = "yes")]
     pub card_subagents: bool,
+    /// A detailed card's line of what its agents do: state, agents, time, tokens and cost. On by
+    /// default.
+    #[serde(default = "yes")]
+    pub card_activity: bool,
     /// A workspace whose agent just finished jumps to the top of its group (or the ungrouped
     /// list). Off by default: a fixed order is what most people expect from a sidebar they
     /// arranged themselves, and the card already shows the result without moving.
@@ -1047,6 +1051,7 @@ impl Default for Settings {
             analytics: true,
             compact_workspaces: false,
             card_subagents: true,
+            card_activity: true,
             sort_finished_to_top: false,
             workspace_search_bar: true,
             workspace_list: WorkspaceListOptions::default(),

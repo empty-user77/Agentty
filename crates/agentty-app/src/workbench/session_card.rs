@@ -48,6 +48,11 @@ fn tokens(n: u64) -> String {
     }
 }
 
+/// "$778" for $778.92; nothing under a whole dollar.
+fn dollars(cost: f64) -> Option<String> {
+    (cost >= 1.).then(|| format!("${}", cost.floor() as u64))
+}
+
 impl Workbench {
     /// The card's agent lines, or nothing for a workspace without a running agent.
     pub(super) fn render_session_lines(
@@ -75,7 +80,13 @@ impl Workbench {
                 None => hex_alpha(color, alpha),
             }
         };
-        let muted = tone(Chrome::MUTED, 1.);
+        // The tone of the card's branch and path lines above.
+        let muted = match ink {
+            Some(ink) => hex_alpha(ink, 0.7),
+            None => hex_alpha(Chrome::MUTED, 1.),
+        };
+        let prefs = crate::settings::settings(cx);
+        let (show_activity, show_subagents) = (prefs.card_activity, prefs.card_subagents);
         let mut lines = div().pl(indent).pt_0p5().flex().flex_col().gap_0p5().t_caption();
 
         // State · how long · what it used.
@@ -114,20 +125,23 @@ impl Workbench {
             facts.push(span(now_ms.saturating_sub(since) / 1000));
         }
         if used.0 > 0 {
-            facts.push(match used.1 {
-                Some(cost) if cost >= 0.01 => format!("{} · ${cost:.2}", tf(cx, "card.tokens", &[("n", &tokens(used.0))])),
-                _ => tf(cx, "card.tokens", &[("n", &tokens(used.0))]),
+            let used_tokens = tf(cx, "card.tokens", &[("n", &tokens(used.0))]);
+            facts.push(match used.1.and_then(dollars) {
+                Some(cost) => format!("{used_tokens} · {cost}"),
+                None => used_tokens,
             });
         }
-        lines = lines.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .min_w_0()
-                .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(tone(color, 1.)))
-                .child(div().truncate().text_color(muted).child(facts.join(" · "))),
-        );
+        if show_activity {
+            lines = lines.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w_0()
+                    .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(tone(color, 1.)))
+                    .child(div().truncate().text_color(muted).child(facts.join(" · "))),
+            );
+        }
 
         // The to-do list: progress, the item in hand, and the whole list when opened.
         let plan: Vec<PlanItem> = agents.iter().map(|p| p.read(cx).plan.clone()).find(|plan| !plan.is_empty()).unwrap_or_default();
@@ -198,15 +212,21 @@ impl Workbench {
         // else as the hooks reported them.
         let mut running: Vec<(Pane, String, Option<String>, u64)> = Vec::new();
         let mut finished = 0;
-        let now_ms = crate::ui::now_ms();
-        let show_subagents = crate::settings::settings(cx).card_subagents;
+        // The agents that have subagents, for the summary's click.
+        let mut with_subagents: Vec<Pane> = Vec::new();
         for pane in agents.iter().filter(|_| show_subagents) {
             match self.subagent_rows(pane, cx) {
                 Some((rows, over)) => {
+                    if over > 0 || !rows.is_empty() {
+                        with_subagents.push(pane.clone());
+                    }
                     finished += over;
                     running.extend(rows.into_iter().map(|(name, doing, started)| (pane.clone(), name, doing, started)));
                 }
                 None => {
+                    if !pane.read(cx).subagents.is_empty() {
+                        with_subagents.push(pane.clone());
+                    }
                     for run in &pane.read(cx).subagents {
                         if run.running() {
                             let doing = run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()));
@@ -233,9 +253,13 @@ impl Workbench {
                     .min_w_0()
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.8))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.open_subagents_of(&target, window, cx);
+                    .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "collab.agents"), Some(super::chrome::PR_LINK_HINT)))
+                    // Only on ⌘-click, as the pull request line: a plain click belongs to the card.
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if crate::keymap::link_modifier(&event.modifiers()) {
+                            cx.stop_propagation();
+                            this.open_subagents_of(&target, window, cx);
+                        }
                     }))
                     .child(div().flex_shrink_0().text_color(muted).child("└"))
                     .child(crate::ui::dot_spinner(
@@ -258,7 +282,10 @@ impl Workbench {
             if finished > 0 {
                 parts.push(tf(cx, "card.subagents_done", &[("n", &finished.to_string())]));
             }
-            let target = lead.clone();
+            // The pane last picked in this workspace when it has subagents, else the first that has.
+            let picked = ws.tabs.get(ws.active_tab).map(|tab| tab.active.entity_id());
+            let target =
+                with_subagents.iter().find(|p| Some(p.entity_id()) == picked).or_else(|| with_subagents.first()).unwrap_or(&lead).clone();
             lines = lines.child(
                 div()
                     .id(("card-subagents", id as usize))
@@ -268,9 +295,13 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.8))
                     .text_color(muted)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.open_subagents_of(&target, window, cx);
+                    .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "collab.agents"), Some(super::chrome::PR_LINK_HINT)))
+                    // Only on ⌘-click, as the pull request line: a plain click belongs to the card.
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if crate::keymap::link_modifier(&event.modifiers()) {
+                            cx.stop_propagation();
+                            this.open_subagents_of(&target, window, cx);
+                        }
                     }))
                     .child(icon("bot", 10., muted))
                     .child(parts.join(" · ")),
@@ -311,5 +342,8 @@ mod tests {
         assert_eq!(tokens(812), "812");
         assert_eq!(tokens(45_210), "45.2k");
         assert_eq!(tokens(1_300_000), "1.3M");
+        assert_eq!(dollars(778.92).as_deref(), Some("$778"));
+        assert_eq!(dollars(1.0).as_deref(), Some("$1"));
+        assert_eq!(dollars(0.99), None);
     }
 }

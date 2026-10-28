@@ -202,6 +202,11 @@ impl Workbench {
                     t(cx, "workspace_options.card_subagents"),
                     toggle("wo-card-subagents", prefs.card_subagents, |s| s.card_subagents = !s.card_subagents, cx),
                 ))
+                .child(switch_row(
+                    "chart-column",
+                    t(cx, "workspace_options.card_activity"),
+                    toggle("wo-card-activity", prefs.card_activity, |s| s.card_activity = !s.card_activity, cx),
+                ))
             })
             .child(section_title(t(cx, "workspace_options.group_by")))
             .child(segmented(
