@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-28
+
 ### Changed
 - Orchestration page: an orchestration's waves come from its plan. The orchestrator hands the plan to Agentty
   (`agentty plan`), and every agent of it is on the graph from the start, each wave a column, those that have not
