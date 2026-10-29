@@ -804,6 +804,8 @@ impl Workbench {
     }
 
     pub(super) fn render_flow(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Set again by the workflow chart when it draws a running line; nothing else on the page moves.
+        self.session_board_stop_animating();
         let panes = self.agent_panes(cx);
         let mut alive: Vec<u64> = panes.iter().map(|p| p.read(cx).pane_id).collect();
         // The onboarding tour brings two example cards; they go when it moves on.

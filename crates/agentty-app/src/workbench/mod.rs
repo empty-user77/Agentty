@@ -1789,6 +1789,7 @@ impl Workbench {
         let panes: Vec<Pane> = self.workspaces[index].tabs.iter().flat_map(|t| t.root.leaves()).collect();
         // Its final state goes to the sync repository before the workspace is gone.
         self.sync_workspace_removed(id, false, cx);
+        self.forget_orchestrations_in(index, cx);
         self.workspaces[index].dormant = None;
         self.removing_workspace = Some(id);
         for pane in panes {
@@ -3265,6 +3266,8 @@ impl Workbench {
                 || self.browser_resizing
                 || self.files_resizing
                 || self.side_resizing.is_some()
+                || self.session_board.threads_drag.is_some()
+                || self.session_board.feed_drag.is_some()
                 || self.runs.log.drag.is_some()
                 || self.files_trees_drag.is_some()
                 || self.browser_net_drag.is_some()
@@ -3313,6 +3316,10 @@ impl Workbench {
             cx.notify();
         } else if self.editor_session_drag.is_some() {
             self.drag_editor_session(f32::from(event.position.x), cx);
+        } else if let Some(drag) = self.session_board.threads_drag {
+            self.drag_threads(drag, f32::from(event.position.x), cx);
+        } else if let Some(drag) = self.session_board.feed_drag {
+            self.drag_feed(drag, f32::from(event.position.y), cx);
         } else if let Some(panel) = self.side_resizing {
             let viewport = f32::from(window.viewport_size().width);
             self.drag_side_panel(panel, f32::from(event.position.x), viewport, window, cx);
@@ -3341,12 +3348,16 @@ impl Workbench {
             || self.browser_resizing
             || self.files_resizing
             || self.side_resizing.is_some()
+            || self.session_board.threads_drag.is_some()
+            || self.session_board.feed_drag.is_some()
             || self.runs.log.drag.is_some()
             || self.files_trees_drag.is_some()
             || self.browser_net_drag.is_some()
             || self.plugin_ws_drag.is_some()
             || self.editor_session_drag.is_some()
         {
+            self.session_board.threads_drag = None;
+            self.session_board.feed_drag = None;
             self.runs.log.drag = None;
             self.plugin_ws_drag = None;
             self.editor_session_drag = None;
@@ -3717,6 +3728,8 @@ impl Render for Workbench {
                         || this.browser_resizing
                         || this.files_resizing
                         || this.side_resizing.is_some()
+                        || this.session_board.threads_drag.is_some()
+                        || this.session_board.feed_drag.is_some()
                         || this.runs.log.drag.is_some()
                         || this.files_trees_drag.is_some()
                         || this.browser_net_drag.is_some()

@@ -697,22 +697,15 @@ impl Workbench {
     }
 
     pub(super) fn confirm_delete_orchestration(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(record) = self.orchestrations().iter().find(|r| r.id == id).cloned() else { return };
-        let mut choices = Vec::new();
-        if self.pane_of_record(&record, cx).is_some() || self.own_workspace_of(&record, cx).is_some() {
-            choices.push(super::ask::AskChoice {
-                label: t(cx, "orch.delete_close").into(),
-                action: super::ask::AskAction::DeleteOrchestration { id, close: true },
-                primary: false,
-                danger: true,
-            });
+        if !self.orchestrations().iter().any(|r| r.id == id) {
+            return;
         }
-        choices.push(super::ask::AskChoice {
+        let choices = vec![super::ask::AskChoice {
             label: t(cx, "orch.delete").into(),
-            action: super::ask::AskAction::DeleteOrchestration { id, close: false },
+            action: super::ask::AskAction::DeleteOrchestration(id),
             primary: true,
             danger: true,
-        });
+        }];
         self.ask(
             super::ask::Ask {
                 title: t(cx, "orch.delete_title").into(),
@@ -724,30 +717,49 @@ impl Workbench {
         );
     }
 
-    /// Takes an orchestration off the list, stopping it first if it still runs; with `close`, its
-    /// terminal closes too (its workspace, when that is all the workspace holds).
-    pub(super) fn delete_orchestration(&mut self, id: u64, close: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Takes an orchestration off the list and closes its terminal: its workspace too, when that is
+    /// all the workspace holds; a tab in another workspace closes alone.
+    pub(super) fn delete_orchestration(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(record) = self.orchestrations().iter().find(|r| r.id == id).cloned() else { return };
         let pane = self.pane_of_record(&record, cx);
         let own = self.own_workspace_of(&record, cx);
-        if matches!(record.stage, Stage::Planning | Stage::Running) && !close {
+        if matches!(record.stage, Stage::Planning | Stage::Running) && pane.is_none() && own.is_none() {
             self.stop_orchestration(id, cx);
         }
+        self.forget_orchestration(id);
+        match (own, pane) {
+            (Some(workspace), _) => self.perform_close(super::confirm::CloseTarget::Workspace(workspace), window, cx),
+            (None, Some(pane)) => self.perform_close(super::confirm::CloseTarget::Tabs(vec![pane]), window, cx),
+            (None, None) => {}
+        }
+        self.show_toast(t(cx, "orch.deleted"), cx);
+        cx.notify();
+    }
+
+    fn forget_orchestration(&mut self, id: u64) {
         self.session_board.records.retain(|r| r.id != id);
         save_records(&self.session_board.records);
         if self.session_board.selected == Some(super::session_board::Thread::Orchestration(id)) {
             self.session_board.selected = None;
         }
-        if close {
-            // Its own workspace goes with it; a tab in another workspace closes alone.
-            match (own, pane) {
-                (Some(workspace), _) => self.perform_close(super::confirm::CloseTarget::Workspace(workspace), window, cx),
-                (None, Some(pane)) => self.perform_close(super::confirm::CloseTarget::Tabs(vec![pane]), window, cx),
-                (None, None) => {}
-            }
+    }
+
+    /// A workspace removed for good takes the orchestrations led from it along: their terminals,
+    /// open or asleep, are gone with it.
+    pub(super) fn forget_orchestrations_in(&mut self, workspace: usize, cx: &gpui::App) {
+        let gone: Vec<u64> = self
+            .orchestrations()
+            .clone()
+            .iter()
+            .filter(|r| match self.pane_of_record(r, cx) {
+                Some(pane) => self.locate(&pane).is_some_and(|(w, _)| w == workspace),
+                None => !r.session.is_empty() && self.sleeping_workspace_of(r) == Some(workspace),
+            })
+            .map(|r| r.id)
+            .collect();
+        for id in gone {
+            self.forget_orchestration(id);
         }
-        self.show_toast(t(cx, "orch.deleted"), cx);
-        cx.notify();
     }
 
     /// The strip across the top of an orchestrator's pane: its stage in the page's words, the way to

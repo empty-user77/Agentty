@@ -34,8 +34,8 @@ pub enum AskAction {
     DeleteWindow(usize),
     /// Stop orchestration `0` and its whole team.
     StopOrchestration(u64),
-    /// Take orchestration `id` off the list; `close` closes its terminal too.
-    DeleteOrchestration { id: u64, close: bool },
+    /// Take orchestration `id` off the list and close its terminal (its workspace, when its own).
+    DeleteOrchestration(u64),
 }
 
 #[derive(Clone)]
@@ -110,7 +110,7 @@ impl Workbench {
             AskAction::SwitchTree { pane, tree } => self.switch_pane_to_tree(pane, tree, window, cx),
             AskAction::DeleteWindow(slot) => self.delete_window(slot, window, cx),
             AskAction::StopOrchestration(id) => self.stop_orchestration(id, cx),
-            AskAction::DeleteOrchestration { id, close } => self.delete_orchestration(id, close, window, cx),
+            AskAction::DeleteOrchestration(id) => self.delete_orchestration(id, window, cx),
         }
         cx.notify();
     }
