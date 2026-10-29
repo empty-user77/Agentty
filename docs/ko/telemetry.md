@@ -17,8 +17,13 @@ description: Agentty가 자신에 관해 무엇을 보내는지, 그리고 끄�
 | `pane_opened` | 어떤 종류의 페인인지: `shell`, `claude`, `codex`, `gemini` 등 |
 | `agent_turn_finished` | 어떤 종류의 에이전트가 턴을 마쳤는지 |
 | `feature_used` | 어떤 영역을 썼는지: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
+| `app_installed` | — (설치 후 처음 실행할 때 한 번) |
+| `page_view` | 앞에 보이는 화면: `home`, `terminals`, `flow`, `settings` 등 |
+| `campaign_details` | 설치 경로: `homebrew`, `download`, `installer`, `deb`, `rpm` |
 
 모든 이벤트에는 애플리케이션 버전, 운영체제와 그 버전, Agentty 표시 언어, 시스템 지역 설정의 국가, `~/.agentty/install_id`에 저장된 무작위 설치 식별자가 함께 담깁니다. 국가는 지역 설정에서만 읽습니다. IP 주소를 비롯해 다른 어떤 위치 정보도 쓰지 않으며, 설정값은 저장하지 않고 보낼 때마다 새로 읽습니다. 설치 식별자는 처음 쓸 때 무작위 바이트로 만들며 이용자에 관한 어떤 정보에서도 나오지 않습니다. 파일을 지우면 초기화됩니다.
+
+전송할 때마다 Google Analytics가 기기로 다루는 정보도 함께 보냅니다: 컴퓨터의 모델 식별자와 제조사(예: `Mac16,11`, `Apple`), 주 화면의 크기(포인트 단위, 예: `1728x1117`), 그리고 브라우저 자리에 Agentty와 그 버전. 이 값들만으로는 이용자나 컴퓨터를 알아볼 수 없습니다.
 
 이벤트는 로컬에 모였다가 최대 1분에 한 번 전송됩니다.
 

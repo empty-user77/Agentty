@@ -823,6 +823,8 @@ pub struct Workbench {
     webview_setup: Option<webview_setup::WebviewSetup>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
     welcome: bool,
+    /// The screen last reported as a page view.
+    screen_seen: Option<&'static str>,
     /// "Pick a pane to connect": the pane the link starts from.
     connect_pick: Option<u64>,
     plugins_page: plugins_page::PluginsPage,
@@ -1109,6 +1111,7 @@ impl Workbench {
             chats: HashMap::new(),
             clone_dialog: None,
             welcome: false,
+            screen_seen: None,
             install_hint: None,
             #[cfg(windows)]
             webview_setup: None,
@@ -3379,6 +3382,11 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.keep_orchestrations(cx);
+        let screen = self.screen_name();
+        if self.screen_seen != Some(screen) {
+            self.screen_seen = Some(screen);
+            crate::metrics::screen(cx, screen);
+        }
         self.agent_window.viewport = window.viewport_size();
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
@@ -4044,8 +4052,9 @@ impl Workbench {
         matches!(page, Page::Flow | Page::Git | Page::Board)
     }
 
-    fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
-        let feature = match page {
+    /// A page's short name, for usage statistics.
+    fn page_name(page: Page) -> &'static str {
+        match page {
             Page::Git => "agentgit",
             Page::Flow => "flow",
             Page::Usage => "usage",
@@ -4060,8 +4069,20 @@ impl Workbench {
             Page::Idea => "idea",
             Page::Database => "database",
             Page::Board => "board",
-        };
-        crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
+        }
+    }
+
+    /// The screen in front, for usage statistics: a page, the start page or the terminals.
+    fn screen_name(&self) -> &'static str {
+        match self.page {
+            Some(page) => Self::page_name(page),
+            None if self.welcome || self.workspaces.is_empty() => "home",
+            None => "terminals",
+        }
+    }
+
+    fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": Self::page_name(page) }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
         if self.page == Some(Page::Plugins) {
             // Pick up plugins copied into the folder by hand.

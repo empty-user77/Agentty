@@ -99,6 +99,67 @@ fn explorer_select_argument(path: &Path) -> String {
     format!("/select,\"{text}{}\"", "\\".repeat(trailing))
 }
 
+/// The computer's model identifier and maker for usage statistics: `Mac16,11` and `Apple` on
+/// macOS, the firmware's product name and manufacturer elsewhere (empty when unknown).
+pub fn hardware_model() -> (String, String) {
+    #[cfg(target_os = "macos")]
+    {
+        let model = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.model"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        (model, "Apple".into())
+    }
+    #[cfg(windows)]
+    {
+        let read = |name: &str| {
+            agentty_bridge::process::command("reg")
+                .args(["query", r"HKLM\HARDWARE\DESCRIPTION\System\BIOS", "/v", name])
+                .output()
+                .ok()
+                .and_then(|o| {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string();
+                    text.lines().find_map(|line| line.split("REG_SZ").nth(1).map(|v| v.trim().to_string()))
+                })
+                .unwrap_or_default()
+        };
+        (read("SystemProductName"), read("SystemManufacturer"))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let read =
+            |name: &str| std::fs::read_to_string(format!("/sys/class/dmi/id/{name}")).map(|t| t.trim().to_string()).unwrap_or_default();
+        (read("product_name"), read("sys_vendor"))
+    }
+}
+
+/// How this copy was installed, for usage statistics: `homebrew` or `download` on macOS,
+/// `installer` on Windows, `deb` or `rpm` on Linux.
+pub fn install_source() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        let brew = ["/opt/homebrew/Caskroom/agentty", "/usr/local/Caskroom/agentty"];
+        if brew.iter().any(|dir| Path::new(dir).is_dir()) {
+            "homebrew"
+        } else {
+            "download"
+        }
+    }
+    #[cfg(windows)]
+    {
+        "installer"
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        if Path::new("/var/lib/dpkg/info/agentty.list").exists() {
+            "deb"
+        } else {
+            "rpm"
+        }
+    }
+}
+
 /// Operating system and version for diagnostics, e.g. `15.6` on macOS (as before), `Windows 10.0`
 /// or `Ubuntu 24.04`.
 pub fn os_version() -> String {

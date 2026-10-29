@@ -17,8 +17,13 @@ description: Agentty が自分自身について何を送るか、そして止�
 | `pane_opened` | どの種類のペインか: `shell`、`claude`、`codex`、`gemini` など |
 | `agent_turn_finished` | どの種類のエージェントがターンを終えたか |
 | `feature_used` | どの領域を使ったか: `agentgit`、`flow`、`usage`、`settings`、`extensions`、`mini`、`browser_api` |
+| `app_installed` | —（インストール後の初回起動時に一度） |
+| `page_view` | 手前に表示されている画面: `home`、`terminals`、`flow`、`settings` など |
+| `campaign_details` | インストール方法: `homebrew`、`download`、`installer`、`deb`、`rpm` |
 
 すべてのイベントには、アプリケーションのバージョン、OS とそのバージョン、Agentty を表示している言語、システムの地域設定の国、そして `~/.agentty/install_id` に保存されたランダムなインストール識別子が付きます。国はその設定だけから読み取ります — IP アドレスをはじめ、ほかのどんな位置情報も使わず、設定は保存せず送信のたびに読み直します。この識別子は初回使用時にランダムなバイト列から作られ、利用者に関する何からも導かれず、ファイルを消せばリセットされます。
+
+送信のたびに、Google Analytics がデバイスとして扱う情報も送ります: コンピュータのモデル識別子とメーカー（例: `Mac16,11`、`Apple`）、メインディスプレイの大きさ（ポイント単位、例: `1728x1117`）、ブラウザの代わりに Agentty とそのバージョン。これらだけで利用者やコンピュータを特定することはできません。
 
 イベントはローカルにまとめられ、最大で 1 分に 1 回送られます。
 

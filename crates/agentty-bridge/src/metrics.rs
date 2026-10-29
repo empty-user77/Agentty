@@ -11,13 +11,28 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// Every event Agentty may send; anything else is dropped.
-pub const EVENTS: &[&str] = &["app_launched", "app_running", "pane_opened", "agent_turn_finished", "feature_used", "window_opened"];
+pub const EVENTS: &[&str] = &[
+    "app_launched",
+    "app_installed",
+    "app_running",
+    "pane_opened",
+    "agent_turn_finished",
+    "feature_used",
+    "window_opened",
+    "page_view",
+    "campaign_details",
+];
 
 /// Property keys allowed per event.
 fn allowed(event: &str, key: &str) -> bool {
     matches!(
         (event, key),
-        ("app_launched", "windows") | ("pane_opened", "tool") | ("agent_turn_finished", "tool") | ("feature_used", "feature")
+        ("app_launched", "windows")
+            | ("pane_opened", "tool")
+            | ("agent_turn_finished", "tool")
+            | ("feature_used", "feature")
+            | ("page_view", "page_title" | "page_location")
+            | ("campaign_details", "source" | "medium")
     )
 }
 
@@ -41,6 +56,13 @@ fn id_path() -> PathBuf {
     fsutil::data_dir().join("install_id")
 }
 
+/// Whether this run made the install id: the first launch of this install.
+pub fn first_launch() -> bool {
+    FIRST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Random per-install id (GA `client_id`), created on first use.
 pub fn install_id() -> String {
     if let Ok(id) = std::fs::read_to_string(id_path()) {
@@ -54,7 +76,9 @@ pub fn install_id() -> String {
     }
     let id = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let _ = std::fs::create_dir_all(fsutil::data_dir());
-    let _ = std::fs::write(id_path(), &id);
+    if std::fs::write(id_path(), &id).is_ok() {
+        FIRST.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     id
 }
 
@@ -76,7 +100,11 @@ pub fn event(name: &str, props: &Value, app_version: &str, os_version: &str) -> 
         let ok = allowed(name, key)
             && match value {
                 Value::Number(_) | Value::Bool(_) => true,
-                Value::String(text) => text.len() <= 32 && text.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+                // Only the page's address may hold `:` and `/`: it is built here, never from outside.
+                Value::String(text) => {
+                    let extra = if key == "page_location" { "-_.:/" } else { "-_." };
+                    text.len() <= 48 && text.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+                }
                 _ => false,
             };
         if ok {
@@ -99,6 +127,13 @@ pub fn app_running(open: std::time::Duration, app_version: &str, os_version: &st
     event
 }
 
+/// A screen of the app (`home`, `terminals`, `flow`, `settings`, …) as a GA page view, under
+/// `https://agentty.run/app/<screen>` so it never mixes with the website's pages.
+pub fn page_view(screen: &str, app_version: &str, os_version: &str) -> Option<Value> {
+    let props = json!({ "page_title": screen, "page_location": format!("https://agentty.run/app/{screen}") });
+    event("page_view", &props, app_version, os_version)
+}
+
 /// What GA shows as the device and the country. Measurement Protocol requests carry none of it on
 /// their own (GA takes it from its web tag, which Agentty doesn't run), so it is sent with each
 /// request: the platform, its version, the language Agentty is shown in and the country of the
@@ -112,12 +147,19 @@ pub struct Device {
     pub language: String,
     /// ISO 3166-1 alpha-2 from the region setting, e.g. `KR`.
     pub country: Option<String>,
+    /// The computer's model identifier and maker, e.g. `Mac16,8` and `Apple`.
+    pub model: String,
+    pub brand: String,
+    /// The main display in points, e.g. `1728x1117`.
+    pub screen_resolution: String,
+    /// Agentty's version, shown as the browser's.
+    pub app_version: String,
 }
 
-/// A short identifier GA may receive: letters, digits, `.`, `-`, `_` and spaces, at most 40.
+/// A short identifier GA may receive: letters, digits, `.`, `,`, `-`, `_` and spaces, at most 40.
 fn short(text: &str) -> Option<&str> {
     let text = text.trim();
-    (!text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || " -_.".contains(c))).then_some(text)
+    (!text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || " -_.,".contains(c))).then_some(text)
 }
 
 /// The request body for one batch.
@@ -125,16 +167,35 @@ fn request(client_id: &str, events: &[Value], device: &Device) -> Value {
     let mut body = json!({ "client_id": client_id, "events": events });
     let mut info = serde_json::Map::new();
     info.insert("category".into(), json!("desktop"));
+    info.insert("browser".into(), json!("Agentty"));
     for (key, value) in [
         ("operating_system", &device.operating_system),
         ("operating_system_version", &device.operating_system_version),
         ("language", &device.language),
+        ("model", &device.model),
+        ("brand", &device.brand),
+        ("browser_version", &device.app_version),
     ] {
         if let Some(value) = short(value) {
             info.insert(key.into(), json!(value));
         }
     }
+    let size = device.screen_resolution.split_once('x');
+    if size.is_some_and(|(w, h)| [w, h].iter().all(|n| !n.is_empty() && n.len() <= 5 && n.chars().all(|c| c.is_ascii_digit()))) {
+        info.insert("screen_resolution".into(), json!(device.screen_resolution));
+    }
+    // The same as user properties, which GA keeps per user (Admin → Custom definitions).
+    let mut user = serde_json::Map::new();
+    for key in ["operating_system", "language", "browser_version"] {
+        if let Some(value) = info.get(key) {
+            let name = if key == "browser_version" { "app_version" } else { key };
+            user.insert(name.into(), json!({ "value": value }));
+        }
+    }
     body["device"] = Value::Object(info);
+    if !user.is_empty() {
+        body["user_properties"] = Value::Object(user);
+    }
     if let Some(country) = device.country.as_deref().filter(|c| c.len() == 2 && c.chars().all(|c| c.is_ascii_uppercase())) {
         body["user_location"] = json!({ "country_id": country });
     }
@@ -197,13 +258,21 @@ mod tests {
             operating_system_version: "15.1".into(),
             language: "ko".into(),
             country: Some("KR".into()),
+            model: "Mac16,8".into(),
+            brand: "Apple".into(),
+            screen_resolution: "1728x1117".into(),
+            app_version: "0.3.5".into(),
         };
         let body = request("abc", &[json!({ "name": "app_launched" })], &device);
         assert_eq!(body["client_id"], "abc");
         assert_eq!(
             body["device"],
-            json!({ "category": "desktop", "operating_system": "macOS", "operating_system_version": "15.1", "language": "ko" })
+            json!({
+                "category": "desktop", "browser": "Agentty", "operating_system": "macOS", "operating_system_version": "15.1",
+                "language": "ko", "model": "Mac16,8", "brand": "Apple", "browser_version": "0.3.5", "screen_resolution": "1728x1117"
+            })
         );
+        assert_eq!(body["user_properties"]["app_version"], json!({ "value": "0.3.5" }));
         assert_eq!(body["user_location"], json!({ "country_id": "KR" }));
         // Anything that isn't a short identifier stays out.
         let odd = Device {
@@ -211,10 +280,23 @@ mod tests {
             operating_system_version: "/home/me/secret\n".into(),
             language: String::new(),
             country: Some("Korea".into()),
+            model: "/Users/me".into(),
+            screen_resolution: "big".into(),
+            ..Default::default()
         };
         let body = request("abc", &[], &odd);
-        assert_eq!(body["device"], json!({ "category": "desktop", "operating_system": "Windows" }));
+        assert_eq!(body["device"], json!({ "category": "desktop", "browser": "Agentty", "operating_system": "Windows" }));
         assert!(body.get("user_location").is_none());
+    }
+
+    #[test]
+    fn screens_are_page_views_on_their_own_path() {
+        let view = page_view("flow", "0.3.5", "15.1").unwrap();
+        assert_eq!(view["name"], "page_view");
+        assert_eq!(view["params"]["page_title"], "flow");
+        assert_eq!(view["params"]["page_location"], "https://agentty.run/app/flow");
+        let odd = page_view("a b", "0.3.5", "15.1").unwrap();
+        assert!(odd["params"].get("page_title").is_none());
     }
 
     #[test]
