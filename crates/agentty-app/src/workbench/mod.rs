@@ -1497,6 +1497,12 @@ impl Workbench {
     /// Files dropped at `position` (window coordinates): typed as paths into the pane under it.
     pub fn drop_files_at(&mut self, position: (f32, f32), paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let point = gpui::point(px(position.0), px(position.1));
+        // The orchestration dialog takes them as files the team works from.
+        if let Some(dialog) = &mut self.orchestrator_dialog {
+            dialog.add_files(paths);
+            cx.notify();
+            return;
+        }
         // A plugin's picture slot under the pointer takes the pictures.
         if self.drop_on_plugin(point, paths, cx) {
             return;

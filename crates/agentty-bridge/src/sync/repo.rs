@@ -105,7 +105,7 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Runs `command`, killing it after `timeout`. Returns (success, stdout, stderr).
-fn run(mut command: Command, timeout: Duration) -> Result<(bool, String, String)> {
+pub(crate) fn run(mut command: Command, timeout: Duration) -> Result<(bool, String, String)> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     // Drain both pipes on their own threads so a chatty command cannot block on a full pipe.

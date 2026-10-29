@@ -35,8 +35,9 @@ const MIN_CHART: f32 = 320.;
 /// Lowest the feed under the chart gets, and what the chart keeps at least above it.
 const MIN_FEED: f32 = 40.;
 const MIN_CHART_HEIGHT: f32 = 160.;
-/// Lines the feed keeps: as many as fit its height are shown, the newest at the bottom.
-const FEED_LINES: usize = 60;
+/// Lines the feed keeps: as many as fit its height are shown, the newest at the bottom; the wheel
+/// goes back through the rest.
+const FEED_LINES: usize = 300;
 /// A feed line and the gap under it.
 const FEED_ROW: f32 = 20.;
 /// Time between frames of the running lines' dashes (about 30 a second).
@@ -137,6 +138,10 @@ pub struct SessionBoard {
     pub threads_drag: Option<(f32, f32)>,
     /// Dragging the feed's top edge: (pointer y, its height) at the start.
     pub feed_drag: Option<(f32, f32)>,
+    /// The feed scrolled back: when its bottom line happened and which of the lines of that moment
+    /// it is (`None`: the newest, following new lines), and the wheel's movement not yet a whole line.
+    feed_anchor: Option<(u64, usize)>,
+    feed_wheel: f32,
 }
 
 impl SessionBoard {
@@ -256,6 +261,31 @@ struct Node {
 
 /// A running subagent on a workspace card: its name, what it does now, when it started (ms).
 pub type SubagentRow = (String, Option<String>, u64);
+
+/// The index of the feed's bottom line: the newest, or the line `anchor` names — when it happened
+/// and which of the lines of that moment (oldest first). 0 for an empty feed.
+fn feed_bottom(times: &[u64], anchor: Option<(u64, usize)>) -> usize {
+    let last = times.len().saturating_sub(1);
+    match anchor {
+        None => last,
+        Some((at, rank)) => {
+            let first = times.partition_point(|t| *t < at);
+            let end = times.partition_point(|t| *t <= at);
+            if first == end {
+                // That moment is gone (older lines dropped): the last line before it.
+                end.saturating_sub(1).min(last)
+            } else {
+                (first + rank).min(end - 1)
+            }
+        }
+    }
+}
+
+/// The anchor that keeps line `index` at the bottom of the feed.
+fn feed_anchor_at(times: &[u64], index: usize) -> (u64, usize) {
+    let at = times[index];
+    (at, index - times.partition_point(|t| *t < at))
+}
 
 /// One line of the feed: when, who, on which model, what it did, and where that agent is.
 type FeedLine = (u64, String, Option<String>, String, NodeState);
@@ -468,6 +498,7 @@ impl Workbench {
         if self.session_board.view_of != self.session_board.selected {
             let board = &mut self.session_board;
             (board.view_of, board.zoom, board.pan) = (board.selected, 1., point(px(0.), px(0.)));
+            (board.feed_anchor, board.feed_wheel) = (None, 0.);
         }
 
         let threads = self.render_threads(&sessions, cx);
@@ -1745,12 +1776,42 @@ impl Workbench {
                     cx.notify();
                 }),
             );
-        // Lines that do not fit go off the top: the newest stay in sight.
-        let mut lines = div().flex_1().min_h_0().overflow_hidden().px_5().pb_2().flex().flex_col().justify_end().gap_0p5();
-        // Only the lines that fit are laid out (every frame while lines move): the newest.
+        // Only the lines that fit are laid out (every frame while lines move): the newest, or those
+        // the wheel went back to — kept in place by when the bottom one happened while new lines come.
         let fit = ((height - 13.) / FEED_ROW).floor().max(1.) as usize;
-        let skip = feed.len().saturating_sub(fit);
-        for (_, name, model, words, finished) in feed.into_iter().skip(skip) {
+        let times: Vec<u64> = feed.iter().map(|line| line.0).collect();
+        let bottom = feed_bottom(&times, self.session_board.feed_anchor);
+        let skip = (bottom + 1).saturating_sub(fit);
+        let back = self.session_board.feed_anchor.is_some();
+        let mut lines = div()
+            .id("session-feed-lines")
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .px_5()
+            .pb_2()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .gap_0p5()
+            .on_scroll_wheel(cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                let dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
+                let board = &mut this.session_board;
+                board.feed_wheel += dy / FEED_ROW;
+                let rows = board.feed_wheel.trunc();
+                if rows == 0. {
+                    return;
+                }
+                board.feed_wheel -= rows;
+                let bottom = feed_bottom(&times, board.feed_anchor) as i64;
+                // Up (positive) goes back; never further than a screenful before the oldest.
+                let last = times.len() as i64 - 1;
+                let to = (bottom - rows as i64).clamp((fit as i64 - 1).min(last), last.max(0));
+                board.feed_anchor = (to < last).then(|| feed_anchor_at(&times, to as usize));
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        for (_, name, model, words, finished) in feed.into_iter().skip(skip).take(bottom + 1 - skip) {
             lines = lines.child(
                 div()
                     .flex()
@@ -1764,7 +1825,27 @@ impl Workbench {
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(format!("— {words}"))),
             );
         }
-        div().flex_shrink_0().h(px(height)).flex().flex_col().child(handle).child(lines).into_any_element()
+        // Scrolled back: a way down to the newest.
+        let newest = back.then(|| {
+            div()
+                .id("session-feed-newest")
+                .absolute()
+                .right(px(16.))
+                .bottom(px(8.))
+                .p_1()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(hex(Chrome::OVERLAY))
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .child(icon("arrow-down", 12., hex(Chrome::FOREGROUND)))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    (this.session_board.feed_anchor, this.session_board.feed_wheel) = (None, 0.);
+                    cx.notify();
+                }))
+        });
+        div().relative().flex_shrink_0().h(px(height)).flex().flex_col().child(handle).child(lines).children(newest).into_any_element()
     }
 
     /// While the feed's top edge is dragged: up makes it taller, leaving the chart above its room.
@@ -2050,5 +2131,21 @@ mod tests {
         assert_eq!(span(45), "45s");
         assert_eq!(span(3_900), "1h 05m");
         assert_eq!(first_line("\n**Done.** All 449 entries", 60), "Done. All 449 entries");
+    }
+
+    /// Scrolled back, the feed stays on the same line while newer ones come in below.
+    #[test]
+    fn the_feed_stays_where_it_was_scrolled_back_to() {
+        let times = [10, 20, 20, 20, 30, 40];
+        assert_eq!(feed_bottom(&times, None), 5);
+        // Lines of the same moment are told apart: one line back is one line back.
+        for index in 0..times.len() {
+            assert_eq!(feed_bottom(&times, Some(feed_anchor_at(&times, index))), index);
+        }
+        assert_eq!(feed_bottom(&times, Some((20, 1))), 2);
+        assert_eq!(feed_bottom(&[10, 20, 20, 20, 30, 40, 50, 60], Some((20, 1))), 2);
+        assert_eq!(feed_bottom(&times, Some((25, 0))), 3);
+        assert_eq!(feed_bottom(&times, Some((5, 0))), 0);
+        assert_eq!(feed_bottom(&[], Some((5, 0))), 0);
     }
 }

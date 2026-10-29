@@ -457,6 +457,7 @@ pub(super) fn jira_error_text(err: &anyhow::Error, cx: &gpui::App) -> String {
         E::NoEmail => t(cx, "board.jira_err_email").to_string(),
         E::NoToken => t(cx, "board.jira_err_token").to_string(),
         E::NotIssue => t(cx, "board.jira_err_issue").to_string(),
+        E::NotPage => t(cx, "board.jira_err_page").to_string(),
         E::OtherSite(site) => tf(cx, "board.jira_err_other_site", &[("site", site)]),
         E::NotFound(key) => tf(cx, "board.jira_err_not_found", &[("key", key)]),
         E::Unexpected => t(cx, "board.jira_err_unexpected").to_string(),
