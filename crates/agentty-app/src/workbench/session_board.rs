@@ -29,6 +29,20 @@ const DONE: u32 = 0x34d399;
 const NODE_W: f32 = 196.;
 const NODE_H: f32 = 100.;
 const COL_GAP: f32 = 64.;
+/// Narrowest the list left of the chart gets, and what the chart keeps at least beside it.
+const MIN_THREADS: f32 = 180.;
+const MIN_CHART: f32 = 320.;
+/// Lowest the feed under the chart gets, and what the chart keeps at least above it.
+const MIN_FEED: f32 = 40.;
+const MIN_CHART_HEIGHT: f32 = 160.;
+/// Lines the feed keeps: as many as fit its height are shown, the newest at the bottom.
+const FEED_LINES: usize = 60;
+/// A feed line and the gap under it.
+const FEED_ROW: f32 = 20.;
+/// Time between frames of the running lines' dashes (about 30 a second).
+const FRAME: Duration = Duration::from_millis(33);
+/// How often the stages are brought up to date while the window draws (each frame did it before).
+const SYNC_EVERY_MS: u64 = 250;
 const ROW_GAP: f32 = 14.;
 /// Room above the nodes for a wave's title.
 const WAVE_HEAD: f32 = 30.;
@@ -117,6 +131,12 @@ pub struct SessionBoard {
     view_of: Option<Thread>,
     /// A line on screen is running: the page is redrawn often enough for it to move smoothly.
     animating: std::cell::Cell<bool>,
+    /// When the stages were last brought up to date from a render.
+    synced_ms: u64,
+    /// Dragging the list's right edge: (pointer x, its width) at the start.
+    pub threads_drag: Option<(f32, f32)>,
+    /// Dragging the feed's top edge: (pointer y, its height) at the start.
+    pub feed_drag: Option<(f32, f32)>,
 }
 
 impl SessionBoard {
@@ -419,7 +439,6 @@ impl Workbench {
 
     /// Orchestrations and sessions on the left, the picked one's workflow on the right.
     pub(super) fn render_workflow_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        self.keep_orchestrations(cx);
         let on = crate::settings::settings(cx).orchestration;
         let sessions: Vec<Pane> = self
             .all_panes()
@@ -465,24 +484,66 @@ impl Workbench {
                 None => div().into_any_element(),
             },
             Some(Thread::Run(id)) => self.render_run_workflow(id, cx),
-            None => div()
-                .p_6()
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap_3()
-                .child(hint(t(cx, "sessions.no_agents")))
-                .child(self.render_new_orchestrator_button(cx))
-                .into_any_element(),
+            None => div().p_6().child(hint(t(cx, "sessions.no_agents"))).into_any_element(),
         };
         div()
             .size_full()
             .flex()
             .font_family(MONO)
             .child(threads)
-            .child(div().w(px(1.)).h_full().bg(hex(Chrome::BORDER)))
+            .child(self.render_threads_splitter(cx))
             .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body))
             .into_any_element()
+    }
+
+    pub(super) fn session_board_stop_animating(&self) {
+        self.session_board.animating.set(false);
+    }
+
+    fn threads_width(&self, cx: &gpui::App) -> f32 {
+        crate::settings::settings(cx).orch_threads_width.max(MIN_THREADS)
+    }
+
+    /// The handle between the list and the chart (a hairline at rest, lit while hovered or dragged).
+    fn render_threads_splitter(&self, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.session_board.threads_drag.is_some();
+        div()
+            .id("session-threads-resize")
+            .group("session-threads-resize")
+            .w(px(5.))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .justify_center()
+            .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .child(
+                div()
+                    .w(px(1.))
+                    .h_full()
+                    .bg(hex(Chrome::BORDER))
+                    .group_hover("session-threads-resize", |s| s.w(px(5.)).bg(hex(Chrome::ACCENT)))
+                    .when(active, |d| d.w(px(5.)).bg(hex(Chrome::ACCENT))),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.session_board.threads_drag = Some((f32::from(event.position.x), this.threads_width(cx)));
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// While the list's edge is dragged: its width, leaving the chart beside it its room.
+    pub(super) fn drag_threads(&mut self, (from_x, from_width): (f32, f32), pointer_x: f32, cx: &mut Context<Self>) {
+        let chart = f32::from(self.session_board.canvas.get().size.width);
+        let most = if chart > 0. { (self.threads_width(cx) + chart - MIN_CHART).max(MIN_THREADS) } else { 640. };
+        let width = (from_width + pointer_x - from_x).clamp(MIN_THREADS, most);
+        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
+            store.settings.orch_threads_width = width
+        });
+        cx.notify();
     }
 
     /// The list on the left: orchestrations (with Delete), other agent sessions, parallel runs —
@@ -518,8 +579,16 @@ impl Workbench {
         };
         let heading =
             |key: &'static str, cx: &gpui::App| div().px_2().pt_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, key));
-        let mut list =
-            div().id("session-threads").w(px(230.)).flex_shrink_0().h_full().overflow_y_scroll().p_2().flex().flex_col().gap_0p5();
+        let mut list = div()
+            .id("session-threads")
+            .w(px(self.threads_width(cx)))
+            .flex_shrink_0()
+            .h_full()
+            .overflow_y_scroll()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_0p5();
 
         if on {
             list = list.child(heading("orch.list", cx));
@@ -696,7 +765,7 @@ impl Workbench {
             )
             .child(div().px_5().pb_1().child(hint(t(cx, "orch.closed_hint"))))
             .child(self.render_waves(waves, cx))
-            .child(self.render_feed(feed))
+            .child(self.render_feed(feed, cx))
             .into_any_element()
     }
 
@@ -761,17 +830,21 @@ impl Workbench {
         }
         nodes.sort_by_key(|(at, _)| *at);
 
-        let mut feed: Vec<FeedLine> = Vec::new();
+        // The newest steps first picked, then put in words: only the lines the feed keeps.
+        let mut steps: Vec<(&SubagentFile, &Step, NodeState)> = Vec::new();
         for file in &files {
             let Some(reader) = traces.get(&file.id) else { continue };
             let state = sub_state(Some(&reader.trace), reported_stopped(&file.id), now_ms);
-            for step in reader.trace.steps.iter().rev().take(3) {
-                let name = if file.description.is_empty() { file.agent_type.clone() } else { file.description.clone() };
-                feed.push((step.start_ms, name, file.model.clone(), step_words(step), state));
-            }
+            steps.extend(reader.trace.steps.iter().rev().take(FEED_LINES).map(|step| (*file, step, state)));
         }
-        feed.sort_by_key(|(at, ..)| *at);
-        let feed = feed.into_iter().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+        steps.sort_by_key(|(_, step, _)| step.start_ms);
+        let feed = steps[steps.len().saturating_sub(FEED_LINES)..]
+            .iter()
+            .map(|(file, step, state)| {
+                let name = if file.description.is_empty() { file.agent_type.clone() } else { file.description.clone() };
+                (step.start_ms, name, file.model.clone(), step_words(step), *state)
+            })
+            .collect();
         (nodes, feed)
     }
 
@@ -1029,7 +1102,7 @@ impl Workbench {
             .children(plan_bar)
             .children(message)
             .child(self.render_waves(waves, cx))
-            .child(self.render_feed(feed))
+            .child(self.render_feed(feed, cx))
             .into_any_element()
     }
 
@@ -1119,7 +1192,7 @@ impl Workbench {
                 &[("done", &done.to_string()), ("all", &all.to_string())],
             )))
             .child(self.render_waves(vec![wave], cx))
-            .child(self.render_feed(feed))
+            .child(self.render_feed(feed, cx))
             .into_any_element()
     }
 
@@ -1138,6 +1211,18 @@ impl Workbench {
         let width = f32::from(board.canvas.get().size.width) / z;
         let grid = Grid::new(&waves.iter().map(|w| w.nodes.len()).collect::<Vec<_>>(), width);
         board.chart_size.set(grid.size());
+        // What is on screen, with a margin: a chart larger than the canvas draws only that part
+        // (before the canvas is laid out once, everything).
+        let view = board.canvas.get().size;
+        let (view_w, view_h) = (f32::from(view.width), f32::from(view.height));
+        let margin = 40.;
+        let on_screen = |left: Pixels, top: Pixels, right: Pixels, bottom: Pixels| {
+            view_w <= 0.
+                || (f32::from(right) >= -margin
+                    && f32::from(bottom) >= -margin
+                    && f32::from(left) <= view_w + margin
+                    && f32::from(top) <= view_h + margin)
+        };
         // A chart point, on the canvas.
         let at = |col: usize, row: usize| {
             let (x, y) = grid.at(col, row);
@@ -1170,7 +1255,13 @@ impl Workbench {
                         let bend = if grid.backwards(from_col) { -bend } else { bend } * 1.6;
                         [start, point(start.x + bend, start.y), point(end.x + bend, end.y), end]
                     };
-                    lines.push((curve, node.state));
+                    let xs = curve.map(|p| p.x);
+                    let ys = curve.map(|p| p.y);
+                    let min = |v: [Pixels; 4]| v.into_iter().fold(v[0], |a, b| if b < a { b } else { a });
+                    let max = |v: [Pixels; 4]| v.into_iter().fold(v[0], |a, b| if b > a { b } else { a });
+                    if on_screen(min(xs), min(ys), max(xs), max(ys)) {
+                        lines.push((curve, node.state));
+                    }
                 }
             }
         }
@@ -1253,19 +1344,20 @@ impl Workbench {
                                     };
                                     point(px(along(s.x, c1.x, c2.x, e.x)), px(along(s.y, c1.y, c2.y, e.y)))
                                 };
+                                // All of a line's dashes in one path: one tessellation and one draw.
                                 let steps = 18;
+                                let mut dashes = PathBuilder::stroke(width);
                                 for i in 0..steps {
                                     let from = (i as f32 + phase) / steps as f32;
                                     let to = (from + 0.55 / steps as f32).min(1.);
                                     if from >= 1. {
                                         continue;
                                     }
-                                    let mut dash = PathBuilder::stroke(width);
-                                    dash.move_to(curve(from));
-                                    dash.line_to(curve(to));
-                                    if let Ok(path) = dash.build() {
-                                        window.paint_path(path, hex_alpha(color, alpha));
-                                    }
+                                    dashes.move_to(curve(from));
+                                    dashes.line_to(curve(to));
+                                }
+                                if let Ok(path) = dashes.build() {
+                                    window.paint_path(path, hex_alpha(color, alpha));
                                 }
                                 // A dot on its way along the line, as work flows to the next wave.
                                 let at = curve(travel);
@@ -1291,22 +1383,27 @@ impl Workbench {
         for (col, wave) in waves.into_iter().enumerate() {
             let head = at(col, 0);
             let active = wave.nodes.iter().any(|n| n.state == NodeState::Running);
-            area = area.child(
-                div()
-                    .absolute()
-                    .left(head.x)
-                    .top(head.y - s(WAVE_HEAD + 4.))
-                    .w(s(NODE_W))
-                    .pb(s(4.))
-                    .text_size(s(Type::CAPTION))
-                    .truncate()
-                    .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }))
-                    // The wave at work is underlined, as omo marks it.
-                    .when(active, |d| d.border_b_2().border_color(hex(RUNNING)))
-                    .child(wave.title),
-            );
+            if on_screen(head.x, head.y - s(WAVE_HEAD + 4.), head.x + s(NODE_W), head.y) {
+                area = area.child(
+                    div()
+                        .absolute()
+                        .left(head.x)
+                        .top(head.y - s(WAVE_HEAD + 4.))
+                        .w(s(NODE_W))
+                        .pb(s(4.))
+                        .text_size(s(Type::CAPTION))
+                        .truncate()
+                        .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }))
+                        // The wave at work is underlined, as omo marks it.
+                        .when(active, |d| d.border_b_2().border_color(hex(RUNNING)))
+                        .child(wave.title),
+                );
+            }
             for (row, node) in wave.nodes.into_iter().enumerate() {
-                area = area.child(self.render_wave_node(node, at(col, row), z, col, row, cx));
+                let p = at(col, row);
+                if on_screen(p.x, p.y, p.x + s(NODE_W), p.y + s(NODE_H)) {
+                    area = area.child(self.render_wave_node(node, p, z, col, row, cx));
+                }
             }
         }
         area.child(self.render_board_zoom(cx)).into_any_element()
@@ -1447,7 +1544,9 @@ impl Workbench {
     /// is on screen: the strip on its pane and the page tell the same thing.
     pub(super) fn keep_orchestrations(&mut self, cx: &mut Context<Self>) {
         let on = crate::settings::settings(cx).orchestration;
-        if on {
+        let now = crate::ui::now_ms();
+        if on && now.saturating_sub(self.session_board.synced_ms) >= SYNC_EVERY_MS {
+            self.session_board.synced_ms = now;
             self.sync_orchestrations(cx);
         }
         // An agent with subagents is followed as well: its chip and its card count as its window does.
@@ -1614,12 +1713,44 @@ impl Workbench {
     }
 
     /// The latest steps, oldest first: "● name · model — what it did".
-    fn render_feed(&self, feed: Vec<FeedLine>) -> AnyElement {
+    fn render_feed(&self, feed: Vec<FeedLine>, cx: &mut Context<Self>) -> AnyElement {
         if feed.is_empty() {
             return div().into_any_element();
         }
-        let mut lines = div().flex_shrink_0().px_5().py_2().flex().flex_col().gap_0p5().border_t_1().border_color(hex(Chrome::BORDER));
-        for (_, name, model, words, finished) in feed {
+        let height = crate::settings::settings(cx).orch_feed_height.max(MIN_FEED);
+        let active = self.session_board.feed_drag.is_some();
+        // The top edge is the handle: a hairline at rest, lit while hovered or dragged.
+        let handle = div()
+            .id("session-feed-resize")
+            .group("session-feed-resize")
+            .h(px(5.))
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .cursor(gpui::CursorStyle::ResizeUpDown)
+            .child(
+                div()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(hex(Chrome::BORDER))
+                    .group_hover("session-feed-resize", |s| s.h(px(5.)).bg(hex(Chrome::ACCENT)))
+                    .when(active, |d| d.h(px(5.)).bg(hex(Chrome::ACCENT))),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.session_board.feed_drag = Some((f32::from(event.position.y), height));
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
+        // Lines that do not fit go off the top: the newest stay in sight.
+        let mut lines = div().flex_1().min_h_0().overflow_hidden().px_5().pb_2().flex().flex_col().justify_end().gap_0p5();
+        // Only the lines that fit are laid out (every frame while lines move): the newest.
+        let fit = ((height - 13.) / FEED_ROW).floor().max(1.) as usize;
+        let skip = feed.len().saturating_sub(fit);
+        for (_, name, model, words, finished) in feed.into_iter().skip(skip) {
             lines = lines.child(
                 div()
                     .flex()
@@ -1633,7 +1764,17 @@ impl Workbench {
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(format!("— {words}"))),
             );
         }
-        lines.into_any_element()
+        div().flex_shrink_0().h(px(height)).flex().flex_col().child(handle).child(lines).into_any_element()
+    }
+
+    /// While the feed's top edge is dragged: up makes it taller, leaving the chart above its room.
+    pub(super) fn drag_feed(&mut self, (from_y, from_height): (f32, f32), pointer_y: f32, cx: &mut Context<Self>) {
+        let chart = f32::from(self.session_board.canvas.get().size.height);
+        let shown = crate::settings::settings(cx).orch_feed_height.max(MIN_FEED);
+        let most = if chart > 0. { (shown + chart - MIN_CHART_HEIGHT).max(MIN_FEED) } else { 400. };
+        let height = (from_height + from_y - pointer_y).clamp(MIN_FEED, most);
+        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.orch_feed_height = height);
+        cx.notify();
     }
 
     fn board_action(
@@ -1736,9 +1877,9 @@ impl Workbench {
             if alive.is_err() {
                 break;
             }
-            // Between reads, frames for the running lines (about 30 a second), only while there are any.
+            // Between reads (about 1.2 s), frames for the running lines, only while one is on screen.
             for _ in 0..36 {
-                cx.background_executor().timer(Duration::from_millis(33)).await;
+                cx.background_executor().timer(FRAME).await;
                 let moving = this.update(cx, |this, cx| {
                     let moving = this.session_board.animating.get() && this.page == Some(super::Page::Flow);
                     if moving {

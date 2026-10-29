@@ -308,6 +308,12 @@ pub struct Settings {
     /// Width of the database panel docked right of the terminals.
     #[serde(default = "default_db_panel_width")]
     pub db_panel_width: f32,
+    /// Width of the orchestration page's list (orchestrations, sessions, runs).
+    #[serde(default = "default_orch_threads_width")]
+    pub orch_threads_width: f32,
+    /// Height of the feed under the orchestration page's chart.
+    #[serde(default = "default_orch_feed_height")]
+    pub orch_feed_height: f32,
     /// Width of the session shown beside the file editor.
     #[serde(default = "default_editor_session_width")]
     pub editor_session_width: f32,
@@ -953,6 +959,14 @@ fn yes() -> bool {
     true
 }
 
+fn default_orch_threads_width() -> f32 {
+    230.0
+}
+
+fn default_orch_feed_height() -> f32 {
+    110.0
+}
+
 fn default_db_panel_width() -> f32 {
     crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH
 }
@@ -993,6 +1007,8 @@ impl Default for Settings {
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
+            orch_threads_width: default_orch_threads_width(),
+            orch_feed_height: default_orch_feed_height(),
             editor_session_width: crate::workbench::editor_session::DEFAULT_WIDTH,
             run_configs: std::collections::BTreeMap::new(),
             run_recent: std::collections::BTreeMap::new(),
