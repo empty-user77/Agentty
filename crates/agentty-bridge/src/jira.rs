@@ -37,6 +37,8 @@ pub enum JiraError {
     NoToken,
     /// What was entered is neither an issue key (`AB-12`) nor the address of an issue's page.
     NotIssue,
+    /// The address is not of a Confluence page (`…/wiki/spaces/AB/pages/123/…`).
+    NotPage,
     /// The address is of another site than the one in the settings (the token goes to that one only).
     OtherSite(String),
     /// No such issue, or not one this account may see.
@@ -59,6 +61,7 @@ impl std::fmt::Display for JiraError {
             Self::NoEmail => f.write_str("the Jira e-mail address is missing"),
             Self::NoToken => f.write_str("no Jira API token is saved"),
             Self::NotIssue => f.write_str("not a Jira issue key or issue address"),
+            Self::NotPage => f.write_str("not the address of a Confluence page"),
             Self::OtherSite(host) => write!(f, "{host} is not the Jira site in the settings"),
             Self::NotFound(key) => write!(f, "Jira has no issue {key} this account can see"),
             Self::Unexpected => f.write_str("Jira sent something unexpected"),
@@ -184,6 +187,66 @@ fn issue_from(issue: &Value, origin: &str) -> Option<Issue> {
     })
 }
 
+/// A Confluence page of the same Atlassian site: its title, its text and its address.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    pub id: String,
+    pub title: String,
+    pub text: String,
+    pub url: String,
+}
+
+/// Whether `entered` is an address on `origin`'s host (the only one the token goes to).
+fn on_site(url: &url::Url, origin: &str) -> std::result::Result<(), JiraError> {
+    let host = url.host_str().unwrap_or_default().to_string();
+    let site = url::Url::parse(origin).ok().and_then(|o| o.host_str().map(str::to_string)).unwrap_or_default();
+    if host.eq_ignore_ascii_case(&site) {
+        Ok(())
+    } else {
+        Err(JiraError::OtherSite(host))
+    }
+}
+
+/// The page id in the address of a Confluence page on `origin`: `…/wiki/spaces/AB/pages/123/Title`
+/// or `…/wiki/pages/viewpage.action?pageId=123`.
+pub fn page_id(entered: &str, origin: &str) -> std::result::Result<String, JiraError> {
+    let url = url::Url::parse(entered.trim()).map_err(|_| JiraError::NotPage)?;
+    on_site(&url, origin)?;
+    if !url.path().starts_with("/wiki/") {
+        return Err(JiraError::NotPage);
+    }
+    let from_query = url.query_pairs().find(|(name, _)| name == "pageId").map(|(_, value)| value.to_string());
+    let from_path = url.path_segments().and_then(|mut segments| {
+        segments.by_ref().find(|segment| *segment == "pages")?;
+        segments.next().map(str::to_string)
+    });
+    from_query
+        .into_iter()
+        .chain(from_path)
+        .find(|id| !id.is_empty() && id.len() <= 20 && id.chars().all(|c| c.is_ascii_digit()))
+        .ok_or(JiraError::NotPage)
+}
+
+/// The Confluence page at `entered` on `site`, as plain text.
+pub fn fetch_page(site: &str, email: &str, entered: &str) -> Result<Page> {
+    let id = page_id(entered, &site_origin(site)?)?;
+    match get(site, email, &format!("/wiki/api/v2/pages/{id}?body-format=storage"))? {
+        (origin, Ok(value)) => Ok(page_from(&value, &origin, id)),
+        (_, Err(404)) => Err(JiraError::NotFound(id).into()),
+        (_, Err(status)) => Err(JiraError::Status(status).into()),
+    }
+}
+
+/// A page as Confluence's API v2 sends it with `body-format=storage`.
+fn page_from(value: &Value, origin: &str, id: String) -> Page {
+    Page {
+        title: value["title"].as_str().unwrap_or_default().to_string(),
+        text: crate::orch_context::html_text(value["body"]["storage"]["value"].as_str().unwrap_or_default()),
+        url: format!("{origin}/wiki/pages/viewpage.action?pageId={id}"),
+        id,
+    }
+}
+
 /// A request to the site in the settings, signed in as `email` with the token in the Keychain.
 fn get(site: &str, email: &str, path: &str) -> Result<(String, std::result::Result<Value, u16>)> {
     let origin = site_origin(site)?;
@@ -227,6 +290,43 @@ pub fn fetch_issue(site: &str, email: &str, entered: &str) -> Result<Issue> {
     }
 }
 
+/// A request to an Atlassian site without signing in: for issues and pages anyone may read. No
+/// token or e-mail address goes with it.
+fn get_public(origin: &str, path: &str) -> Result<Value> {
+    let agent = crate::http::agent_builder().redirects(0).timeout(Duration::from_secs(20)).build();
+    match agent.get(&format!("{origin}{path}")).set("Accept", "application/json").set("User-Agent", "Agentty").call() {
+        Ok(response) => Ok(response.into_json().map_err(|_| JiraError::Unexpected)?),
+        Err(ureq::Error::Status(401 | 403 | 404, _)) => Err(JiraError::Refused.into()),
+        Err(ureq::Error::Status(status, _)) => Err(JiraError::Status(status).into()),
+        Err(_) => Err(JiraError::Unreachable(origin.to_string()).into()),
+    }
+}
+
+/// The https origin of the Atlassian address `entered`.
+fn origin_of(entered: &str) -> Result<String> {
+    let url = url::Url::parse(entered.trim()).map_err(|_| JiraError::NotWebAddress)?;
+    if url.scheme() != "https" {
+        return Err(JiraError::NotHttps.into());
+    }
+    site_origin(url.host_str().ok_or(JiraError::NoHost)?)
+}
+
+/// The issue at the address `entered`, read without signing in (a site that lets anyone read it).
+pub fn fetch_public_issue(entered: &str) -> Result<Issue> {
+    let origin = origin_of(entered)?;
+    let key = issue_key(entered, &origin)?;
+    let value = get_public(&origin, &format!("/rest/api/3/issue/{key}?fields=summary,description,status"))?;
+    Ok(issue_from(&value, &origin).ok_or(JiraError::Unexpected)?)
+}
+
+/// The Confluence page at the address `entered`, read without signing in.
+pub fn fetch_public_page(entered: &str) -> Result<Page> {
+    let origin = origin_of(entered)?;
+    let id = page_id(entered, &origin)?;
+    let value = get_public(&origin, &format!("/wiki/api/v2/pages/{id}?body-format=storage"))?;
+    Ok(page_from(&value, &origin, id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +366,17 @@ mod tests {
         assert_eq!((issue.key.as_str(), issue.status.as_str()), ("AB-1", "To Do"));
         assert_eq!(issue.url, "https://team.atlassian.net/browse/AB-1");
         assert!(issue_from(&json!({ "fields": {} }), "https://team.atlassian.net").is_none());
+    }
+
+    #[test]
+    fn confluence_addresses_name_a_page_of_the_same_site() {
+        let site = "https://team.atlassian.net";
+        assert_eq!(page_id("https://team.atlassian.net/wiki/spaces/ENG/pages/123456/Release+plan", site).unwrap(), "123456");
+        assert_eq!(page_id("https://team.atlassian.net/wiki/pages/viewpage.action?pageId=987", site).unwrap(), "987");
+        assert_eq!(page_id("https://team.atlassian.net/wiki/spaces/ENG/overview", site), Err(JiraError::NotPage));
+        assert_eq!(page_id("https://team.atlassian.net/browse/AB-1", site), Err(JiraError::NotPage));
+        assert_eq!(page_id("https://team.atlassian.net/wiki/spaces/ENG/pages/12;rm/x", site), Err(JiraError::NotPage));
+        assert_eq!(page_id("https://evil.example/wiki/spaces/ENG/pages/1/x", site), Err(JiraError::OtherSite("evil.example".into())));
     }
 
     #[test]

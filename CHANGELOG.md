@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Orchestrations start from more than a sentence. Links in the goal are read before planning: Jira issues and
+  Confluence pages through the Jira connection in the settings (or without it on a site anyone may read), GitHub files, issues, pull requests and repositories
+  through `gh`, and any other web page. Public Google Docs, Sheets and Slides are read through their export, and a web page comes with its original HTML and a screenshot. Files can be attached or dropped on the dialog: PDFs and pictures as they are, Word, Excel, PowerPoint, OpenDocument and RTF files with a text copy. The orchestrator reads all of
+  it first, refines it into work items and plans from them. Each link shows under the goal as it will be read.
+
+### Changed
+- The orchestration dialog no longer lists example goals. Every installed agent, Claude Code included, can be
+  switched off for a team: Claude Code leads when it is on, else Codex. The model choice applies to every agent on
+  the team and shows what it means for each one switched on. A new orchestration starts in the project in
+  front, else the folder the last one used, else `~/AgenttyWorkspace/orchestration`.
+
+### Fixed
+- The step feed under the orchestration graph could not be scrolled, so earlier steps were out of reach. It scrolls
+  back now, stays put while new steps arrive, and an arrow returns to the newest.
+
 ## [0.3.5] - 2026-10-29
 
 ### Changed

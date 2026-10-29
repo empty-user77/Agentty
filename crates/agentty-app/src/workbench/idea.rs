@@ -107,7 +107,7 @@ impl Workbench {
                         let helpers = this.default_helpers(lead, cx);
                         let goal = agentty_bridge::idea::team_goal(&project.title);
                         // The owner handed over the idea: the team starts without waiting for a yes.
-                        request.text = super::orchestrator::prompt(&goal, lead, profile, &helpers, false, language);
+                        request.text = super::orchestrator::prompt(&goal, lead, profile, &helpers, false, None, language);
                         request.model = profile.lead_model().filter(|_| lead == Agent::Claude);
                     }
                     match this.deliver_prompt(request, window, cx) {

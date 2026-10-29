@@ -418,6 +418,8 @@ pub struct Settings {
     pub orchestration_profile: OrchestrationProfile,
     /// Other agents (by command) a new orchestration leaves out unless switched on in its dialog.
     pub orchestration_helpers_off: Vec<String>,
+    /// The folder the last orchestration started in: the next one's default (when it still exists).
+    pub orchestration_folder: Option<PathBuf>,
     /// The orchestrator shows its plan and waits for the go; off, it starts right after showing it.
     pub orchestration_confirm_plan: bool,
     /// New orchestrations (from the home page or the Orchestration page) open as a tab of the
@@ -1051,6 +1053,7 @@ impl Default for Settings {
             orchestration: true,
             orchestration_profile: OrchestrationProfile::default(),
             orchestration_helpers_off: Vec::new(),
+            orchestration_folder: None,
             orchestration_confirm_plan: true,
             orchestration_in_tab: false,
             agent_guide: true,
