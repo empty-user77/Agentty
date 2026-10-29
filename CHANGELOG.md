@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-29
+
+### Changed
+- Orchestration page: large workflows no longer stutter while their agents run. The graph draws only what is in view
+  and redraws only while a moving line is on screen; the animation looks the same.
+- Orchestration page: the list on the left and the step feed under the graph can be resized by dragging their edge,
+  and keep their size.
+- Deleting an orchestration closes its terminal too, with its workspace when that holds nothing else, and deleting
+  that workspace deletes the orchestration. Before, one of the two was left behind.
+
+### Fixed
+- The **New orchestration** button in the middle of an empty Orchestration page did nothing. It is gone; the one at
+  the top right stays.
+
 ## [0.3.4] - 2026-10-28
 
 ### Added

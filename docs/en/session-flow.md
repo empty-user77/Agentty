@@ -24,7 +24,7 @@ A new workspace goes in the **Orchestration** group, made the first time; move i
 
 The orchestrator's pane has a strip across its top with the same words as this page: planning, the plan ready (with **Start**), running with how many agents are at work and how many are done, done, interrupted or stopped. **Open workflow** comes here; the sidebar and the menu bar mark its workspace with the orchestration icon, in the colour of its stage.
 
-Orchestrations are kept across restarts. If Agentty quits (or crashes) while one runs, its agents stop with it: the strip and this page say **Interrupted**, and **Resume** opens the session again if needed and has the orchestrator check what is already done and run only what is left. **Stop all** (after a confirmation) ends the orchestrator's turn and every agent still running; **Resume** carries on later. **Delete** takes an orchestration off the list (stopping it first if it runs), and can close its terminal too; the files it made stay.
+Orchestrations are kept across restarts. If Agentty quits (or crashes) while one runs, its agents stop with it: the strip and this page say **Interrupted**, and **Resume** opens the session again if needed and has the orchestrator check what is already done and run only what is left. **Stop all** (after a confirmation) ends the orchestrator's turn and every agent still running; **Resume** carries on later. **Delete** takes an orchestration off the list and closes its terminal, with its workspace when that holds nothing else; the files it made stay. Deleting that workspace deletes the orchestration too.
 
 Its settings are under **Settings → AI → Orchestration**: on or off, the models a new one starts with, the other AI agents it uses by default, whether the plan waits for **Start**, and whether a new one opens as a workspace or a tab.
 
@@ -35,7 +35,7 @@ On the left are the threads: every agent session running in Agentty, with a dot 
 - At the top, what you last asked it (`$ …`) and the session's name.
 - The orchestrator's line: the main agent's state, how many waves, how many subagents are done, and how many models are at work. **Open** goes to its pane, **Message** sends it a line as if typed there, and **Interrupt** stops its current turn (as Esc does in its pane).
 - The graph: the orchestrator first, then its subagents in waves, each wave a column. An orchestration's waves come from its plan: every agent of it is on the graph from the moment the plan is ready, those that have not started as pending, with lines from the agents each one waits for, so you see the work pass from wave to wave. For another session, subagents that ran at the same time form a wave. The wave at work is underlined. Each card says whether it is running, completed or pending and for how long, what kind of agent it is and on which model, and its current step or its last word. Lines into a running wave move. Click a card to open that subagent's log.
-- At the bottom, the latest steps of its subagents as they happen.
+- At the bottom, the latest steps of its subagents as they happen. Drag its top edge to make it taller or shorter; the list on the left is made wider or narrower by its right edge.
 
 A parallel run shows its tasks as one wave, each with its branch (or folder) and its pane's state; click one to go to its pane.
 
