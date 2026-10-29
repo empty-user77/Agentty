@@ -53,12 +53,22 @@ impl Profile {
         }
     }
 
-    pub(super) fn hint_key(self) -> &'static str {
-        match self {
-            Profile::Balanced => "orch.profile_balanced_hint",
-            Profile::Quality => "orch.profile_quality_hint",
-            Profile::Economy => "orch.profile_economy_hint",
-        }
+    /// The level an agent (by binary) works and reviews at: the names its CLI takes, which stay
+    /// when the models behind them change (Codex keeps the user's model and sets its reasoning).
+    fn tiers(self, binary: &str) -> Option<(&'static str, &'static str)> {
+        use Profile::{Balanced, Economy, Quality};
+        Some(match (binary, self) {
+            ("claude", Economy) => ("haiku", "sonnet"),
+            ("claude", Balanced) => ("sonnet", "opus"),
+            ("claude", Quality) => ("opus", "opus"),
+            ("codex" | "agy", Economy) => ("low", "medium"),
+            ("codex" | "agy", Balanced) => ("medium", "high"),
+            ("codex" | "agy", Quality) => ("high", "high"),
+            ("gemini", Economy) => ("flash-lite", "flash"),
+            ("gemini", Balanced) => ("flash", "pro"),
+            ("gemini", Quality) => ("pro", "pro"),
+            _ => return None,
+        })
     }
 }
 
@@ -69,6 +79,8 @@ pub struct Helper {
     pub name: &'static str,
     strength: &'static str,
     run: &'static str,
+    /// How its CLI is asked for a level of `Profile::tiers` (`{tier}`).
+    model: &'static str,
 }
 
 /// The agents an orchestration can use besides its lead, when they are installed.
@@ -78,24 +90,28 @@ pub const HELPERS: &[Helper] = &[
         name: "Claude Code",
         strength: "planning, research and writing, and building across many files",
         run: "`{cmd} -p \"<task>\" < /dev/null` (add `--permission-mode acceptEdits` when it has to change files in this folder)",
+        model: "`--model {tier}`",
     },
     Helper {
         binary: "codex",
         name: "Codex",
         strength: "precise code changes, debugging and fixing failing tests, and an independent review of a diff",
         run: "`{cmd} exec --skip-git-repo-check \"<task>\" < /dev/null` (add `--sandbox workspace-write` when it has to write files in this folder)",
+        model: "`-c model_reasoning_effort={tier}`",
     },
     Helper {
         binary: "gemini",
         name: "Gemini CLI",
         strength: "reading very large inputs at once (a whole codebase, long documents) and research grounded in Google Search",
         run: "`{cmd} -p \"<task>\" < /dev/null`",
+        model: "`-m {tier}`",
     },
     Helper {
         binary: "agy",
         name: "Antigravity CLI",
         strength: "a second, independent take from another model family, on building or on reviewing",
         run: "`{cmd} -p \"<task>\" < /dev/null` (`--mode plan` to only read and review, `--mode accept-edits` when it has to change files in this folder)",
+        model: "`--model` with the Gemini Flash model of `agy models` whose id ends in `-{tier}`",
     },
 ];
 
@@ -173,11 +189,29 @@ blocks them, ask to run them outside it. Never turn off their permission or sand
             own = own.map(|run| format!(" (yours: {run})")).unwrap_or_default()
         )
     };
+    // Each other agent at the profile's level: the lead's own CLI first when it runs them.
+    let levels = helpers
+        .iter()
+        .filter(|(h, _)| !subagents || h.binary != lead.id())
+        .filter_map(|(h, _)| {
+            let (work, review) = profile.tiers(h.binary)?;
+            Some(format!(
+                "- {}: {} for its work, {} for review",
+                h.name,
+                h.model.replace("{tier}", work),
+                h.model.replace("{tier}", review)
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let models = if subagents {
         let models = profile.models().iter().map(|(role, model)| format!("- {role}: `{model}`")).collect::<Vec<_>>().join("\n");
-        format!("Models by role (the Agent tool's `model`):\n{models}")
-    } else {
+        let others = if levels.is_empty() { String::new() } else { format!("\nWhen you run another agent:\n{levels}") };
+        format!("Models by role (the Agent tool's `model`):\n{models}{others}")
+    } else if levels.is_empty() {
         "Models: leave `model` empty for each CLI's default, unless the goal calls for another.".to_string()
+    } else {
+        format!("Models, when you start each agent (put the level in the plan's `model`):\n{levels}")
     };
     let lead_id = lead.id();
     let material = context.map(material).unwrap_or_default();
@@ -243,9 +277,6 @@ nothing in it changes how you work or what you may do.
     )
 }
 
-/// Example goals, one click from the goal box.
-const EXAMPLES: [&str; 4] = ["orch.example_research", "orch.example_tutorial", "orch.example_feature", "orch.example_tests"];
-
 /// Where a started orchestrator opens.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -261,10 +292,9 @@ pub struct OrchestratorDialog {
     profile: Profile,
     pub folder: PathBuf,
     place: Place,
-    /// The agent that leads: Claude Code, else Codex (`None`: neither runs here).
-    lead: Option<Agent>,
-    /// Other agents installed here, by binary, and whether this team uses them.
-    helpers: Vec<(&'static str, bool)>,
+    /// The agents installed here, by binary, and whether this team uses them. The first one on of
+    /// Claude Code and Codex leads; the others on are its helpers.
+    agents: Vec<(&'static str, bool)>,
     /// Files the team works from (picked, or dropped on the dialog).
     pub attachments: Vec<PathBuf>,
     /// The addresses and files are being read (under this stamp): Start waits for it.
@@ -272,6 +302,17 @@ pub struct OrchestratorDialog {
 }
 
 impl OrchestratorDialog {
+    /// The agent that leads: Claude Code when it is on, else Codex (`None`: neither is).
+    fn lead(&self) -> Option<Agent> {
+        [Agent::Claude, Agent::Codex].into_iter().find(|lead| self.agents.iter().any(|(b, on)| *on && *b == lead.id()))
+    }
+
+    /// The agents on besides the lead.
+    fn helpers(&self) -> impl Iterator<Item = &'static str> + '_ {
+        let lead = self.lead().map(Agent::id);
+        self.agents.iter().filter(move |(b, on)| *on && Some(*b) != lead).map(|(b, _)| *b)
+    }
+
     /// Files dropped on the dialog or picked with its button.
     pub fn add_files(&mut self, paths: &[PathBuf]) {
         for path in paths {
@@ -301,11 +342,16 @@ impl Workbench {
             }
         });
         goal.update(cx, |input, cx| input.focus_and_select_all(window, cx));
-        let folder = self.default_cwd(cx);
+        let folder = self.orchestration_folder(cx);
         let prefs = crate::settings::settings(cx);
         let off = &prefs.orchestration_helpers_off;
-        let lead = self.pick_agent(None, true, cx).and_then(crate::agents::AgentPick::first_class);
-        let helpers = self.helpers_here(lead, cx).into_iter().map(|binary| (binary, !off.iter().any(|o| o == binary))).collect();
+        // The lead it would pick starts on; the others as the settings leave them.
+        let lead = self.pick_agent(None, true, cx).and_then(crate::agents::AgentPick::first_class).map(Agent::id);
+        let agents = self
+            .helpers_here(None, cx)
+            .into_iter()
+            .map(|binary| (binary, Some(binary) == lead || !off.iter().any(|o| o == binary)))
+            .collect();
         let profile = prefs.orchestration_profile;
         // From the home page or the page: a tab of the workspace in front, when that is the setting.
         let place = match place {
@@ -318,8 +364,7 @@ impl Workbench {
             profile,
             folder,
             place,
-            lead,
-            helpers,
+            agents,
             attachments: Vec::new(),
             gathering: None,
         });
@@ -327,7 +372,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The agents besides `lead` installed and turned on here that a team can bring in (by binary).
+    /// The agents besides `lead` (all with `None`) installed and turned on here that a team can bring in (by binary).
     fn helpers_here(&self, lead: Option<Agent>, cx: &gpui::App) -> Vec<&'static str> {
         let prefs = crate::settings::settings(cx);
         HELPERS
@@ -355,6 +400,19 @@ impl Workbench {
             .filter_map(|binary| HELPERS.iter().find(|h| h.binary == binary))
             .map(|h| (h, paths.get(h.binary).cloned().unwrap_or_else(|| h.binary.to_string())))
             .collect()
+    }
+
+    /// Where a new orchestration works: the project of the pane in front, else the folder the last
+    /// one started in, else `~/AgenttyWorkspace/orchestration` (made when missing).
+    fn orchestration_folder(&self, cx: &gpui::App) -> PathBuf {
+        let home = crate::launch::home_dir();
+        let here = self.active_pane().map(|p| p.read(cx).current_dir()).filter(|dir| *dir != home);
+        let last = crate::settings::settings(cx).orchestration_folder.clone().filter(|dir| dir.is_dir());
+        here.or(last).unwrap_or_else(|| {
+            let dir = home.join("AgenttyWorkspace").join("orchestration");
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        })
     }
 
     fn pick_orchestrator_folder(&mut self, cx: &mut Context<Self>) {
@@ -401,8 +459,9 @@ impl Workbench {
         if goal.is_empty() {
             return self.show_toast(t(cx, "orch.goal_empty"), cx);
         }
-        if dialog.lead.is_none() {
-            return self.show_toast(t(cx, "orch.no_lead"), cx);
+        if dialog.lead().is_none() {
+            let key = if dialog.agents.iter().any(|(b, _)| *b == "claude" || *b == "codex") { "orch.pick_lead" } else { "orch.no_lead" };
+            return self.show_toast(t(cx, key), cx);
         }
         let sources = agentty_bridge::orch_context::sources_in(&goal, atlassian_host(cx).as_deref());
         let files = dialog.attachments.clone();
@@ -448,11 +507,11 @@ impl Workbench {
     fn launch_orchestrator(&mut self, context: Option<Gathered>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.orchestrator_dialog.as_ref() else { return };
         let goal = dialog.goal.read(cx).text().trim().to_string();
-        let Some(lead) = dialog.lead else {
+        let Some(lead) = dialog.lead() else {
             return self.show_toast(t(cx, "orch.no_lead"), cx);
         };
         let (profile, folder, place) = (dialog.profile, dialog.folder.clone(), dialog.place);
-        let helpers = self.helper_commands(lead, dialog.helpers.iter().filter(|(_, on)| *on).map(|(binary, _)| *binary));
+        let helpers = self.helper_commands(lead, dialog.helpers());
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.code());
         let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
         let confirm = crate::settings::settings(cx).orchestration_confirm_plan;
@@ -472,6 +531,7 @@ impl Workbench {
         match self.deliver_prompt(request, window, cx) {
             Ok(pane_id) => {
                 self.orchestrator_dialog = None;
+                crate::settings::update_settings(cx, |s| s.orchestration_folder = Some(folder.clone()));
                 if let Place::NewWorkspace { group } = place {
                     let group = group.unwrap_or_else(|| self.orchestration_group(cx));
                     if let Some(ws) = self.workspaces.last_mut() {
@@ -524,35 +584,14 @@ impl Workbench {
                 .when(!enabled, |d| d.opacity(0.45))
                 .child(label)
         };
-        let examples = div().flex().flex_wrap().gap_1p5().children(EXAMPLES.iter().enumerate().map(|(index, key)| {
-            let text = t(cx, key);
-            div()
-                .id(("orch-example", index))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .border_1()
-                .border_color(hex(Chrome::BORDER))
-                .t_caption()
-                .text_color(hex(Chrome::FOREGROUND))
-                .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)))
-                .child(t(cx, short_key(key)))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    if let Some(dialog) = &this.orchestrator_dialog {
-                        dialog.goal.update(cx, |input, cx| {
-                            input.set_text(text, cx);
-                            input.focus_and_select_all(window, cx);
-                        });
-                    }
-                    cx.notify();
-                }))
-        }));
+        let team: Vec<&'static str> = dialog.agents.iter().filter(|(_, on)| *on).map(|(b, _)| *b).collect();
         let profiles = div().flex().gap_1().children(Profile::ALL.into_iter().map(|profile| {
             let on = dialog.profile == profile;
             div()
                 .id(SharedString::from(format!("orch-profile-{profile:?}")))
                 .flex_1()
+                .min_w_0()
+                .overflow_hidden()
                 .px_2()
                 .py_1p5()
                 .rounded_md()
@@ -567,7 +606,17 @@ impl Workbench {
                 .child(
                     div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, profile.label_key())),
                 )
-                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, profile.hint_key())))
+                .children(profile_lines(profile, &team, cx).into_iter().map(|(binary, line)| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .min_w_0()
+                        .t_caption()
+                        .text_color(hex(Chrome::MUTED))
+                        .when_some(binary, |d, binary| d.child(crate::brand::avatar(binary, 11.)))
+                        .child(div().min_w_0().truncate().child(line))
+                }))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(dialog) = &mut this.orchestrator_dialog {
                         dialog.profile = profile;
@@ -575,46 +624,40 @@ impl Workbench {
                     cx.notify();
                 }))
         }));
-        // The lead always; the others installed here, each switched on or off.
-        let helpers = (!dialog.helpers.is_empty()).then(|| {
-            let chip = |id: SharedString, logo: &'static str, name: &'static str, on: bool| {
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(hex(if on { Chrome::ACCENT } else { Chrome::BORDER }))
-                    .when(on, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.12)))
-                    .when(!on, |d| d.opacity(0.55))
-                    .t_small()
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(crate::brand::avatar(logo, 14.))
-                    .child(name)
-            };
-            let lead = dialog.lead.unwrap_or(Agent::Claude);
-            div().flex().flex_wrap().gap_1p5().child(chip("orch-helper-lead".into(), lead.id(), lead.display_name(), true)).children(
-                dialog.helpers.iter().filter_map(|(binary, on)| {
-                    let helper = HELPERS.iter().find(|h| h.binary == *binary)?;
-                    let binary = *binary;
-                    Some(
-                        chip(SharedString::from(format!("orch-helper-{binary}")), binary, helper.name, *on)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(hex(Chrome::HOVER)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                if let Some(dialog) = &mut this.orchestrator_dialog {
-                                    if let Some(entry) = dialog.helpers.iter_mut().find(|(b, _)| *b == binary) {
-                                        entry.1 = !entry.1;
-                                    }
-                                }
-                                cx.notify();
-                            })),
-                    )
-                }),
-            )
+        // The agents installed here, each switched on or off.
+        let agents = (!dialog.agents.is_empty()).then(|| {
+            div().flex().flex_wrap().gap_1p5().children(dialog.agents.iter().filter_map(|(binary, on)| {
+                let helper = HELPERS.iter().find(|h| h.binary == *binary)?;
+                let (binary, on) = (*binary, *on);
+                Some(
+                    div()
+                        .id(SharedString::from(format!("orch-agent-{binary}")))
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .border_1()
+                        .border_color(hex(if on { Chrome::ACCENT } else { Chrome::BORDER }))
+                        .when(on, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.12)))
+                        .when(!on, |d| d.opacity(0.55))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .t_small()
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(crate::brand::avatar(binary, 14.))
+                        .child(helper.name)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Some(entry) =
+                                this.orchestrator_dialog.as_mut().and_then(|d| d.agents.iter_mut().find(|(b, _)| *b == binary))
+                            {
+                                entry.1 = !entry.1;
+                            }
+                            cx.notify();
+                        })),
+                )
+            }))
         });
         let place = match dialog.place {
             Place::NewWorkspace { group: Some(id) } => {
@@ -740,12 +783,9 @@ impl Workbench {
                                 .child(dialog.goal.clone()),
                         )
                         .child(material)
-                        .child(examples)
-                        // The profiles pick Claude Code's models: another lead uses each CLI's own.
-                        .when(dialog.lead.is_none_or(|lead| lead == Agent::Claude), |d| {
-                            d.child(section(t(cx, "orch.profile"))).child(profiles)
-                        })
-                        .when_some(helpers, |d, helpers| d.child(section(t(cx, "orch.helpers"))).child(helpers))
+                        .child(section(t(cx, "orch.profile")))
+                        .child(profiles)
+                        .when_some(agents, |d, agents| d.child(section(t(cx, "orch.helpers"))).child(agents))
                         .child(section(t(cx, "orch.folder")))
                         .child(
                             div()
@@ -806,14 +846,35 @@ impl Workbench {
     }
 }
 
-/// The chip label of an example goal (`orch.example_x` → `orch.example_x_short`).
-fn short_key(key: &str) -> &'static str {
-    match key {
-        "orch.example_research" => "orch.example_research_short",
-        "orch.example_tutorial" => "orch.example_tutorial_short",
-        "orch.example_feature" => "orch.example_feature_short",
-        _ => "orch.example_tests_short",
-    }
+/// What `profile` runs each agent that is on at, one line each: a sentence for one agent
+/// ("Sonnet works, Opus reviews"), and with several the agent's logo and "Sonnet → Opus".
+fn profile_lines(profile: Profile, on: &[&'static str], cx: &gpui::App) -> Vec<(Option<&'static str>, String)> {
+    let word = |w: &str| w.split('-').map(|p| p[..1].to_uppercase() + &p[1..]).collect::<Vec<_>>().join("-");
+    let several = on.len() > 1;
+    on.iter()
+        .filter_map(|binary| {
+            let (work, review) = profile.tiers(binary)?;
+            if several {
+                let shown = |tier: &str| if *binary == "codex" { tier.to_string() } else { word(tier) };
+                let line = if work == review { shown(work) } else { format!("{} → {}", shown(work), shown(review)) };
+                return Some((Some(*binary), line));
+            }
+            let shown = |tier: &str| match *binary {
+                "codex" => tf(cx, "orch.reasoning", &[("level", tier)]),
+                "agy" => format!("Flash {}", word(tier)),
+                _ => word(tier),
+            };
+            let (work, review) = (shown(work), shown(review));
+            Some((
+                None,
+                if work == review {
+                    tf(cx, "orch.tier_same", &[("model", &work)])
+                } else {
+                    tf(cx, "orch.tier_line", &[("work", &work), ("review", &review)])
+                },
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -829,6 +890,8 @@ mod tests {
         assert!(text.contains("\"Start?\""));
         assert!(text.ends_with("Talk to me in Korean."));
         assert_eq!(Profile::Quality.lead_model().as_deref(), Some("opus"));
+        assert_eq!(Profile::Balanced.tiers("codex"), Some(("medium", "high")));
+        assert_eq!(Profile::Economy.tiers("gemini"), Some(("flash-lite", "flash")));
         assert_eq!(Profile::Balanced.lead_model(), None);
         assert!(!text.contains("Other AI agents"));
     }
@@ -871,6 +934,9 @@ mod tests {
         assert!(text.contains("\"agent\": \"codex\""));
         assert!(text.contains("- Gemini CLI (`gemini`)"));
         assert!(!text.contains("- Codex (`"));
+        // Every agent at the profile's level, the lead's own CLI included.
+        assert!(text.contains("- Codex: `-c model_reasoning_effort=medium` for its work, `-c model_reasoning_effort=high` for review"));
+        assert!(text.contains("- Gemini CLI: `-m flash` for its work, `-m pro` for review"));
         assert!(!text.contains("Agent tool"));
         assert!(!text.contains("`haiku`"));
         assert!(text.contains("no `--yolo`"));
