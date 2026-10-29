@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-30
+
 ### Added
 - Orchestrations start from more than a sentence. Links in the goal are read before planning: Jira issues and
   Confluence pages through the Jira connection in the settings (or without it on a site anyone may read), GitHub files, issues, pull requests and repositories
