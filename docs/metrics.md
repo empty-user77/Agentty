@@ -29,6 +29,9 @@ use GA's **Realtime** report or **DebugView**.
 | `pane_opened` | `tool`: `shell`, `claude`, `codex`, `gemini`, `agy`, … or `command` |
 | `agent_turn_finished` | `tool` |
 | `feature_used` | `feature`: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
+| `app_installed` | — (once, the launch that created `install_id`) |
+| `page_view` | `page_title`: the screen in front (`home`, `terminals`, a page's name); `page_location`: `https://agentty.run/app/<screen>` |
+| `campaign_details` | `source`: `homebrew`, `download`, `installer`, `deb` or `rpm`; `medium`: `app` (GA's first user / session source) |
 
 Every event also carries `app_version`, `os_version`, a `session_id` (the launch time, one per run
 of the app) and a random install ID (`client_id`, stored in `~/.agentty/install_id`). Each request also describes the device, since Measurement Protocol
@@ -40,6 +43,10 @@ requests have no device or location of their own:
 | `device.operating_system` | `macOS`, `Windows` or `Linux` |
 | `device.operating_system_version` | e.g. `15.1`, `10.0.26100`, `Ubuntu 24.04` |
 | `device.language` | the language Agentty is shown in: `en`, `ko`, `ja` or `zh` |
+| `device.model`, `device.brand` | the computer's model identifier and maker: `sysctl hw.model` and `Apple` on macOS, the firmware's product name and manufacturer on Windows and Linux |
+| `device.screen_resolution` | the main display in points, e.g. `1728x1117` |
+| `device.browser`, `device.browser_version` | `Agentty` and its version (GA's web reports have no app version) |
+| `user_properties` | `operating_system`, `language`, `app_version` (register them as user-scoped custom dimensions to report on them) |
 | `user_location.country_id` | the country of the system's region setting (`ko_KR` → `KR`); left out when the setting names none |
 
 No IP address or location is looked up or sent: the country is the region the user set in the

@@ -17,8 +17,13 @@ Nothing about your work is included. No paths, file names, commands, prompts, AI
 | `pane_opened` | Which kind of pane: `shell`, `claude`, `codex`, `gemini`, … |
 | `agent_turn_finished` | Which kind of agent finished a turn |
 | `feature_used` | Which area was used: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
+| `app_installed` | — (once, on the first launch of an installation) |
+| `page_view` | Which screen is in front: `home`, `terminals`, `flow`, `settings`, … |
+| `campaign_details` | How this copy was installed: `homebrew`, `download`, `installer`, `deb` or `rpm` |
 
 Every event also carries the application version, the operating system and its version, the language Agentty is shown in, the country of your system's region setting, and a random installation identifier stored in `~/.agentty/install_id`. The country is read from that setting alone — no IP address and no location of any other kind is used, and the setting is read fresh at each upload rather than stored. That identifier is generated from random bytes on first use, is not derived from anything about you, and is reset by deleting the file.
+
+Each upload also describes the computer the way Google Analytics expects a device: its model identifier and maker (for example `Mac16,11`, `Apple`), the size of the main display in points (for example `1728x1117`), and Agentty with its version in place of a browser. None of these identify you or your machine on their own.
 
 Events are queued locally and sent at most once a minute.
 

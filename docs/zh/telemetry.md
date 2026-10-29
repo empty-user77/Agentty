@@ -17,8 +17,13 @@ description: Agentty 关于自身究竟发送了什么，以及如何关闭。
 | `pane_opened` | 哪种窗格：`shell`、`claude`、`codex`、`gemini` 等 |
 | `agent_turn_finished` | 哪种智能体结束了一轮 |
 | `feature_used` | 使用了哪个区域：`agentgit`、`flow`、`usage`、`settings`、`extensions`、`mini`、`browser_api` |
+| `app_installed` | —（安装后首次启动时一次） |
+| `page_view` | 当前显示的界面：`home`、`terminals`、`flow`、`settings` 等 |
+| `campaign_details` | 安装方式：`homebrew`、`download`、`installer`、`deb` 或 `rpm` |
 
 每个事件还带有应用版本、操作系统及其版本、Agentty 显示所用的语言、系统区域设置中的国家/地区，以及保存在 `~/.agentty/install_id` 的随机安装标识符。国家/地区仅从该设置读取 — 不使用 IP 地址，也不使用任何其他位置信息；该设置不会被保存，每次上传时重新读取。该标识符在首次使用时由随机字节生成，不由任何关于你的信息推导而来，删除该文件即可重置。
+
+每次上传还会按 Google Analytics 对设备的要求描述这台电脑：型号标识和制造商（例如 `Mac16,11`、`Apple`）、主显示器的尺寸（以点为单位，例如 `1728x1117`），以及在浏览器位置填入 Agentty 及其版本。仅凭这些无法识别你或你的电脑。
 
 事件在本地汇总，最多每分钟发送一次。
 
