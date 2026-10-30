@@ -2302,7 +2302,8 @@ impl TerminalView {
         } else if self.program_scrolls(shift) {
             // Full-screen apps without mouse reporting (less, vim) scroll with arrow keys.
             let arrow: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
-            self.write(arrow.repeat(lines.unsigned_abs() as usize));
+            // Bounded here too: a scroll request is never a long write, whatever reaches this point.
+            self.write(arrow.repeat(lines.unsigned_abs().min(60) as usize));
             true
         } else {
             false

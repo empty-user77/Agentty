@@ -23,7 +23,7 @@ fn since(now: SystemTime, then: SystemTime) -> Duration {
     now.duration_since(then).unwrap_or(Duration::ZERO)
 }
 
-pub const MIN_PASSWORD_CHARS: usize = 8;
+pub const MIN_PASSWORD_CHARS: usize = 12;
 /// Longer passwords are refused rather than hashed: PBKDF2's cost grows with them.
 pub const MAX_PASSWORD_BYTES: usize = 256;
 /// OWASP's figure for PBKDF2-HMAC-SHA256.
@@ -178,7 +178,18 @@ impl Sessions {
     }
 
     /// Whether `token` is a live session of `login`; a live one counts as used now.
+    /// A request from the person: counts as activity, so the idle timer restarts.
     pub fn check(&mut self, token: &str, login: &str, now: SystemTime) -> bool {
+        self.validate(token, login, now, true)
+    }
+
+    /// A check that does not count as activity: an open event stream asks this on every tick, and
+    /// a tab left open must not keep the session alive past the idle limit.
+    pub fn check_idle(&mut self, token: &str, login: &str, now: SystemTime) -> bool {
+        self.validate(token, login, now, false)
+    }
+
+    fn validate(&mut self, token: &str, login: &str, now: SystemTime, refresh: bool) -> bool {
         if !token_shape(token) {
             return false;
         }
@@ -192,7 +203,9 @@ impl Sessions {
         if session.login != login {
             return false;
         }
-        session.last_seen = now;
+        if refresh {
+            session.last_seen = now;
+        }
         true
     }
 
@@ -289,8 +302,9 @@ mod tests {
     #[test]
     fn password_rules() {
         assert_eq!(password_problem("sh0rt!"), Some("remote.password_short"));
-        assert_eq!(password_problem("abcdefgh"), None, "eight characters are enough");
-        assert_eq!(password_problem("비밀번호여덟글자"), None, "in any script, counted in characters");
+        assert_eq!(password_problem("abcdefghijk"), Some("remote.password_short"), "eleven characters are not enough");
+        assert_eq!(password_problem("abcdefghijkl"), None, "twelve characters are enough");
+        assert_eq!(password_problem("비밀번호는열두글자입니다"), None, "in any script, counted in characters");
         assert_eq!(password_problem(&"x".repeat(MAX_PASSWORD_BYTES + 1)), Some("remote.password_long"));
         assert!(!verify_password(&hash_with("abc", 1_000), &"x".repeat(MAX_PASSWORD_BYTES + 1)));
     }

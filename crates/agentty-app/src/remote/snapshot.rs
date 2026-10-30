@@ -18,8 +18,12 @@ pub struct WorkspaceInfo {
     /// The card's colour, `#rrggbb`, when the user picked one.
     pub color: Option<String>,
     pub branch: Option<String>,
-    /// Its folder, home shortened to `~`.
+    /// Its folder, home shortened to `~`: where its active terminal is now.
     pub folder: String,
+    /// The folder the workspace was opened on, which its terminals' moves don't change. Files sent
+    /// from the phone are saved here. Not sent to the page.
+    #[serde(skip)]
+    pub root: std::path::PathBuf,
     /// Closed to save memory until it is opened again: no terminals to show.
     pub sleeping: bool,
     pub active_tab: usize,

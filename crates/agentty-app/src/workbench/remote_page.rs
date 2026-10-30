@@ -147,6 +147,7 @@ impl Workbench {
                 color: super::accent_color(ws.color).map(hex_color),
                 branch,
                 folder: crate::ui::tilde(&cwd),
+                root: ws.cwd.clone(),
                 sleeping: ws.tabs.is_empty(),
                 active_tab: ws.active_tab.min(tabs.len().saturating_sub(1)),
                 tabs,
@@ -172,7 +173,9 @@ impl Workbench {
         match command {
             Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
             Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, self.kind_here(*kind, cx), cx),
-            Command::OpenFolder { folder, kind } => return self.remote_open_folder(folder.clone(), self.kind_here(*kind, cx), cx),
+            Command::OpenFolder { folder, kind, group, title } => {
+                return self.remote_open_folder(folder.clone(), group.clone(), title.clone(), self.kind_here(*kind, cx), cx)
+            }
             // To a chat's lead the page may reach (in a workspace it is allowed in).
             Command::Chat { pane, text } => {
                 if !self.remote_panes().any(|(_, p)| p.read(cx).pane_id == *pane) {
@@ -263,18 +266,42 @@ impl Workbench {
     }
 
     /// A folder under the remote folder (the server checked it) opened from the page: a new tab in
-    /// the workspace already there, otherwise a new workspace at the end of the list. Like a new
+    /// the workspace already there (its group unchanged), otherwise a new workspace at the end of
+    /// the list, under `group` when given. Like a new
     /// tab, it leaves the desktop on the workspace it shows.
-    fn remote_open_folder(&mut self, folder: std::path::PathBuf, kind: crate::launch::PaneKind, cx: &mut Context<Self>) -> bool {
+    fn remote_open_folder(
+        &mut self,
+        folder: std::path::PathBuf,
+        group: Option<String>,
+        title: Option<String>,
+        kind: crate::launch::PaneKind,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if let Some(id) = self.workspaces.iter().find(|ws| ws.cwd == folder && ws.plugin.is_none() && !ws.remote_hidden).map(|ws| ws.id) {
             return self.remote_new_tab(id, kind, cx);
         }
+        // The board's and the plugins' groups are found by name, so a page can't use theirs:
+        // a workspace put there would join the board's projects or the plugins' list.
+        let built_in = |name: &str| {
+            use crate::settings::Language;
+            ["group.board", "group.plugins"].iter().any(|key| {
+                [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].iter().any(|&l| crate::i18n::tr(l, key) == name)
+            })
+        };
+        let group = group.filter(|name| !built_in(name)).map(|name| match self.groups.iter().find(|g| g.name == name) {
+            Some(found) => found.id,
+            None => {
+                let id = self.next_id();
+                self.groups.push(super::Group { id, name, collapsed: false, color: None });
+                id
+            }
+        });
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, folder.clone()), cx);
         let id = self.next_id();
         self.workspaces.push(super::Workspace {
             id,
-            name: None,
-            group: None,
+            name: title,
+            group,
             cwd: folder,
             tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
             active_tab: 0,

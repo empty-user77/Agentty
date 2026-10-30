@@ -238,11 +238,12 @@ fn is_token(name: &str) -> bool {
 /// A response head with any `Set-Cookie` for the page's session cookie taken out.
 fn filtered_answer(raw: &[u8], cookie_name: &str) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(raw) else { return raw.to_vec() };
-    let prefix = format!("{cookie_name}=");
     text.split_inclusive("\r\n")
         .filter(|line| {
             let Some((name, value)) = line.split_once(':') else { return true };
-            !(name.trim().eq_ignore_ascii_case("set-cookie") && value.trim_start().starts_with(&prefix))
+            // The name is compared after trimming: browsers accept `__Host-agentty = x` as the same cookie.
+            let cookie = value.trim_start().split('=').next().unwrap_or_default().trim();
+            !(name.trim().eq_ignore_ascii_case("set-cookie") && cookie == cookie_name)
         })
         .collect::<String>()
         .into_bytes()
@@ -273,7 +274,7 @@ fn recheck(gate: Arc<Gate>, login: Option<String>, cookie: Option<String>, done:
             continue;
         }
         waited = Duration::ZERO;
-        if stopped || !gate.hub.admits(login.as_deref(), cookie.as_deref()) || !gate.hub.dev_port_allowed(gate.dev_port) {
+        if stopped || !gate.hub.still_admits(login.as_deref(), cookie.as_deref()) || !gate.hub.dev_port_allowed(gate.dev_port) {
             let _ = client.shutdown(Shutdown::Both);
             let _ = upstream.shutdown(Shutdown::Both);
             return;
@@ -453,6 +454,7 @@ mod tests {
             color: None,
             branch: None,
             folder: "~/app".into(),
+            root: std::path::PathBuf::new(),
             sleeping: false,
             active_tab: 0,
             tabs: Vec::new(),

