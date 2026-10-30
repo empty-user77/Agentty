@@ -274,7 +274,7 @@ fn recheck(gate: Arc<Gate>, login: Option<String>, cookie: Option<String>, done:
             continue;
         }
         waited = Duration::ZERO;
-        if stopped || !gate.hub.admits(login.as_deref(), cookie.as_deref()) || !gate.hub.dev_port_allowed(gate.dev_port) {
+        if stopped || !gate.hub.still_admits(login.as_deref(), cookie.as_deref()) || !gate.hub.dev_port_allowed(gate.dev_port) {
             let _ = client.shutdown(Shutdown::Both);
             let _ = upstream.shutdown(Shutdown::Both);
             return;

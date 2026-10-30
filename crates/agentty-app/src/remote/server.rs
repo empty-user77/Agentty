@@ -54,6 +54,8 @@ const LINGER: Duration = Duration::from_secs(3);
 const MAX_ATTACHING: usize = 4;
 /// Images being saved now (see [`MAX_ATTACHING`]).
 static ATTACHING: AtomicUsize = AtomicUsize::new(0);
+/// Image and file bodies being received now: taken from the head, before the body is read.
+static RECEIVING: AtomicUsize = AtomicUsize::new(0);
 /// How long an attached image is kept: long enough for the agent to read it, then cleared away.
 const ATTACHMENT_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Refused uploads drained at once; past this the connection just closes, so refusals can't
@@ -438,6 +440,16 @@ impl Hub {
     /// the session cookie must be one of that login's. The page's cookie reaches the dev server's
     /// address as well: cookies are kept per machine name, not per port.
     pub fn admits(&self, login: Option<&str>, cookie_header: Option<&str>) -> bool {
+        self.dev_admits(login, cookie_header, false)
+    }
+
+    /// `admits` for a connection already open, checked again every few seconds: it doesn't count
+    /// as use, so a live-reload socket left open can't keep the session from going idle.
+    pub fn still_admits(&self, login: Option<&str>, cookie_header: Option<&str>) -> bool {
+        self.dev_admits(login, cookie_header, true)
+    }
+
+    fn dev_admits(&self, login: Option<&str>, cookie_header: Option<&str>, recheck: bool) -> bool {
         let config = self.config();
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             return false;
@@ -455,7 +467,12 @@ impl Hub {
             .find(|(k, _)| *k == name)
             .map(|(_, v)| v)
             .unwrap_or("");
-        self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, &login, SystemTime::now())
+        let mut auth = self.auth.lock().unwrap_or_else(|e| e.into_inner());
+        if recheck {
+            auth.sessions.check_idle(token, &login, SystemTime::now())
+        } else {
+            auth.sessions.check(token, &login, SystemTime::now())
+        }
     }
 
     /// Whether a terminal the page may see runs a server on `port` now (the overview's ports).
@@ -600,6 +617,9 @@ impl Hub {
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         let deadline = Instant::now() + REQUEST_DEADLINE;
         let upload = std::cell::Cell::new(false);
+        // Held from the head until the connection ends, so at most `MAX_ATTACHING` image or file
+        // bodies (up to `FILE_MAX_BODY` each) are in memory at once, not one per connection.
+        let receiving = std::cell::RefCell::new(None);
         let request = match http::read_request(&mut stream, deadline, |head| {
             upload.set(http::is_upload(&head.path));
             if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
@@ -608,6 +628,9 @@ impl Hub {
             let (host, login) = self.admitted(head, &config, true).map_err(|refused| refused.status)?;
             if http::is_upload(&head.path) {
                 self.upload_admitted(head, &config, &host, &login)?;
+                if !http::is_voice(&head.path) {
+                    *receiving.borrow_mut() = Some(Slot::take(&RECEIVING, MAX_ATTACHING).ok_or(429u16)?);
+                }
             }
             Ok(())
         }) {
@@ -2228,6 +2251,10 @@ mod tests {
         let slots: Vec<_> = (0..MAX_ATTACHING).map(|_| Slot::take(&ATTACHING, MAX_ATTACHING).unwrap()).collect();
         assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), ..file() })).0, 429, "as many as image attachments");
         drop(slots);
+        // Bodies still arriving count too, from the head on: they are refused before being read.
+        let receiving: Vec<_> = (0..MAX_ATTACHING).map(|_| Slot::take(&RECEIVING, MAX_ATTACHING).unwrap()).collect();
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), ..file() })).0, 429, "as many bodies at once");
+        drop(receiving);
         hub.shutdown();
         let _ = std::fs::remove_dir_all(base);
     }

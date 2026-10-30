@@ -280,7 +280,15 @@ impl Workbench {
         if let Some(id) = self.workspaces.iter().find(|ws| ws.cwd == folder && ws.plugin.is_none() && !ws.remote_hidden).map(|ws| ws.id) {
             return self.remote_new_tab(id, kind, cx);
         }
-        let group = group.map(|name| match self.groups.iter().find(|g| g.name == name) {
+        // The board's and the plugins' groups are found by name, so a page can't use theirs:
+        // a workspace put there would join the board's projects or the plugins' list.
+        let built_in = |name: &str| {
+            use crate::settings::Language;
+            ["group.board", "group.plugins"].iter().any(|key| {
+                [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].iter().any(|&l| crate::i18n::tr(l, key) == name)
+            })
+        };
+        let group = group.filter(|name| !built_in(name)).map(|name| match self.groups.iter().find(|g| g.name == name) {
             Some(found) => found.id,
             None => {
                 let id = self.next_id();
