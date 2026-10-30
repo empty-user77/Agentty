@@ -66,10 +66,18 @@ impl Workbench {
             self.inventory.context = None;
             return;
         };
+        // The window Claude Code reported for this pane: its transcript does not say.
+        let live_window = view.live_window;
         let key = (agent, id.clone());
         let previous = self.inventory.context.take().filter(|(k, _, _)| *k == key).and_then(|(_, _, s)| s);
         self.inventory.context = Some((key.clone(), true, previous));
-        let task = cx.background_spawn(async move { agentty_bridge::context::snapshot(agent, &id) });
+        let task = cx.background_spawn(async move {
+            let mut snapshot = agentty_bridge::context::snapshot(agent, &id);
+            if let (Some(snapshot), Some(window)) = (snapshot.as_mut(), live_window) {
+                snapshot.window = window;
+            }
+            snapshot
+        });
         cx.spawn(async move |this, cx| {
             let snapshot = task.await;
             let _ = this.update(cx, |this, cx| {

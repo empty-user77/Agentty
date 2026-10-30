@@ -249,7 +249,6 @@ fn claude_snapshot(lines: impl Iterator<Item = String>) -> ContextSnapshot {
                 if !usage.is_null() && !model.starts_with('<') {
                     let n = |k: &str| usage[k].as_u64().unwrap_or(0);
                     b.snapshot.used = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-                    b.snapshot.window = crate::claude_context_window(model);
                     b.snapshot.model = Some(model.to_string());
                 }
                 b.add(Part::Conversation, len);
@@ -414,7 +413,8 @@ mod tests {
         ];
         let s = claude_snapshot(lines(&transcript));
         assert_eq!(s.used, 31_500);
-        assert_eq!(s.window, 1_000_000);
+        // The transcript does not say how big the window is: Claude Code's statusline does.
+        assert_eq!(s.window, 0);
         assert_eq!(s.compactions, 1);
         assert_eq!(s.last_compaction.as_ref().map(|c| (c.before, c.after)), Some((900_000, 20_000)));
         assert_eq!(s.last_compaction.as_ref().and_then(|c| c.summary.as_deref()), Some("Summary of earlier work"));

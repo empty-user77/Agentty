@@ -162,6 +162,8 @@ pub enum SignalKind {
     Notify,
     /// Account rate-limit usage (percent) reported by the statusline wrapper.
     Usage,
+    /// The context window (tokens) of the model Claude Code runs, reported by the statusline wrapper.
+    ContextWindow,
     /// A tool is waiting for the user's approval (Claude Code `PermissionRequest`).
     Permission,
     /// A subagent started / finished (Claude Code `SubagentStart` / `SubagentStop`).
@@ -444,6 +446,7 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
         "notification" => SignalKind::Notification,
         "notify" => SignalKind::Notify,
         "usage" => SignalKind::Usage,
+        "context_window" => SignalKind::ContextWindow,
         "permission" => SignalKind::Permission,
         "subagent_start" => SignalKind::SubagentStart,
         "subagent_stop" => SignalKind::SubagentStop,
@@ -455,6 +458,10 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
     if kind == SignalKind::Usage {
         let percent: f64 = raw.parse().ok().filter(|p: &f64| p.is_finite())?;
         return Some(plain(Some(format!("{}", percent.clamp(0., 100.)))));
+    }
+    if kind == SignalKind::ContextWindow {
+        let window: u64 = raw.parse().ok().filter(|w| (1_000..=100_000_000).contains(w))?;
+        return Some(plain(Some(window.to_string())));
     }
     if kind == SignalKind::Notify {
         let message: String = raw.chars().take(300).collect();
@@ -1071,6 +1078,15 @@ mod tests {
         let s = parse_line("3\tusage\t36.5").unwrap();
         assert_eq!((s.kind, s.message.as_deref()), (SignalKind::Usage, Some("36.5")));
         assert!(parse_line("3\tusage\tlots").is_none());
+    }
+
+    #[test]
+    fn parses_context_window() {
+        let s = parse_line("3\tcontext_window\t1000000").unwrap();
+        assert_eq!((s.kind, s.message.as_deref()), (SignalKind::ContextWindow, Some("1000000")));
+        assert!(parse_line("3\tcontext_window\t0").is_none());
+        assert!(parse_line("3\tcontext_window\t-5").is_none());
+        assert!(parse_line("3\tcontext_window\tbig").is_none());
     }
 
     #[test]

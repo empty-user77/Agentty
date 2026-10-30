@@ -378,6 +378,9 @@ pub struct TerminalView {
     pub banner_model: Option<(String, u64)>,
     /// Rate-limit usage reported live by the Claude statusline wrapper.
     pub live_usage: Option<f64>,
+    /// The context window of the model Claude Code is running, as it reported to the statusline
+    /// wrapper. Its transcript never says, and a model's name is no reliable guide to it.
+    pub live_window: Option<u64>,
     probe_ticks: u32,
     /// A launched agent pane whose agent process was seen and has since exited to the shell.
     agent_exited: bool,
@@ -518,6 +521,7 @@ impl TerminalView {
             working_since: None,
             stats: None,
             live_usage: None,
+            live_window: None,
             probe_ticks: 0,
             agent_exited: false,
             agent_seen: false,
@@ -758,6 +762,7 @@ impl TerminalView {
         self.stats = None;
         self.agent_since_ms = None;
         self.live_usage = None;
+        self.live_window = None;
         self.hook_session = None;
         self.turn_seen = false;
         self.hook_previous = None;
@@ -1225,6 +1230,7 @@ impl TerminalView {
                 view.subagent_files = subagents;
                 // A transcript that cannot be read right now keeps its last reading, but a new session
                 // (no transcript until its first prompt) never inherits the previous session's.
+                let stats = view.with_live_window(stats);
                 if (stats.is_some() || !same_session) && stats != view.stats {
                     view.stats = stats;
                     changed = true;
@@ -1457,8 +1463,27 @@ impl TerminalView {
         self.stats.as_ref().and_then(|s| s.rate_limit_percent).or(self.live_usage)
     }
 
+    /// `stats` with the window Claude Code reported, when it did.
+    fn with_live_window(&self, mut stats: Option<agentty_bridge::SessionStats>) -> Option<agentty_bridge::SessionStats> {
+        if let (Some(stats), Some(window)) = (stats.as_mut(), self.live_window) {
+            stats.context_window = window;
+        }
+        stats
+    }
+
     pub fn apply_signal(&mut self, signal: crate::agent_signal::AgentSignal, cx: &mut Context<Self>) {
         let crate::agent_signal::AgentSignal { kind, message, detail, .. } = signal;
+        if kind == SignalKind::ContextWindow {
+            let window = message.and_then(|m| m.parse().ok());
+            if window.is_some() && window != self.live_window {
+                self.live_window = window;
+                let stats = self.stats.take();
+                self.stats = self.with_live_window(stats);
+                cx.emit(TerminalEvent::StatusChanged);
+                cx.notify();
+            }
+            return;
+        }
         if kind == SignalKind::Usage {
             let usage = message.and_then(|m| m.parse().ok());
             if usage != self.live_usage {
@@ -1641,7 +1666,7 @@ impl TerminalView {
                 self.live_tool_pid = None;
                 self.forget_agent_state();
             }
-            SignalKind::Usage => {}
+            SignalKind::Usage | SignalKind::ContextWindow => {}
         }
         if self.status != AgentStatus::Working {
             self.working_since = None;
