@@ -28,7 +28,7 @@ change and decide whether it is safe. The hook `.claude/hooks/require-security-a
    when a hunk touches one of the sensitive areas below.
 2. **Mechanical checks.** Run both and fix what they block:
    `python3 scripts/check-secrets.py --staged` and `python3 scripts/security-audit.py --staged`.
-3. **Review** the change against the seven areas. Skip an area only when the diff cannot touch it
+3. **Review** the change against the eight areas. Skip an area only when the diff cannot touch it
    (a docs-only change still gets area 4).
 4. **Report** findings as: severity (critical / high / medium / low) · `file:line` · scenario
    (precondition → action → impact) · verified or inferred · minimal fix. Fix critical and high
@@ -37,7 +37,7 @@ change and decide whether it is safe. The hook `.claude/hooks/require-security-a
 5. **Record** the reviewed tree — only after steps 1–4 are really done:
    `python3 scripts/security-audit.py --mark`. Staging anything afterwards means reviewing again.
 
-## The seven areas
+## The eight areas
 
 ### 1. Logic and flow
 - Every state machine reaches an end from every state: failure, retry, cancel, panel closed and
@@ -127,6 +127,58 @@ pull request body. Judge each change as if it were already public:
 - A commit message and a pull request body are as public as the code. Nothing goes in one that
   would not go in a file.
 
+### 8. Remote access surface (phone or browser → this Mac)
+Any change under `crates/agentty-app/src/remote/`, the remote page, or a client that talks to it
+(the iOS app in `agentty-ios`) gets this area in full. The rule is default-deny: a request that
+cannot prove both *remote access is on* and *the owner's tailnet identity* gets nothing, not even
+a hint that the page exists.
+
+- **Off means off.** With the feature or `enabled` off, or no password set, no `/api/*` route answers:
+  sessions are cleared, event streams and dev-proxy sockets end, and a new connection is accepted and
+  closed at once (the listener stays bound on purpose, so the address can't be taken by another
+  process). Test it by turning the setting off and probing the routes: expect the connection to close
+  with no response, never a 200 or a page.
+- **Identity before anything.** Every route except the sign-in path needs a valid session token, and
+  the session is tied to the tailnet identity that signed in. A tailnet name, `Host`, `Origin`,
+  `X-Forwarded-*` or a `User-Agent` is never trusted as an identity by itself.
+- **Loopback and dev mode.** The dev mode (`AGENTTY_DEBUG=1` and `AGENTTY_REMOTE_DEV=1`, plain HTTP on
+  `127.0.0.1`) must be compiled out of release builds (`cfg!(debug_assertions)`), and a release must
+  not bind any listener on a non-loopback address except through Tailscale serve.
+- **Object-level checks.** Every workspace, pane, folder and file id or path from a request is checked
+  against what this page is allowed to see: a workspace the page was not shown is 404, a path is
+  resolved inside the remote folder with symlinks followed and `..`, absolute paths and hidden names
+  refused (`folders::resolve`, `files.rs`, the upload name rules in `/api/workspace/file`).
+- **Writes need the CSRF headers.** Every POST checks `Origin` and `X-Agentty`, including the new
+  routes. Bodies are capped before they are read (`FILE_MAX_BODY` 25 MiB for workspace files,
+  `VOICE_MAX_BODY` 8 MiB for voice clips and attached images, `MAX_BODY` 64 KiB otherwise), and
+  a request with a body the route does not take is refused.
+- **Brute force and sessions.** Wrong passwords count toward a lock (`lockedFor`, 429). Compare
+  secrets in constant time. Sessions expire, end on sign-out, and a token never works on another
+  device. Cookies are `HttpOnly`, `Secure`, `SameSite=Strict`, and `__Host-` where the scheme allows.
+- **Errors and logs.** A refusal says what was wrong, never a path, a stack trace, a token, a
+  password, a prompt or a file's contents. The device list and audit log hold a device name, not a
+  secret.
+- **Limits.** Rate limits per route (tabs, uploads, sign-in), a cap on open event streams, and no
+  unbounded read anywhere on the request path.
+- **Integer and bounds checks.** Any number from a request is checked with `unsigned_abs()` or a
+  range, never `abs()` (`i32::MIN.abs()` wraps in release), and the amount actually written or
+  looped is bounded again where it is used.
+- **Links on disk.** A write into a folder under the workspace checks `symlink_metadata` for a link
+  and the canonical path against the workspace root, so a link committed by a cloned repository
+  cannot send the upload elsewhere.
+- **Idle means idle.** Only a request from the person refreshes the idle timer; a background poll
+  (an open event stream) uses the non-refreshing check.
+- **Cookie names and redirects.** A cookie name from another server is compared after trimming, and
+  no proxy or client follows a redirect that would carry the token or password to another host.
+- **Password floor.** New web passwords are at least 12 characters, in every language's message.
+- **Open findings are recorded.** A finding that is not fixed in the change is written into the
+  report with its severity; the stale-listener fallback and the header-trust check need a live
+  second device before they can be closed.
+
+- **Reachability test.** For a change to the routes, run the probe: no session gets 401 on every
+  route except sign-in, a wrong origin gets 403, an oversize body gets 413, a traversal path gets
+  400 or 404, and a disabled remote gets nothing at all.
+
 ## Where the sensitive code lives
 
 | Area | Files |
@@ -140,3 +192,4 @@ pull request body. Judge each change as if it were already public:
 | Analytics, updates, network | `crates/agentty-bridge/src/metrics.rs`, `update.rs`, `http.rs` |
 | Data locations | `crates/agentty-bridge/src/fsutil.rs`, every `data_dir()` caller |
 | Release credentials | `scripts/build-dmg.sh`, `scripts/release-preflight.sh`, `.github/workflows/` |
+| Remote access (phone or browser → Mac): routes, auth, Tailscale identity, files, uploads | `crates/agentty-app/src/remote/` (`server.rs`, `http.rs`, `auth.rs`, `tailscale.rs`, `devproxy.rs`, `files.rs`, `folders.rs`, `mod.rs`) |

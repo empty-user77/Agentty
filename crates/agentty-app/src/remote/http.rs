@@ -17,6 +17,10 @@ pub const VOICE_MAX_BODY: usize = 8 * 1024 * 1024;
 /// caller's (shorter) deadline, and the body is read only after `admit` checked the sender's
 /// session, so only a signed-in page gets this much time.
 pub const VOICE_BODY_TIME: Duration = Duration::from_secs(60);
+/// Larger still for `POST /api/workspace/file`: a document or an archive sent from a phone.
+pub const FILE_MAX_BODY: usize = 25 * 1024 * 1024;
+/// How long such a file's body may take: 25 MB on a slow uplink.
+pub const FILE_BODY_TIME: Duration = Duration::from_secs(300);
 const MAX_HEADERS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +133,12 @@ pub fn is_voice(path: &str) -> bool {
     path.ends_with("/api/voice")
 }
 
+/// Whether `path` is a file sent to a workspace's folder, which gets `FILE_MAX_BODY` and
+/// `FILE_BODY_TIME`. `admit` checks its session too.
+pub fn is_workspace_file(path: &str) -> bool {
+    path.ends_with("/api/workspace/file")
+}
+
 /// Whether `path` is an image attached from the page's prompt box, which gets the same room as a
 /// voice clip (the page shrinks photos well below it first). `admit` checks its session too.
 pub fn is_attach(path: &str) -> bool {
@@ -137,7 +147,7 @@ pub fn is_attach(path: &str) -> bool {
 
 /// A request whose body may be as large as `VOICE_MAX_BODY`: a voice clip or an attached image.
 pub fn is_upload(path: &str) -> bool {
-    is_voice(path) || is_attach(path)
+    is_voice(path) || is_attach(path) || is_workspace_file(path)
 }
 
 /// Reads one request by `deadline` (a voice upload's body by `VOICE_BODY_TIME` after its head
@@ -181,8 +191,21 @@ pub fn read_request(
     // attachment an image: they need more room and time than the small JSON bodies every other
     // route sends.
     let voice = is_upload(&request.path);
-    let max_body = if voice { VOICE_MAX_BODY } else { MAX_BODY };
-    let deadline = if voice { deadline.max(Instant::now() + VOICE_BODY_TIME) } else { deadline };
+    let file = is_workspace_file(&request.path);
+    let max_body = if file {
+        FILE_MAX_BODY
+    } else if voice {
+        VOICE_MAX_BODY
+    } else {
+        MAX_BODY
+    };
+    let deadline = if file {
+        deadline.max(Instant::now() + FILE_BODY_TIME)
+    } else if voice {
+        deadline.max(Instant::now() + VOICE_BODY_TIME)
+    } else {
+        deadline
+    };
     if length > max_body {
         return Err(HttpError::BodyTooLarge);
     }
@@ -427,7 +450,12 @@ mod tests {
         let result = read_request(&mut input.as_bytes(), Instant::now() + Duration::from_millis(40), slow_admit);
         assert_eq!(result, Err(HttpError::Gone));
         assert!(is_voice("/api/voice") && is_voice("/s3cr3t/api/voice") && !is_voice("/api/voice/x"));
-        assert!(is_upload("/s3cr3t/api/attach") && is_upload("/api/voice") && !is_upload("/api/input"));
+        assert!(
+            is_upload("/s3cr3t/api/workspace/file")
+                && is_upload("/s3cr3t/api/attach")
+                && is_upload("/api/voice")
+                && !is_upload("/api/input")
+        );
     }
 
     #[test]
