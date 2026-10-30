@@ -1699,7 +1699,9 @@ fn clean_text(text: &str) -> String {
 
 /// "Safari on iPhone"-style name from a user agent, for the device list.
 fn device_name(agent: &str) -> String {
-    let browser = if agent.contains("Edg/") {
+    let browser = if agent.contains("AgenttyRemote/") {
+        "Agentty Remote"
+    } else if agent.contains("Edg/") {
         "Edge"
     } else if agent.contains("Firefox/") || agent.contains("FxiOS") {
         "Firefox"
@@ -2530,8 +2532,8 @@ mod tests {
             "Safari · iPhone"
         );
         assert_eq!(device_name("Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36"), "Chrome · Android");
-        assert_eq!(device_name(""), "Browser · ?");
         assert_eq!(device_name("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AgenttyRemote/1.0"), "Agentty Remote · iPhone");
+        assert_eq!(device_name(""), "Browser · ?");
     }
 
     #[test]
