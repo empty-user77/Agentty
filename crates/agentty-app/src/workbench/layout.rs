@@ -432,14 +432,19 @@ impl ModelLabel {
 /// The model a pane runs, from the most direct source there is: what the session wrote down (its
 /// answers, a `/model`), else what its welcome banner says, else what the agent is set up to use.
 fn pane_model_label(view: &crate::terminal::TerminalView, installed: Option<&crate::agents::Installed>) -> Option<ModelLabel> {
-    view.stats
+    let label = view
+        .stats
         .as_ref()
         .and_then(model_label)
         .or_else(|| {
             // Codex's footer names the model without its window (0).
             view.banner_model.as_ref().map(|(name, window)| ModelLabel { name: name.clone(), window: (*window > 0).then_some(*window) })
         })
-        .or_else(|| configured_model_label(installed, view.display_kind()))
+        .or_else(|| configured_model_label(installed, view.display_kind()))?;
+    // The window Claude Code itself reported beats any the label was named with; without either,
+    // the one it last reported for this model.
+    let window = view.live_window.or(label.window).or_else(|| agentty_bridge::context_windows::known(&label.name));
+    Some(ModelLabel { window, ..label })
 }
 
 fn model_label(stats: &agentty_bridge::SessionStats) -> Option<ModelLabel> {
@@ -462,9 +467,10 @@ fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: cr
     };
     let bare = model.trim_end_matches("[1m]");
     let name = agentty_bridge::pretty_model(bare);
-    // `[1m]` is Claude Code's own way of asking for the long window.
-    let window = if model.ends_with("[1m]") { 1_000_000 } else { agentty_bridge::claude_context_window(bare) };
-    Some(ModelLabel { name, window: (kind == crate::launch::PaneKind::Claude).then_some(window) })
+    // `[1m]` is Claude Code's own way of asking for the long window; without it the window is not
+    // known until Claude Code reports it.
+    let window = model.ends_with("[1m]").then_some(1_000_000);
+    Some(ModelLabel { name, window: window.filter(|_| kind == crate::launch::PaneKind::Claude) })
 }
 
 pub(crate) fn format_elapsed(seconds: u64) -> String {

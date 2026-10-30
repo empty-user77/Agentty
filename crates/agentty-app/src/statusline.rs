@@ -17,6 +17,12 @@ pub fn usage_percent(input: &serde_json::Value) -> Option<f64> {
         .or_else(|| limits["five_hour"]["used_percentage"].as_str()?.trim_end_matches('%').parse().ok())
 }
 
+/// The context window of the model in use, as Claude Code itself states it. Nothing else says: the
+/// transcript names only the model, and a model's name does not tell its window.
+pub fn context_window(input: &serde_json::Value) -> Option<u64> {
+    input["context_window"]["context_window_size"].as_u64().filter(|w| *w > 0)
+}
+
 fn statusline_command(settings: &Path) -> Option<String> {
     let text = std::fs::read_to_string(settings).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -39,12 +45,24 @@ pub fn run() -> i32 {
     let _ = std::io::stdin().read_to_end(&mut input);
     let json: serde_json::Value = serde_json::from_slice(&input).unwrap_or_default();
 
-    if let (Some(percent), Ok(socket), Ok(pane)) = (usage_percent(&json), std::env::var("AGENTTY_SOCKET"), std::env::var("AGENTTY_PANE_ID"))
+    let (percent, window) = (usage_percent(&json), context_window(&json));
+    if let (true, Ok(socket), Ok(pane)) =
+        (percent.is_some() || window.is_some(), std::env::var("AGENTTY_SOCKET"), std::env::var("AGENTTY_PANE_ID"))
     {
         if let Ok(mut stream) = crate::ipc::connect(&socket) {
-            let _ = writeln!(stream, "{pane}\tusage\t{percent}");
+            if let Some(percent) = percent {
+                let _ = writeln!(stream, "{pane}\tusage\t{percent}");
+            }
+            if let Some(window) = window {
+                let _ = writeln!(stream, "{pane}\tcontext_window\t{window}");
+            }
             crate::agent_signal::linger(stream);
         }
+    }
+
+    // Remember the window for sessions Claude Code has not told it for yet (see `context_windows`).
+    if let (Some(window), Some(model)) = (window, json["model"]["id"].as_str()) {
+        agentty_bridge::context_windows::remember(model, window);
     }
 
     // Remember plan limits and reset times for the menu bar.
@@ -89,6 +107,14 @@ mod tests {
             serde_json::json!({ "rate_limits": { "five_hour": { "used_percentage": 36.5 }, "seven_day": { "used_percentage": 50 } } });
         assert_eq!(usage_percent(&input), Some(36.5));
         assert_eq!(usage_percent(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn reads_the_context_window_claude_code_states() {
+        let input = serde_json::json!({ "model": { "id": "claude-haiku-5-5" }, "context_window": { "context_window_size": 1_000_000, "used_percentage": 23 } });
+        assert_eq!(context_window(&input), Some(1_000_000));
+        assert_eq!(context_window(&serde_json::json!({ "context_window": { "context_window_size": 0 } })), None);
+        assert_eq!(context_window(&serde_json::json!({})), None);
     }
 
     #[test]

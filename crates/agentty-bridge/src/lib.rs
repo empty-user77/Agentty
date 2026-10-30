@@ -11,6 +11,7 @@ pub mod clone;
 pub mod codex;
 pub mod connectors;
 pub mod context;
+pub mod context_windows;
 pub mod disk;
 pub mod doc_text;
 pub mod docker;
@@ -134,17 +135,6 @@ impl SessionStats {
     }
 }
 
-/// Context window by model family. Current Claude models (Opus 5, Sonnet 5, Fable) have 1M tokens;
-/// Haiku 4.5 and older 4.5-generation models have 200K.
-pub fn claude_context_window(model: &str) -> u64 {
-    let small = ["claude-haiku", "claude-sonnet-4-5", "claude-opus-4-5", "claude-opus-4-1", "claude-sonnet-4-2", "claude-3"];
-    if small.iter().any(|p| model.starts_with(p)) {
-        200_000
-    } else {
-        1_000_000
-    }
-}
-
 /// Path of a session transcript, for the agents that keep one Agentty can read.
 pub fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
     match agent {
@@ -216,7 +206,13 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
     let tail = String::from_utf8_lossy(&bytes);
     let mut stats = SessionStats::default();
     match agent {
-        Agent::Claude => stats = claude_stats(tail.lines().rev())?,
+        Agent::Claude => {
+            stats = claude_stats(tail.lines().rev())?;
+            // Not stated in the transcript: what Claude Code last reported for this model, if ever.
+            if stats.context_window == 0 {
+                stats.context_window = stats.model.as_deref().and_then(context_windows::known).unwrap_or(0);
+            }
+        }
         Agent::Codex => {
             for line in tail.lines().rev() {
                 if stats.model.is_none() && line.contains("\"type\":\"turn_context\"") {
@@ -278,7 +274,8 @@ fn claude_stats<'a>(lines: impl Iterator<Item = &'a str>) -> Option<SessionStats
         let u = &v["message"]["usage"];
         let n = |k: &str| u[k].as_u64().unwrap_or(0);
         let prompt = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-        let (model, context_window) = switched.unwrap_or_else(|| (model.to_string(), claude_context_window(model)));
+        // A Claude transcript never states the window: it comes from Claude Code's statusline (0 until then).
+        let (model, context_window) = switched.unwrap_or_else(|| (model.to_string(), 0));
         return Some(SessionStats {
             context_used: compacted_to.unwrap_or(prompt),
             context_window,
@@ -310,7 +307,7 @@ fn model_switch(line: &str) -> Option<(String, u64)> {
 }
 
 /// A model as Claude Code writes it for people — "Opus 5.5 (1M context)", "Sonnet 5" — as a name
-/// and a context window: the one it states, else the one that model has by default.
+/// and the context window it states (0 when it states none).
 pub fn parse_model_display(text: &str) -> Option<(String, u64)> {
     let text = text.trim();
     // "(1M context)" / "(200K context)" is Claude Code's own way of naming the window.
@@ -326,8 +323,8 @@ pub fn parse_model_display(text: &str) -> Option<(String, u64)> {
     if !plausible {
         return None;
     }
-    // Without a stated window, the one the model has by default: "Haiku 4.5" → claude-haiku-4-5.
-    let window = window.unwrap_or_else(|| claude_context_window(&format!("claude-{}", name.to_lowercase().replace([' ', '.'], "-"))));
+    // Without a stated window it is unknown (0): a model's name does not say which window it has.
+    let window = window.unwrap_or(0);
     Some((name.to_string(), window))
 }
 
@@ -461,8 +458,9 @@ mod model_name_tests {
     fn the_banner_says_which_model_a_new_session_runs() {
         use super::banner_model;
         assert_eq!(banner_model("Opus 5.5 (1M context) · Claude Max"), Some(("Opus 5.5".into(), 1_000_000)));
-        assert_eq!(banner_model("  Sonnet 5 · Claude Max   "), Some(("Sonnet 5".into(), 1_000_000)));
-        assert_eq!(banner_model("Haiku 4.5 · API Usage Billing"), Some(("Haiku 4.5".into(), 200_000)));
+        // No window stated: unknown, never guessed from the name.
+        assert_eq!(banner_model("  Sonnet 5 · Claude Max   "), Some(("Sonnet 5".into(), 0)));
+        assert_eq!(banner_model("Haiku 5.5 · API Usage Billing"), Some(("Haiku 5.5".into(), 0)));
         assert_eq!(banner_model("Opus 5.5 (200K context) · Claude Pro"), Some(("Opus 5.5".into(), 200_000)));
         // Not a banner line: no plan after a dot, or no model before it.
         assert_eq!(banner_model("Opus 5.5 (1M context)"), None);
@@ -496,10 +494,11 @@ mod model_name_tests {
         let later = r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
         assert_eq!(super::claude_stats([later, switch, answer].into_iter()).unwrap().model.as_deref(), Some("claude-opus-5-5"));
 
-        // A model with a smaller window, named without one: its own default window.
-        let haiku = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Haiku 4.5`</local-command-stdout>"}}"#;
+        // A model named without a window: the window stays unknown until Claude Code reports it.
+        let haiku = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Haiku 5.5`</local-command-stdout>"}}"#;
         let stats = super::claude_stats([haiku, answer].into_iter()).unwrap();
-        assert_eq!((stats.model.as_deref(), stats.context_window), (Some("Haiku 4.5"), 200_000));
+        assert_eq!((stats.model.as_deref(), stats.context_window), (Some("Haiku 5.5"), 0));
+        assert_eq!(stats.context_percent(), None);
 
         // `/model` keeping the model it is on says which one that is, just the same.
         let kept = r#"{"type":"user","message":{"content":"<local-command-stdout>Kept model as `Opus 5.5 (1M context) (default)`</local-command-stdout>"}}"#;
@@ -525,7 +524,7 @@ mod model_name_tests {
         let full = super::claude_stats([turn].into_iter()).unwrap();
         assert_eq!(full.context_used, 900_100);
         let compacted = super::claude_stats([summary, boundary, turn].into_iter()).unwrap();
-        assert_eq!((compacted.context_used, compacted.context_window), (14_253, 1_000_000));
+        assert_eq!((compacted.context_used, compacted.context_window), (14_253, 0));
         assert_eq!(compacted.model.as_deref(), Some("claude-opus-5"));
         // The next prompt is the truth again, whatever the boundary below it said.
         let next = r#"{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":5,"cache_read_input_tokens":30000,"cache_creation_input_tokens":0}}}"#;
@@ -537,8 +536,6 @@ mod model_name_tests {
 
     #[test]
     fn context_windows_and_labels() {
-        assert_eq!(super::claude_context_window("claude-opus-5"), 1_000_000);
-        assert_eq!(super::claude_context_window("claude-haiku-4-5-20251001"), 200_000);
         assert_eq!(super::short_tokens(1_000_000), "1M");
         assert_eq!(super::short_tokens(258_400), "258K");
         let stats = super::SessionStats { context_used: 890_000, context_window: 1_000_000, ..Default::default() };
