@@ -441,8 +441,10 @@ fn pane_model_label(view: &crate::terminal::TerminalView, installed: Option<&cra
             view.banner_model.as_ref().map(|(name, window)| ModelLabel { name: name.clone(), window: (*window > 0).then_some(*window) })
         })
         .or_else(|| configured_model_label(installed, view.display_kind()))?;
-    // The window Claude Code itself reported beats any the label was named with.
-    Some(ModelLabel { window: view.live_window.or(label.window), ..label })
+    // The window Claude Code itself reported beats any the label was named with; without either,
+    // the one it last reported for this model.
+    let window = view.live_window.or(label.window).or_else(|| agentty_bridge::context_windows::known(&label.name));
+    Some(ModelLabel { window, ..label })
 }
 
 fn model_label(stats: &agentty_bridge::SessionStats) -> Option<ModelLabel> {

@@ -95,7 +95,14 @@ pub fn snapshot(agent: Agent, id: &str) -> Option<ContextSnapshot> {
         let file = File::open(&path).ok()?;
         let lines = BufReader::new(file).lines().map_while(Result::ok);
         Some(match agent {
-            Agent::Claude => claude_snapshot(lines),
+            Agent::Claude => {
+                let mut snapshot = claude_snapshot(lines);
+                // Not stated in the transcript: what Claude Code last reported for this model, if ever.
+                if snapshot.window == 0 {
+                    snapshot.window = snapshot.model.as_deref().and_then(crate::context_windows::known).unwrap_or(0);
+                }
+                snapshot
+            }
             _ => codex_snapshot(lines),
         })
     })

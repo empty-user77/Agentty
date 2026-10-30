@@ -60,6 +60,11 @@ pub fn run() -> i32 {
         }
     }
 
+    // Remember the window for sessions Claude Code has not told it for yet (see `context_windows`).
+    if let (Some(window), Some(model)) = (window, json["model"]["id"].as_str()) {
+        agentty_bridge::context_windows::remember(model, window);
+    }
+
     // Remember plan limits and reset times for the menu bar.
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     if let Some(limits) = agentty_bridge::limits::parse_claude(&json["rate_limits"], now_ms) {

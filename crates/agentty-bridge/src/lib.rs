@@ -11,6 +11,7 @@ pub mod clone;
 pub mod codex;
 pub mod connectors;
 pub mod context;
+pub mod context_windows;
 pub mod disk;
 pub mod doc_text;
 pub mod docker;
@@ -205,7 +206,13 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
     let tail = String::from_utf8_lossy(&bytes);
     let mut stats = SessionStats::default();
     match agent {
-        Agent::Claude => stats = claude_stats(tail.lines().rev())?,
+        Agent::Claude => {
+            stats = claude_stats(tail.lines().rev())?;
+            // Not stated in the transcript: what Claude Code last reported for this model, if ever.
+            if stats.context_window == 0 {
+                stats.context_window = stats.model.as_deref().and_then(context_windows::known).unwrap_or(0);
+            }
+        }
         Agent::Codex => {
             for line in tail.lines().rev() {
                 if stats.model.is_none() && line.contains("\"type\":\"turn_context\"") {
