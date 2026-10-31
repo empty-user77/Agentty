@@ -1,0 +1,30 @@
+{
+ "about": "Before / after form: the old way and the new way side by side, then the new way alone. 30-50 s.",
+ "slug": "feature-compare",
+ "title": { "en": "Feature name", "ko": "기능 이름", "ja": "機能名", "zh": "功能名称" },
+ "tagline": { "en": "Before and after", "ko": "전과 후", "ja": "ビフォー・アフター", "zh": "前后对比" },
+ "narration": "en",
+ "scenes": [
+  {
+   "layout": "split",
+   "headline": { "en": "Same task, two ways", "ko": "같은 일, 두 가지 방법" },
+   "labels": [{ "en": "Before", "ko": "전" }, { "en": "With Agentty", "ko": "Agentty로" }],
+   "clips": [
+    { "clip": "footage/before.mov", "from": "@go", "to": "@go+10", "speed": 2 },
+    { "clip": "footage/after.mov", "from": "@go", "to": "@go+10", "speed": 2 }
+   ],
+   "say": [{ "en": "Left, the old way. Right, the same task in Agentty.", "ko": "왼쪽은 예전 방식, 오른쪽은 Agentty로 같은 일." }]
+  },
+  {
+   "clip": "footage/after.mov", "from": "@result-1", "to": "@result+3", "zoom": "auto", "transition": "zoom-through",
+   "headline": { "en": "Done before the other side starts", "ko": "반대편이 시작하기도 전에 끝" },
+   "say": [{ "en": "Finished while the old way is still loading.", "ko": "예전 방식이 아직 로딩 중일 때 끝납니다." }]
+  },
+  {
+   "layout": "quote", "transition": "dip",
+   "quote": { "en": "A line the product or an agent really wrote", "ko": "제품이나 에이전트가 실제로 쓴 한 줄" },
+   "by": { "en": "Where it came from", "ko": "출처" },
+   "say": [{ "en": "Quote real output only.", "ko": "실제 출력만 인용합니다." }]
+  }
+ ]
+}
