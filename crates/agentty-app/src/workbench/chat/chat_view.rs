@@ -4,10 +4,17 @@
 //! on under it, and a panel beside it with where it works, its context, plan usage and connectors.
 
 use super::*;
-use crate::workbench::{Page, SidePanel};
+use crate::workbench::{Page, RenameTarget, SidePanel};
 use agentty_bridge::chat_log::{Block, Todo, TodoStatus, ToolStep};
 use agentty_bridge::extensions::{McpHealth, McpStatus};
 use gpui::{HighlightStyle, MouseButton, MouseDownEvent, PathPromptOptions, StyledText};
+
+/// Where the bar's menu was opened from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum MenuFrom {
+    Title,
+    More,
+}
 
 /// How often the panel reads the agent's MCP servers again.
 pub(super) const MCP_EVERY: Duration = Duration::from_secs(300);
@@ -77,6 +84,8 @@ struct Live {
     agent: agentty_bridge::model::Agent,
     title: String,
     working: bool,
+    /// The last turn was stopped before it ended.
+    interrupted: bool,
     activity: Option<String>,
     elapsed: Option<String>,
     model: Option<String>,
@@ -116,6 +125,7 @@ impl Workbench {
             agent,
             title,
             working: view.status.in_turn(),
+            interrupted: matches!(view.status, AgentStatus::Interrupted),
             activity: view.last_tool.as_ref().map(|(tool, target)| tool_text(tool, target.as_deref(), cx)),
             elapsed: view.working_since.map(|since| crate::workbench::layout::format_elapsed(since.elapsed().as_secs())),
             model: self.pane_model_text(pane, cx),
@@ -149,6 +159,18 @@ impl Workbench {
         let messages: AnyElement =
             if state.shown.is_empty() { self.render_chat_welcome(state, &live, cx) } else { message_list(state, cx) };
         let approval = live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), cx));
+        let interrupted = (!live.working && live.interrupted).then(|| {
+            div().flex_shrink_0().px_4().pb_1().child(column(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .t_small()
+                    .text_color(hex(Chrome::MUTED))
+                    .child(icon("circle-pause", 13., hex(Chrome::MUTED)))
+                    .child(t(cx, "chat.interrupted")),
+            ))
+        });
         let activity = (live.working && approval.is_none()).then(|| {
             let mut text = live.activity.clone().unwrap_or_else(|| t(cx, "chat.working").to_string());
             if let Some(elapsed) = &live.elapsed {
@@ -174,6 +196,7 @@ impl Workbench {
             .flex_col()
             .child(messages)
             .children(approval)
+            .children(interrupted)
             .children(activity)
             .children(composer)
             .children(state.model_menu.then(|| self.render_model_menu(id, &live, cx)));
@@ -187,8 +210,9 @@ impl Workbench {
                 .relative()
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _, cx| this.mark_active(&target, cx)))
                 .child(self.render_chat_bar(pane, state, &live, cx))
-                .children(state.bar_menu.then(|| self.render_bar_menu(pane, cx)))
                 .child(div().flex_1().min_h_0().flex().child(main).when(side, |d| d.child(self.render_chat_panel(state, &live, cx))))
+                // Last, so it is drawn over the side panel it opens above.
+                .children(state.bar_menu.map(|from| self.render_bar_menu(pane, from, cx)))
                 .into_any_element(),
         )
     }
@@ -197,7 +221,6 @@ impl Workbench {
     /// menu with the rest. The browser and files buttons stay in the window's own bar above.
     fn render_chat_bar(&self, pane: &Pane, state: &ChatState, live: &Live, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.entity_id();
-        let menu_pane = pane.clone();
         let button = |key: &'static str, glyph: &'static str, active: bool, tip: String| {
             div()
                 .id(key)
@@ -243,9 +266,7 @@ impl Workbench {
                             .child(live.title.clone()),
                     )
                     .child(icon("chevron-down", 13., hex(Chrome::MUTED)))
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                        this.open_pane_menu(menu_pane.clone(), event.position(), cx);
-                    })),
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_bar_menu(id, MenuFrom::Title, cx))),
             )
             .child(div().flex_1())
             // Only where the panel fits: a narrow pane never shows it, so the switch would do nothing.
@@ -259,24 +280,31 @@ impl Workbench {
                     },
                 ))
             }))
-            .child(button("chat-bar-more", "ellipsis", state.bar_menu, t(cx, "chat.more").to_string()).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    // Opens only: a click on it while open already closed the menu (outside it).
-                    if let Some(state) = this.chats.get_mut(&id) {
-                        state.bar_menu = true;
-                        cx.notify();
-                    }
-                },
-            )))
+            .child(
+                button("chat-bar-more", "ellipsis", state.bar_menu == Some(MenuFrom::More), t(cx, "chat.more").to_string())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_bar_menu(id, MenuFrom::More, cx))),
+            )
     }
 
     /// The bar's `⋯` menu: the terminal, Git, and the pane's own menu.
-    fn render_bar_menu(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+    /// Opens the bar's menu. Opens only: a click on its button while it is open has already
+    /// closed it (a click outside the menu).
+    fn open_bar_menu(&mut self, id: EntityId, from: MenuFrom, cx: &mut Context<Self>) {
+        if let Some(state) = self.chats.get_mut(&id) {
+            state.bar_menu = Some(from);
+            cx.notify();
+        }
+    }
+
+    /// The bar's menu: renaming the conversation's workspace, the terminal, Git, and putting the
+    /// pane away for later.
+    fn render_bar_menu(&self, pane: &Pane, from: MenuFrom, cx: &mut Context<Self>) -> AnyElement {
         let id = pane.entity_id();
-        let pane_menu = pane.clone();
+        let park = pane.clone();
+        let workspace = self.locate(pane).map(|(w, _)| self.workspaces[w].id);
         let close = move |this: &mut Self, cx: &mut Context<Self>| {
             if let Some(state) = this.chats.get_mut(&id) {
-                state.bar_menu = false;
+                state.bar_menu = None;
             }
             cx.notify();
         };
@@ -300,8 +328,8 @@ impl Workbench {
             .id("chat-bar-menu")
             .absolute()
             .top(px(BAR_HEIGHT - 2.))
-            .right(px(12.))
-            .w(px(200.))
+            .map(|d| if from == MenuFrom::Title { d.left(px(12.)) } else { d.right(px(12.)) })
+            .w(px(220.))
             .p_1()
             .rounded_lg()
             .border_1()
@@ -311,6 +339,14 @@ impl Workbench {
             .flex()
             .flex_col()
             .on_mouse_down_out(cx.listener(move |this, _: &MouseDownEvent, _, cx| close(this, cx)))
+            .children(workspace.map(|workspace| {
+                row("chat-menu-rename", "pencil", t(cx, "chat.rename_workspace").to_string()).on_click(cx.listener(
+                    move |this, _: &ClickEvent, window, cx| {
+                        close(this, cx);
+                        this.start_rename(RenameTarget::Workspace(workspace), window, cx);
+                    },
+                ))
+            }))
             .child(row("chat-menu-terminal", "square-terminal", t(cx, "chat.show_terminal").to_string()).on_click(cx.listener(
                 move |this, _: &ClickEvent, window, cx| {
                     close(this, cx);
@@ -323,10 +359,10 @@ impl Workbench {
                     this.open_page(Page::Git, cx);
                 },
             )))
-            .child(row("chat-menu-pane", "ellipsis", t(cx, "chat.pane_menu").to_string()).on_click(cx.listener(
-                move |this, event: &ClickEvent, _, cx| {
+            .child(row("chat-menu-park", "bookmark", t(cx, "todo.park").to_string()).on_click(cx.listener(
+                move |this, _: &ClickEvent, window, cx| {
                     close(this, cx);
-                    this.open_pane_menu(pane_menu.clone(), event.position(), cx);
+                    this.park_pane(&park, window, cx);
                 },
             )))
             .into_any_element()
@@ -1051,23 +1087,26 @@ impl Workbench {
         let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: true, multiple: true, prompt: None });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else { return };
-            let _ = this.update_in(cx, |this, window, cx| {
-                let Some((input, _)) = this.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
-                let input = input.clone();
-                let quoted: Vec<String> = paths.iter().map(|p| crate::launch::shell_quote(&p.display().to_string())).collect();
-                input.update(cx, |input, cx| {
-                    let mut text = input.text().to_string();
-                    if !text.is_empty() && !text.ends_with(' ') {
-                        text.push(' ');
-                    }
-                    text.push_str(&quoted.join(" "));
-                    text.push(' ');
-                    input.set_text(text, cx);
-                });
-                window.focus(&gpui::Focusable::focus_handle(&input, cx));
-            });
+            let _ = this.update_in(cx, |this, window, cx| this.attach_paths(id, &paths, window, cx));
         })
         .detach();
+    }
+
+    /// Adds `paths` to the composer's message, quoted, after what is written there.
+    pub(super) fn attach_paths(&mut self, id: EntityId, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let Some((input, _)) = self.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
+        let input = input.clone();
+        let quoted: Vec<String> = paths.iter().map(|p| crate::launch::shell_quote(&p.display().to_string())).collect();
+        input.update(cx, |input, cx| {
+            let mut text = input.text().to_string();
+            if !text.is_empty() && !text.ends_with(' ') {
+                text.push(' ');
+            }
+            text.push_str(&quoted.join(" "));
+            text.push(' ');
+            input.set_text(text, cx);
+        });
+        window.focus(&gpui::Focusable::focus_handle(&input, cx));
     }
 }
 
@@ -1183,7 +1222,7 @@ fn tool_text(tool: &str, target: Option<&str>, cx: &App) -> String {
         "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch" => Some("chat.tool_edit"),
         "Read" | "view_image" => Some("chat.tool_read"),
         "Grep" | "Glob" | "LS" | "ToolSearch" => Some("chat.tool_search"),
-        "Bash" | "shell" | "exec_command" | "local_shell" => Some("chat.tool_run"),
+        "Bash" | "shell" | "exec_command" | "exec" | "local_shell" => Some("chat.tool_run"),
         "WebFetch" | "WebSearch" | "web_search" => Some("chat.tool_fetch"),
         _ => None,
     };

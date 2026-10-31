@@ -13,6 +13,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+/// What Claude Code writes as the reply of a turn stopped before any.
+const NO_RESPONSE: &str = "No response requested.";
 /// How much of a tool's output a step keeps.
 const OUTPUT_CHARS: usize = 6_000;
 const OUTPUT_LINES: usize = 80;
@@ -112,7 +114,8 @@ impl Builder {
 
     fn text(&mut self, text: &str) {
         let text = text.trim();
-        if !text.is_empty() {
+        // Claude Code's stand-in reply for a turn that was stopped before it said anything.
+        if !text.is_empty() && text != NO_RESPONSE {
             self.reply().blocks.push(Block::Text(truncate_chars(text, 16_000)));
         }
     }
@@ -291,6 +294,25 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
     (!out.is_empty()).then(|| clip_output(&out.join("\n")))
 }
 
+/// The first command an `exec` script runs (`tools.exec_command({cmd:"…"})`), unescaped.
+fn script_command(script: &str) -> Option<String> {
+    let start = script.find("cmd:\"").map(|at| at + 5).or_else(|| script.find("\"cmd\":\"").map(|at| at + 7))?;
+    let mut out = String::new();
+    let mut chars = script[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out).filter(|s| !s.is_empty()),
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some(other) => out.push(other),
+                None => break,
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
 fn codex_entries(lines: impl Iterator<Item = String>) -> Vec<Entry> {
     let mut b = Builder::default();
     for line in lines {
@@ -344,6 +366,8 @@ fn codex_entries(lines: impl Iterator<Item = String>) -> Vec<Entry> {
                 };
                 let detail = command
                     .or_else(|| str_field(&args, &["cmd", "path", "file_path", "query", "url"]).map(str::to_string))
+                    // Codex's `exec` tool runs a script that calls its tools: the command is in it.
+                    .or_else(|| script_command(raw))
                     .or_else(|| (!raw.is_empty() && args.is_null()).then(|| raw.to_string()))
                     .map(|s| truncate_chars(s.trim(), DETAIL_CHARS));
                 b.step(ToolStep {
@@ -403,6 +427,9 @@ mod tests {
         assert_eq!(step.description.as_deref(), Some("Check Node version"));
         assert_eq!(step.output.as_deref(), Some("v24.22.0"));
         assert_eq!(blocks[3], Block::Text("Done.".into()));
+        let stopped = r#"{"type":"user","message":{"content":"go"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"No response requested."}]}}"#;
+        assert_eq!(claude_entries(lines(stopped)).len(), 1, "the stand-in reply is left out");
     }
 
     #[test]
@@ -439,6 +466,16 @@ mod tests {
         assert_eq!(step.detail.as_deref(), Some("ls -la"));
         assert_eq!(step.output.as_deref(), Some("a\nb"));
         assert_eq!(blocks[2], Block::Text("Done".into()));
+    }
+
+    #[test]
+    fn exec_scripts_name_their_command() {
+        assert_eq!(
+            script_command(r#"text(await tools.exec_command({cmd:"head -n 1 README.md",max_output_tokens:1000}))"#).as_deref(),
+            Some("head -n 1 README.md")
+        );
+        assert_eq!(script_command(r#"{"cmd":"echo \"hi\""}"#).as_deref(), Some(r#"echo "hi""#));
+        assert_eq!(script_command("console.log(1)"), None);
     }
 
     #[test]

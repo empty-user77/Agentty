@@ -127,8 +127,8 @@ pub struct ChatState {
     side_open: bool,
     /// The model menu under the composer.
     model_menu: bool,
-    /// The `⋯` menu of the conversation's bar.
-    bar_menu: bool,
+    /// The bar's menu, and whether it opened from the title (under it) or from `⋯` (at the right).
+    bar_menu: Option<chat_view::MenuFrom>,
     /// The agent's MCP servers, read at most every [`chat_view::MCP_EVERY`]: `None` while read.
     mcp: Option<(Instant, Option<McpServers>)>,
     /// Earlier sessions of the same agent in the same folder, for the start screen: `None` until
@@ -622,7 +622,7 @@ impl Workbench {
                 open: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
                 side_open: true,
                 model_menu: false,
-                bar_menu: false,
+                bar_menu: None,
                 mcp: None,
                 recent: None,
                 recent_loading: false,
@@ -868,9 +868,11 @@ impl Workbench {
         self.chat_delivery_tick(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
-        // Until the lead has its instructions (a plain chat: until it has said anything), its
-        // first-run screens may be in the way.
-        let early = !state.briefed || (state.plain && state.items.is_empty());
+        // Until the lead has its instructions, its first-run screens may be in the way. A plain
+        // chat looks every time: an agent started again on an old conversation (an app restart)
+        // shows them over its history, and their answers (an update to install) belong in the
+        // terminal, not on a button.
+        let early = !state.briefed || state.plain;
         let setup = early && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
         let session = view.current_session();
         if setup != state.setup_screen {
@@ -1798,6 +1800,11 @@ impl Workbench {
                     self.toggle_chat_terminal(id, window, cx);
                 }
             }
+            // What the composer's `+` does once files are picked (the picker itself is the system's).
+            ("attach", path) => {
+                let Some(id) = front else { return eprintln!("agentty: no chat in front") };
+                self.attach_paths(id, &[PathBuf::from(path.trim())], window, cx);
+            }
             ("worker", _) | ("reviewer", _) => {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
                 let next = if argument == "worker" { ChatRoles::next_worker } else { ChatRoles::next_reviewer };
@@ -1898,16 +1905,31 @@ fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
 }
 
 /// The options of the selection at the bottom of an agent's screen (an approval, a question), top
-/// to bottom, and the one highlighted. None without at least two numbered options.
+/// to bottom, and the one highlighted. None without at least two numbered options. An option too
+/// long for the screen goes on in the lines under it, indented to its text: they are joined to it.
 pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
     let mut choices: Vec<String> = Vec::new();
     let mut current = 0;
+    // The column the last option's text starts at, while the lines after it may go on with it.
+    let mut text_column: Option<usize> = None;
     for line in lines {
         let trimmed = line.trim_start_matches(|c: char| c.is_whitespace() || c == '│');
         let marked = trimmed.starts_with(['❯', '›', '>']);
         let rest = trimmed.trim_start_matches(['❯', '›', '>']).trim_start();
         let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        let Some(label) = rest[digits..].strip_prefix(". ").filter(|_| digits > 0) else { continue };
+        let option = rest[digits..].strip_prefix(". ").filter(|_| digits > 0);
+        let Some(label) = option else {
+            let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+            match (text_column, choices.last_mut()) {
+                (Some(column), Some(last)) if !trimmed.is_empty() && indent >= column => {
+                    last.push(' ');
+                    last.push_str(trimmed.trim_end_matches('│').trim());
+                }
+                _ => text_column = None,
+            }
+            continue;
+        };
+        text_column = Some(line.chars().count() - label.chars().count());
         let Ok(number) = rest[..digits].parse::<usize>() else { continue };
         // A list starting again from 1 is a newer one: only the last counts.
         if number == 1 {
@@ -2259,6 +2281,17 @@ mod tests {
         let (choices, current) = screen_choices(&claude).unwrap();
         assert_eq!(choices.len(), 3);
         assert_eq!((choices[0].as_str(), current), ("Yes", 0));
+        let wrapped = lines(&[
+            " Do you want to proceed?",
+            " ❯ 1. Yes",
+            "   2. Yes, and always allow access to",
+            "      /tmp/project",
+            "   3. No",
+            "",
+            " Esc to cancel · Tab to amend",
+        ]);
+        let (choices, _) = screen_choices(&wrapped).unwrap();
+        assert_eq!(choices, vec!["Yes", "Yes, and always allow access to /tmp/project", "No"]);
         let codex = lines(&["  Allow command?", "    1. Yes, proceed (y)", "  › 2. Yes, and don't ask again (a)", "    3. No (esc)"]);
         assert_eq!(screen_choices(&codex).map(|(_, current)| current), Some(1));
         assert!(screen_choices(&lines(&["1. only one"])).is_none());
