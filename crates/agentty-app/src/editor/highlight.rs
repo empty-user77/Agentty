@@ -186,6 +186,47 @@ impl Highlights {
     }
 }
 
+/// Colors a whole snippet at once (a chat's code blocks and tool output): one span list per line.
+/// The grammar is the language `token` (a code fence's `rust`, `sh`, …) or the file's extension;
+/// None without one, or while the grammars are still loading.
+pub fn snippet(text: &str, token: Option<&str>, path: Option<&Path>) -> Option<Vec<Vec<Span>>> {
+    let set = syntaxes()?;
+    let syntax = token
+        .and_then(|t| set.find_syntax_by_token(t))
+        .or_else(|| path.and_then(|p| p.extension()).and_then(|e| set.find_syntax_by_extension(&e.to_string_lossy())))
+        .filter(|syntax| syntax.name != "Plain Text")?;
+    let highlighter = Highlighter::new(theme());
+    let mut parse = ParseState::new(syntax);
+    let mut state = HighlightState::new(&highlighter, ScopeStack::new());
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.len() > MAX_LINE {
+            out.push(vec![Span { len: line.len(), color: FOREGROUND, bold: false, italic: false }]);
+            continue;
+        }
+        let with_newline = format!("{line}\n");
+        let ops = parse.parse_line(&with_newline, set).ok()?;
+        let mut spans = Vec::new();
+        let mut used = 0;
+        for (style, piece) in HighlightIterator::new(&mut state, &ops, &with_newline, &highlighter) {
+            let len = piece.len().min(line.len() - used);
+            if len == 0 {
+                continue;
+            }
+            used += len;
+            let color = (style.foreground.r as u32) << 16 | (style.foreground.g as u32) << 8 | style.foreground.b as u32;
+            spans.push(Span {
+                len,
+                color,
+                bold: style.font_style.contains(FontStyle::BOLD),
+                italic: style.font_style.contains(FontStyle::ITALIC),
+            });
+        }
+        out.push(spans);
+    }
+    Some(out)
+}
+
 fn rgb(value: u32) -> Color {
     Color { r: (value >> 16) as u8, g: (value >> 8) as u8, b: value as u8, a: 0xff }
 }

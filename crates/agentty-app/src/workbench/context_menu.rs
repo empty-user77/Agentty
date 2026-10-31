@@ -196,7 +196,7 @@ impl Workbench {
         )
     }
 
-    fn render_context_body(&self, pane: &super::Pane, s: &ContextSnapshot, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_context_body(&self, pane: &super::Pane, s: &ContextSnapshot, cx: &mut Context<Self>) -> impl IntoElement {
         let section = |title: String, count: Option<usize>| {
             div()
                 .px_2()

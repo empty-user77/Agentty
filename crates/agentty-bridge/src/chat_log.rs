@@ -97,6 +97,8 @@ struct Builder {
     steps: HashMap<String, (usize, usize)>,
     /// Claude Code's task tools change one list over the whole session.
     tasks: Vec<(String, Todo)>,
+    /// Tasks created so far: Claude Code numbers them on, deleted ones included.
+    tasks_created: usize,
 }
 
 impl Builder {
@@ -235,7 +237,8 @@ fn claude_tool(b: &mut Builder, block: &Value) {
         }
         "TaskCreate" => {
             if let Some(text) = str_field(input, &["subject", "content"]) {
-                let id = (b.tasks.len() + 1).to_string();
+                b.tasks_created += 1;
+                let id = b.tasks_created.to_string();
                 let active = str_field(input, &["activeForm"]).map(str::to_string);
                 b.tasks.push((id, Todo { text: text.to_string(), active, status: TodoStatus::Pending }));
                 let todos = b.tasks.iter().map(|(_, t)| t.clone()).collect();
@@ -439,6 +442,24 @@ mod tests {
         let write = serde_json::json!({ "content": "x" });
         assert_eq!(edit_diff("Write", &write).as_deref(), Some("+x"));
         assert_eq!(edit_diff("Bash", &edit), None);
+    }
+
+    #[test]
+    fn task_numbers_go_on_past_deleted_ones() {
+        let call = |id: &str, name: &str, input: &str| format!(r#"{{"type":"tool_use","id":"{id}","name":"{name}","input":{input}}}"#);
+        let calls = [
+            call("a", "TaskCreate", r#"{"subject":"One"}"#),
+            call("b", "TaskCreate", r#"{"subject":"Two"}"#),
+            call("c", "TaskCreate", r#"{"subject":"Three"}"#),
+            call("d", "TaskUpdate", r#"{"taskId":"2","status":"deleted"}"#),
+            call("e", "TaskCreate", r#"{"subject":"Four"}"#),
+            call("f", "TaskUpdate", r#"{"taskId":"4","status":"completed"}"#),
+        ];
+        let log = format!(r#"{{"type":"assistant","message":{{"content":[{}]}}}}"#, calls.join(","));
+        let entries = claude_entries(lines(&log));
+        let Block::Todos(todos) = &entries[0].blocks[0] else { panic!() };
+        let shown: Vec<(&str, TodoStatus)> = todos.iter().map(|t| (t.text.as_str(), t.status)).collect();
+        assert_eq!(shown, vec![("One", TodoStatus::Pending), ("Three", TodoStatus::Pending), ("Four", TodoStatus::Completed)]);
     }
 
     #[test]

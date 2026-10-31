@@ -67,6 +67,12 @@ pub enum TerminalEvent {
     },
     /// Clicked a link (URL in the text or an OSC 8 hyperlink).
     OpenLink(String),
+    /// Text was just selected with the mouse: the program's own selection it copied (OSC 52), or
+    /// the terminal's. `at`: where the button was let go, in the window.
+    Selected {
+        text: String,
+        at: Point<Pixels>,
+    },
     /// Clicked a file or folder path printed in the terminal: show it in Finder.
     /// A file or folder clicked in the text; for a file, the `line:column` written after it
     /// (from 1), when one was.
@@ -283,6 +289,9 @@ pub struct TerminalView {
     layout: Option<Layout>,
     scroll_remainder: f32,
     selecting: bool,
+    /// Where and when the left button was last let go: a copy the program makes right after it is
+    /// the user's selection.
+    last_mouse_up: Option<(Point<Pixels>, Instant)>,
     /// The selection the user made and its text when last seen. A program redrawing a line
     /// (Codex its prompt, every frame) makes the terminal drop any selection touching it, even
     /// when the same text is written back; it comes back as long as its text is unchanged.
@@ -477,6 +486,7 @@ impl TerminalView {
             layout: None,
             scroll_remainder: 0.,
             selecting: false,
+            last_mouse_up: None,
             kept_selection: None,
             search: None,
             mouse_reporting: false,
@@ -1838,7 +1848,14 @@ impl TerminalView {
                     cx.emit(TerminalEvent::TitleChanged);
                 }
                 TermEvent::PtyWrite(text) => self.write(text.into_bytes()),
-                TermEvent::ClipboardStore(_, text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+                TermEvent::ClipboardStore(_, text) => {
+                    // A copy right after the button was let go is the program's own selection
+                    // (Claude Code copies what is dragged over).
+                    if let Some((at, _)) = self.last_mouse_up.filter(|(_, when)| when.elapsed() < Duration::from_millis(1500)) {
+                        cx.emit(TerminalEvent::Selected { text: text.clone(), at });
+                    }
+                    cx.write_to_clipboard(ClipboardItem::new_string(text))
+                }
                 // Programs may not read the clipboard via OSC 52: any output (a `cat`-ed file, a remote
                 // host) could otherwise exfiltrate it. Writes are still allowed.
                 TermEvent::ClipboardLoad(..) => {}
@@ -2237,6 +2254,7 @@ impl TerminalView {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.last_mouse_up = Some((event.position, Instant::now()));
         if std::mem::take(&mut self.mouse_reporting) {
             self.last_mouse_cell = None;
             if let Some(cell) = self.viewport_cell(event.position) {
@@ -2244,15 +2262,22 @@ impl TerminalView {
             }
             return;
         }
-        self.selecting = false;
+        let dragged = std::mem::take(&mut self.selecting);
         self.restore_selection();
         let mut empty_selection = true;
+        let mut selected = None;
         if let Some(backend) = &self.backend {
             let mut term = backend.term.lock();
             if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
                 term.selection = None;
             }
             empty_selection = term.selection.is_none();
+            if dragged {
+                selected = term.selection_to_string().filter(|text| !text.trim().is_empty());
+            }
+        }
+        if let Some(text) = selected {
+            cx.emit(TerminalEvent::Selected { text, at: event.position });
         }
         if empty_selection {
             self.kept_selection = None;

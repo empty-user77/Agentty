@@ -340,8 +340,7 @@ impl Workbench {
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
         // A pane shown as a chat has the same facts under its composer and in its panel.
-        let mut agent_bar =
-            (!split && prefs_bar && !self.plain_chat_in_front(pane, cx)).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        let mut agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
         // Chat view: the conversation in place of the terminal, or the way back to it over the terminal.
         let chat = self.render_plain_chat(pane, cx);
         let chat_return = chat.is_none().then(|| self.render_plain_chat_return(pane, cx)).flatten();
@@ -664,7 +663,7 @@ impl Workbench {
     /// Opens the pane's branch in the default browser: `origin`'s web page for it, or the repository's
     /// page while the branch has not been pushed (its page would be a 404). Always the external
     /// browser, whatever links are set to open in: repository hosts need the user's own login.
-    fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+    pub(super) fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         let (repo, branch, pushed) = {
             let view = pane.read(cx);
             (view.display_cwd(), view.git_branch.clone(), view.git_ahead.is_some())

@@ -500,6 +500,7 @@ fn bind_keys(cx: &mut App) {
         key("cmd-shift-t", git_view::Fetch, Some("GitView")),
         key("cmd-r", git_view::Refresh, Some("GitView")),
         key("cmd-c", terminal::Copy, Some("Terminal")),
+        key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
         key("cmd-v", terminal::Paste, Some("Terminal")),
         key("cmd-k", terminal::Clear, Some("Terminal")),
         key("cmd-a", terminal::SelectAll, Some("Terminal")),

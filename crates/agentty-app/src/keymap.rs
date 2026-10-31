@@ -326,6 +326,7 @@ mod tests {
         ("cmd-shift-t", Some("GitView")),
         ("cmd-r", Some("GitView")),
         ("cmd-c", Some("Terminal")),
+        ("cmd-c", Some("ChatReading")),
         ("cmd-v", Some("Terminal")),
         ("cmd-k", Some("Terminal")),
         ("cmd-a", Some("Terminal")),

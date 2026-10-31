@@ -41,6 +41,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod chat_view;
+mod selectable;
+pub(super) mod selection_ui;
 
 /// Workers on screen at once, in a grid of two columns.
 pub const MAX_WORKERS: usize = 4;
@@ -51,6 +53,9 @@ const BRIEF_END: &str = "<!-- /agentty:chat-lead -->";
 const REPORT_MARK: &str = "[Agentty]";
 /// How often the lead's transcript is checked for news.
 const WATCH_INTERVAL: Duration = Duration::from_millis(700);
+/// How long a plain chat waits for its agent to name its conversation before it shows the start
+/// screen (an agent started a moment ago names it only after its first screen).
+const FIRST_LOAD_WAIT: Duration = Duration::from_millis(1500);
 /// A lead whose screen never shows its input box (an unknown layout) is taken as ready after this.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// The briefing is not in the transcript this long after it was typed: its Enter may have gone
@@ -114,23 +119,18 @@ pub enum ChatItem {
     Reply(Arc<Vec<agentty_bridge::chat_log::Block>>),
 }
 
-/// The agent's MCP servers as `mcp list` told them, or why it could not.
-type McpServers = Result<Vec<agentty_bridge::extensions::McpStatus>, String>;
-
 pub struct ChatState {
     pub lead: Pane,
     /// A pane shown as a chat by chat view: no team, no briefing (see the module docs).
     plain: bool,
     /// Tool steps and step groups the user opened (by step id, `group:<first step id>`).
     open: Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
-    /// Chat view's panel beside the conversation (where it works, context, usage, connectors).
-    side_open: bool,
     /// The model menu under the composer.
     model_menu: bool,
-    /// The bar's menu, and whether it opened from the title (under it) or from `⋯` (at the right).
-    bar_menu: Option<chat_view::MenuFrom>,
-    /// The agent's MCP servers, read at most every [`chat_view::MCP_EVERY`]: `None` while read.
-    mcp: Option<(Instant, Option<McpServers>)>,
+    /// Files the next message carries (a plain chat's composer: `+` or dropped on the chat).
+    attachments: Vec<PathBuf>,
+    /// What the next message replies to: a selection, quoted in front of it.
+    quote: Option<String>,
     /// Earlier sessions of the same agent in the same folder, for the start screen: `None` until
     /// read (once, while the chat is empty).
     recent: Option<Vec<agentty_bridge::model::SessionInfo>>,
@@ -142,6 +142,8 @@ pub struct ChatState {
     usage_checked: Option<std::time::Instant>,
     usage_loading: bool,
     input: Option<(Entity<TextInput>, Subscription)>,
+    /// A plain chat's conversation once its text is pressed: ⌘C copies what is selected there.
+    reading: gpui::FocusHandle,
     /// From the transcript.
     items: Vec<ChatItem>,
     /// Messages sent from the chat that the transcript does not show yet.
@@ -151,6 +153,8 @@ pub struct ChatState {
     list: ListState,
     /// The list follows the newest entry: the user has not scrolled up to read something older.
     follow: Rc<std::cell::Cell<bool>>,
+    /// The newest entry is out of view (a plain chat then offers to jump back to it).
+    away: Rc<std::cell::Cell<bool>>,
     /// The lead has had its instructions (they are in its transcript, or were just sent).
     briefed: bool,
     /// The lead's transcript shows its instructions: it has received them and is ready for input.
@@ -172,6 +176,9 @@ pub struct ChatState {
     transcript: Option<(String, PathBuf)>,
     seen_len: u64,
     loading: bool,
+    /// A plain chat that hasn't read its conversation yet, since when: its terminal stays in front
+    /// meanwhile, so switching to the chat never flashes the start screen before the history.
+    first_load: Option<Instant>,
     _watch: Task<()>,
 }
 
@@ -425,6 +432,8 @@ fn input_ready(lines: &[String]) -> bool {
             || line.contains("auto-accept edits")
             || line.contains("plan mode on")
             || line.starts_with("❯")
+            // Codex's composer.
+            || line.starts_with("› ")
             || line.starts_with("│ >")
             || line.starts_with("> ")
     })
@@ -602,28 +611,45 @@ impl Workbench {
 
     fn insert_chat(&mut self, lead: &Pane, roles: ChatRoles, plain: bool, cx: &mut Context<Self>) {
         let id = lead.entity_id();
+        // A plain chat reads its conversation at once: its terminal is in front until then.
+        let mut wait = !plain;
         let watch = cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(WATCH_INTERVAL).await;
+            if wait {
+                cx.background_executor().timer(WATCH_INTERVAL).await;
+            }
+            wait = true;
             match this.update(cx, |this, cx| this.poll_chat(id, cx)) {
                 Ok(true) => {}
                 _ => break,
             }
         });
         let list = ListState::new(0, ListAlignment::Bottom, px(600.));
+        // Chat view colors code with the editor's grammars: loaded off the UI thread, once.
+        if plain && crate::editor::highlight::syntaxes().is_none() {
+            cx.background_spawn(async { crate::editor::highlight::load() }).detach();
+        }
         let follow = Rc::new(std::cell::Cell::new(true));
         // At the bottom the list sticks to it; scrolled up, it stays where the user is reading.
         let following = follow.clone();
-        list.set_scroll_handler(move |event, _, _| following.set(!event.is_scrolled));
+        let away = Rc::new(std::cell::Cell::new(false));
+        let away_now = away.clone();
+        list.set_scroll_handler(move |event, window, _| {
+            following.set(!event.is_scrolled);
+            // Drawn again only when the jump button comes or goes.
+            let out_of_view = event.visible_range.end < event.count;
+            if away_now.replace(out_of_view) != out_of_view {
+                window.refresh();
+            }
+        });
         self.chats.insert(
             id,
             ChatState {
                 lead: lead.clone(),
                 plain,
                 open: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
-                side_open: true,
                 model_menu: false,
-                bar_menu: None,
-                mcp: None,
+                attachments: Vec::new(),
+                quote: None,
                 recent: None,
                 recent_loading: false,
                 roles,
@@ -631,11 +657,13 @@ impl Workbench {
                 usage_checked: None,
                 usage_loading: false,
                 input: None,
+                reading: cx.focus_handle(),
                 items: Vec::new(),
                 echo: Vec::new(),
                 shown: Rc::new(Vec::new()),
                 list,
                 follow,
+                away,
                 // A plain chat has no instructions to give.
                 briefed: plain,
                 brief_seen: false,
@@ -645,10 +673,16 @@ impl Workbench {
                 quiet_since: Instant::now(),
                 show_terminal: false,
                 setup_screen: false,
-                pending: Vec::new(),
+                // A side chat opened with a question about a selection asks it first.
+                pending: self
+                    .side_questions
+                    .remove(&id)
+                    .map(|question| vec![Pending::User { prompt: question.clone(), echo: question }])
+                    .unwrap_or_default(),
                 transcript: None,
                 seen_len: 0,
                 loading: false,
+                first_load: plain.then(Instant::now),
                 _watch: watch,
             },
         );
@@ -691,15 +725,38 @@ impl Workbench {
     }
 
     /// Chat view on or off: every agent pane is drawn as a chat, or as its terminal again.
+    /// Switches the pane in front between its chat and its terminal; the other panes keep theirs.
+    /// How agents start is the setting's (`chat_view`).
     pub(super) fn toggle_chat_view(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let on = !crate::settings::settings(cx).chat_view;
-        crate::settings::update_settings(cx, |s| s.chat_view = on);
+        let Some(pane) = self.active_pane() else { return };
+        let id = pane.entity_id();
+        let on = match self.chats.get_mut(&id).filter(|state| state.plain) {
+            // A chat: to its terminal and back, keeping everything it holds.
+            Some(state) => {
+                state.show_terminal = !state.show_terminal;
+                !state.show_terminal
+            }
+            None if shows_as_chat(&pane, cx) => {
+                self.chat_modes.insert(id, true);
+                true
+            }
+            // A shell or a chat workspace's pane: nothing to switch.
+            None => return,
+        };
         if on {
             crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "chat_view" }));
         }
         // The keyboard follows: to the composer, or back to the terminal.
         self.refocus = true;
         cx.notify();
+    }
+
+    /// Whether the title bar's chat button shows on: the pane in front shows its chat.
+    pub(super) fn chat_view_shown(&self, _cx: &App) -> bool {
+        self.active_pane()
+            .and_then(|pane| self.chats.get(&pane.entity_id()))
+            .filter(|state| state.plain)
+            .is_some_and(|state| !state.show_terminal)
     }
 
     /// The lead of the chat tab `pane` is in (the pane itself when it is the lead).
@@ -740,7 +797,9 @@ impl Workbench {
     /// The composer to put the keyboard in instead of `pane`, when `pane` is a lead shown as a chat.
     pub(super) fn chat_input_for(&self, pane: &Pane, cx: &App) -> Option<Entity<TextInput>> {
         let state = self.chats.get(&pane.entity_id())?;
-        if !self.chat_in_front(state, cx) {
+        // A plain chat keeps its terminal in front until its conversation is read: the keyboard
+        // stays there meanwhile.
+        if !self.chat_in_front(state, cx) || state.first_load.is_some() {
             return None;
         }
         state.input.as_ref().map(|(input, _)| input.clone())
@@ -749,18 +808,25 @@ impl Workbench {
     /// Forgets chats whose lead is gone, and gives new ones their composer.
     pub(super) fn prepare_chats(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chat_view = crate::settings::settings(cx).chat_view;
-        if self.chats.is_empty() && !chat_view {
-            return;
-        }
+
         let panes = self.all_panes();
         let alive: std::collections::HashSet<EntityId> = panes.iter().map(|p| p.entity_id()).collect();
-        // Chat view: agent panes become chats, and stop being one when it is off or their agent left.
-        self.chats.retain(|id, state| alive.contains(id) && (!state.plain || (chat_view && shows_as_chat(&state.lead, cx))));
-        if chat_view {
-            let new: Vec<Pane> = panes.into_iter().filter(|p| !self.chats.contains_key(&p.entity_id()) && shows_as_chat(p, cx)).collect();
-            for pane in new {
-                self.insert_chat(&pane, ChatRoles::default(), true, cx);
+        self.chat_modes.retain(|id, _| alive.contains(id));
+        // An agent takes the setting when it starts (in a terminal too: `claude` typed into a
+        // shell); changing the setting later leaves running agents as they are.
+        for pane in &panes {
+            if !self.chat_modes.contains_key(&pane.entity_id()) && shows_as_chat(pane, cx) {
+                self.chat_modes.insert(pane.entity_id(), chat_view);
             }
+        }
+        // Chat view: agent panes become chats (each by its own choice, else by the setting), and stop
+        // being one when switched off or when their agent left.
+        let modes = &self.chat_modes;
+        let wanted = |pane: &Pane, cx: &App| modes.get(&pane.entity_id()).copied().unwrap_or(chat_view) && shows_as_chat(pane, cx);
+        self.chats.retain(|id, state| alive.contains(id) && (!state.plain || wanted(&state.lead, cx)));
+        let new: Vec<Pane> = panes.into_iter().filter(|p| !self.chats.contains_key(&p.entity_id()) && wanted(p, cx)).collect();
+        for pane in new {
+            self.insert_chat(&pane, ChatRoles::default(), true, cx);
         }
         let missing: Vec<(EntityId, bool)> = self.chats.iter().filter(|(_, s)| s.input.is_none()).map(|(id, s)| (*id, s.plain)).collect();
         for (id, plain) in missing {
@@ -806,7 +872,8 @@ impl Workbench {
     fn refresh_chat_usage(&mut self, id: EntityId, cx: &mut Context<Self>) {
         let agents = self.chat_agents(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return };
-        if state.usage_loading || state.usage_checked.is_some_and(|at| at.elapsed() < USAGE_EVERY) {
+        // Chat view shows no plan usage (the status bar has it): only a chat workspace's lead reads it.
+        if state.plain || state.usage_loading || state.usage_checked.is_some_and(|at| at.elapsed() < USAGE_EVERY) {
             return;
         }
         state.usage_loading = true;
@@ -863,7 +930,6 @@ impl Workbench {
     /// Reads the lead's transcript again when it grew. False once the chat is gone (the watch ends).
     fn poll_chat(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
         self.refresh_chat_usage(id, cx);
-        self.refresh_chat_mcp(id, cx);
         self.refresh_chat_recent(id, cx);
         self.chat_delivery_tick(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
@@ -882,7 +948,14 @@ impl Workbench {
         if state.loading {
             return true;
         }
-        let Some(session) = session else { return true };
+        let Some(session) = session else {
+            // An agent that has no conversation yet (or doesn't say which) starts on the start screen.
+            if state.first_load.is_some_and(|since| since.elapsed() >= FIRST_LOAD_WAIT) {
+                state.first_load = None;
+                cx.notify();
+            }
+            return true;
+        };
         let agent = chat_lead_agent(&state.lead, cx);
         let plain = state.plain;
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
@@ -925,6 +998,9 @@ impl Workbench {
     ) {
         let Some(state) = self.chats.get_mut(&id) else { return };
         state.loading = false;
+        if state.first_load.take().is_some() {
+            cx.notify();
+        }
         let Some((session, path, len, items)) = loaded else { return };
         state.transcript = Some((session, path));
         state.seen_len = len;
@@ -962,6 +1038,16 @@ impl Workbench {
         let Some((input, _)) = self.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
         let input = input.clone();
         let text = input.read(cx).text().trim().to_string();
+        // Attached files go in front, as their paths: what dragging them onto the terminal types.
+        let attached = self.chats.get_mut(&id).map(|state| std::mem::take(&mut state.attachments)).unwrap_or_default();
+        let paths: Vec<String> = attached.iter().map(|p| crate::launch::shell_quote(&p.display().to_string())).collect();
+        // A reply carries what it answers, quoted before the words; attached files go first of all,
+        // where the bubble looks for them.
+        let text = match self.chats.get_mut(&id).and_then(|state| state.quote.take()) {
+            Some(quote) => selection_ui::quoted(&quote, &text),
+            None => text,
+        };
+        let text = [paths.join(" "), text].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             return;
         }
@@ -1052,10 +1138,7 @@ impl Workbench {
             state.quiet_since = Instant::now();
             return false;
         }
-        state.brief_seen
-            || (state.plain && !state.items.is_empty())
-            || input_ready(&view.screen_lines(40))
-            || state.quiet_since.elapsed() >= READY_TIMEOUT
+        state.brief_seen || input_ready(&view.screen_lines(40)) || state.quiet_since.elapsed() >= READY_TIMEOUT
     }
 
     /// Keeps messages moving: what waited for the lead to start goes in once it is ready, and a
@@ -1805,6 +1888,8 @@ impl Workbench {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
                 self.attach_paths(id, &[PathBuf::from(path.trim())], window, cx);
             }
+            // What ⌘C would copy from the selection in the chat (the driver sends no ⌘ keys).
+            ("copy", _) => eprintln!("chat-copy: {:?}", selectable::selected_text()),
             ("worker", _) | ("reviewer", _) => {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
                 let next = if argument == "worker" { ChatRoles::next_worker } else { ChatRoles::next_reviewer };
@@ -1848,23 +1933,60 @@ struct Rows {
     plain: bool,
     open: Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     list: ListState,
+    follow: Rc<std::cell::Cell<bool>>,
+    /// The chat's pane, as a number: where its text's selection belongs.
+    chat: u64,
     workbench: gpui::WeakEntity<Workbench>,
 }
 
 impl Rows {
+    /// How far down the view starts, in pixels. At the bottom the list only says "the end" (which
+    /// would keep the newest row in view as a row grows): the view starts its height above the end.
+    fn pixel_top(&self) -> gpui::Pixels {
+        let most = self.list.max_offset_for_scrollbar().height;
+        (-self.list.scroll_px_offset_for_scrollbar().y).min(most)
+    }
+
     fn is_open(&self, key: &str) -> bool {
         self.open.borrow().contains(key)
     }
 
     /// Opens or closes `key` in row `index`, which is measured again.
-    fn toggle(&self, index: usize, key: &str, cx: &mut App) {
-        {
+    /// `clicked_at`: where the row's header was clicked (window y), the most it may move up by.
+    fn toggle(&self, index: usize, key: &str, clicked_at: gpui::Pixels, window: &mut Window, cx: &mut App) {
+        let opening = {
             let mut open = self.open.borrow_mut();
-            if !open.remove(key) {
+            let opening = !open.remove(key);
+            if opening {
                 open.insert(key.to_string());
             }
-        }
+            opening
+        };
+        // A plain chat keeps what is above where it stands: the row opens downwards from its
+        // header, rather than growing upwards from the bottom the list sticks to.
+        let top = self.plain.then(|| self.pixel_top());
         self.list.splice(index..index + 1, 1);
+        // The rows above keep their height: the same pixel offset keeps them where they are.
+        if let Some(top) = top {
+            self.follow.set(false);
+            self.list.scroll_to(gpui::ListOffset { item_ix: 0, offset_in_item: px(0.) });
+            self.list.scroll_by(top);
+            // What opened near the bottom would stay out of sight: once it is measured, bring it
+            // up, as far as keeping its header in view allows.
+            if opening {
+                let list = self.list.clone();
+                window.on_next_frame(move |window, _| {
+                    let (Some(row), viewport) = (list.bounds_for_item(index), list.viewport_bounds()) else { return };
+                    let below = row.bottom() - viewport.bottom();
+                    let room = clicked_at - viewport.top() - px(12.);
+                    let by = below.min(room);
+                    if by > px(0.) {
+                        list.scroll_by(by);
+                        window.refresh();
+                    }
+                });
+            }
+        }
         let _ = self.workbench.update(cx, |_, cx| cx.notify());
     }
 }
@@ -1873,7 +1995,14 @@ impl Rows {
 fn message_list(state: &ChatState, cx: &mut Context<Workbench>) -> AnyElement {
     let items = state.shown.clone();
     let lead = chat_lead_agent(&state.lead, cx).id();
-    let rows = Rows { plain: state.plain, open: state.open.clone(), list: state.list.clone(), workbench: cx.entity().downgrade() };
+    let rows = Rows {
+        plain: state.plain,
+        open: state.open.clone(),
+        list: state.list.clone(),
+        follow: state.follow.clone(),
+        chat: state.lead.entity_id().as_u64(),
+        workbench: cx.entity().downgrade(),
+    };
     let rows = list(state.list.clone(), move |index, _, cx| match items.get(index) {
         Some(item) if rows.plain => {
             div().w_full().px_4().pt_3().child(column(render_item(index, item, lead, &rows, cx))).into_any_element()
@@ -1890,6 +2019,37 @@ fn message_list(state: &ChatState, cx: &mut Context<Workbench>) -> AnyElement {
         .min_h_0()
         .child(rows)
         .child(crate::ui::list_scrollbar(state.list.clone()))
+        // Read back up in a plain chat: a button at the foot jumps to the newest entry.
+        .when(state.plain && state.away.get(), |d| {
+            let id = state.lead.entity_id();
+            d.child(
+                div().absolute().bottom_3().left_0().right_0().flex().justify_center().child(
+                    div()
+                        .id("chat-jump-latest")
+                        .size(px(32.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .bg(hex(Chrome::PANEL))
+                        .border_1()
+                        .border_color(hex(Chrome::BORDER))
+                        .shadow_md()
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "chat.jump_latest"), None))
+                        .child(icon("arrow-down", 16., hex(Chrome::BRIGHT)))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Some(state) = this.chats.get_mut(&id) {
+                                state.follow.set(true);
+                                state.away.set(false);
+                                state.list.reset(state.shown.len());
+                            }
+                            cx.notify();
+                        })),
+                ),
+            )
+        })
         .into_any_element()
 }
 
@@ -1910,6 +2070,8 @@ fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
 pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
     let mut choices: Vec<String> = Vec::new();
     let mut current = 0;
+    // A selection always shows which option is highlighted; a numbered list in a reply doesn't.
+    let mut highlighted = false;
     // The column the last option's text starts at, while the lines after it may go on with it.
     let mut text_column: Option<usize> = None;
     for line in lines {
@@ -1935,15 +2097,17 @@ pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
         if number == 1 {
             choices.clear();
             current = 0;
+            highlighted = false;
         } else if number != choices.len() + 1 {
             continue;
         }
         if marked {
             current = choices.len();
+            highlighted = true;
         }
         choices.push(label.trim_end_matches('│').trim().to_string());
     }
-    (choices.len() >= 2).then_some((choices, current))
+    (choices.len() >= 2 && highlighted).then_some((choices, current))
 }
 
 /// Keys that move a selection from `current` to `target` and pick it.
@@ -1955,21 +2119,65 @@ fn choice_keys(current: usize, target: usize) -> Vec<u8> {
 }
 
 fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, cx: &App) -> AnyElement {
+    // Chat view's text knows where in the conversation it is (for a selection across blocks).
+    selectable::begin_item(rows.chat, index);
     let row = div().id(SharedString::from(format!("chat-item-{index}"))).w_full().flex();
     match item {
         // Chat view: a neutral bubble, as a chat app draws it.
-        ChatItem::User(text) if rows.plain => row
-            .justify_end()
-            .child(
-                div()
-                    .max_w(gpui::relative(0.8))
-                    .px_3()
-                    .py_2()
-                    .rounded_xl()
-                    .bg(hex(Chrome::SELECTED))
-                    .child(text_block(text, Chrome::BRIGHT)),
-            )
-            .into_any_element(),
+        // Files sent with it (their paths lead the message) show as what they are, over the words.
+        ChatItem::User(text) if rows.plain => {
+            let (files, words) = chat_view::sent_attachments(text);
+            // A reply's quote (its `> ` lines up front) is drawn as a quote, over what was asked.
+            let quote: Vec<&str> =
+                words.lines().map_while(|line| line.strip_prefix("> ").or_else(|| (line == ">").then_some(""))).collect();
+            let words = if quote.is_empty() {
+                words
+            } else {
+                words.splitn(quote.len() + 1, '\n').nth(quote.len()).unwrap_or_default().trim_start()
+            };
+            let quote = (!quote.is_empty()).then(|| {
+                div().w_full().flex().justify_end().child(
+                    div()
+                        .max_w(gpui::relative(0.8))
+                        .pl_2()
+                        .border_l_2()
+                        .border_color(hex(Chrome::BORDER))
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .flex()
+                        .flex_col()
+                        .children(quote.iter().map(|line| {
+                            selectable::selectable(if line.is_empty() { " ".to_string() } else { line.to_string() }, Vec::new())
+                        })),
+                )
+            });
+            let bubble = (!words.is_empty()).then(|| {
+                div().w_full().flex().justify_end().child(
+                    div()
+                        .max_w(gpui::relative(0.8))
+                        .px_3()
+                        .py_2()
+                        .rounded_xl()
+                        .bg(hex(Chrome::SELECTED))
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .t_body()
+                        .text_color(hex(Chrome::BRIGHT))
+                        .children(words.lines().map(|line| {
+                            selectable::selectable(if line.is_empty() { " ".to_string() } else { line.to_string() }, Vec::new())
+                        })),
+                )
+            });
+            row.flex_col()
+                .gap_1p5()
+                .when(!files.is_empty(), |d| {
+                    d.child(div().w_full().flex().justify_end().child(chat_view::sent_tiles(&files).max_w(gpui::relative(0.8))))
+                })
+                .children(quote)
+                .children(bubble)
+                .into_any_element()
+        }
         ChatItem::User(text) => row
             .justify_end()
             .child(
@@ -2295,6 +2503,8 @@ mod tests {
         let codex = lines(&["  Allow command?", "    1. Yes, proceed (y)", "  › 2. Yes, and don't ask again (a)", "    3. No (esc)"]);
         assert_eq!(screen_choices(&codex).map(|(_, current)| current), Some(1));
         assert!(screen_choices(&lines(&["1. only one"])).is_none());
+        // A numbered list in a reply, with no option highlighted, is not a selection.
+        assert!(screen_choices(&lines(&["● Next steps:", "  1. Refactor X", "  2. Add tests", "", "❯ "])).is_none());
         assert_eq!(choice_keys(0, 2), b"\x1b[B\x1b[B\r".to_vec());
         assert_eq!(choice_keys(1, 0), b"\x1b[A\r".to_vec());
         assert_eq!(choice_keys(1, 1), b"\r".to_vec());

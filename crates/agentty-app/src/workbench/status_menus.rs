@@ -307,12 +307,30 @@ impl Workbench {
                             McpHealth::Disabled => (Chrome::MUTED, t(cx, "status.mcp_disabled")),
                             McpHealth::Unknown => (Chrome::MUTED, "?"),
                         };
-                        list = list.child(row(
-                            SharedString::from(format!("status-mcp-{index}")),
-                            Some(color),
-                            server.name.clone(),
-                            label.into(),
-                        ));
+                        // Claude Code reconnects (and signs in to) a connector in its own `/mcp`.
+                        let broken = matches!(server.health, McpHealth::Failed | McpHealth::NeedsAuth);
+                        list =
+                            list.child(
+                                row(SharedString::from(format!("status-mcp-{index}")), Some(color), server.name.clone(), label.into())
+                                    .when(broken && agent == Agent::Claude, |d| {
+                                        d.child(
+                                            div()
+                                                .id(("status-mcp-reconnect", index))
+                                                .flex_shrink_0()
+                                                .px_1p5()
+                                                .rounded_md()
+                                                .cursor_pointer()
+                                                .text_color(hex(Chrome::ORANGE))
+                                                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                                .child(t(cx, "chat.reconnect"))
+                                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.status_menu = None;
+                                                    this.reconnect_mcp_in_front(window, cx);
+                                                })),
+                                        )
+                                    }),
+                            );
                     }
                 }
             },
