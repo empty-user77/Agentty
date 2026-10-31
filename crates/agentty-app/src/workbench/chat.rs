@@ -979,8 +979,17 @@ impl Workbench {
         let early = !state.briefed || state.plain;
         let setup = early && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
         let agent = chat_lead_agent(&state.lead, cx);
-        let named = !matches!(agent, Agent::Gemini | Agent::Agy);
-        let session = if named { view.current_session() } else { state.found_session.as_ref().and_then(|(_, id)| id.clone()) };
+        // Claude Code and Codex name their session. A pane started as one of them and running the
+        // other since (quit, then the other) remembers the first one's: only what the running one
+        // said counts then.
+        let named = matches!(agent, Agent::Claude | Agent::Codex);
+        let session = if !named {
+            state.found_session.as_ref().and_then(|(_, id)| id.clone())
+        } else if view.spec.kind.agent().is_none_or(|kind| kind == agent) {
+            view.current_session()
+        } else {
+            view.running_session()
+        };
         // Looked up again now and then: a new conversation (`/clear`) is a new session.
         let look_up = !named
             && !state.finding_session
@@ -990,7 +999,7 @@ impl Workbench {
                 .is_none_or(|(at, id)| at.elapsed() >= if id.is_some() { SESSION_RECHECK } else { SESSION_RETRY });
         if look_up {
             state.finding_session = true;
-            let (cwd, since) = (view.display_cwd(), view.launched_at_ms);
+            let (cwd, since) = (view.display_cwd(), view.agent_since_ms.unwrap_or(view.launched_at_ms));
             let find = cx.background_spawn(async move { agentty_bridge::find_recent(agent, &cwd, since) });
             cx.spawn(async move |this, cx| {
                 let found = find.await;
@@ -1018,6 +1027,20 @@ impl Workbench {
             }
             return true;
         };
+        // Another session in the pane (a new one after `/clear`, or after the agent was started
+        // again): what the last one said goes at once, before the new one has a file of its own.
+        if state.transcript.as_ref().is_some_and(|(read, _)| *read != session) {
+            state.transcript = None;
+            state.log = None;
+            state.entry_rows.clear();
+            state.items.clear();
+            state.echo.clear();
+            state.seen_len = 0;
+            // The start screen's earlier sessions now include the one just left.
+            state.recent = None;
+            Self::show_chat_items(state);
+            cx.notify();
+        }
         let plain = state.plain;
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
         let seen = if known.is_some() { state.seen_len } else { u64::MAX };
@@ -1032,7 +1055,7 @@ impl Workbench {
             if len == seen {
                 return Some((session, path, len, None));
             }
-            let items = if plain && !named {
+            let items = if plain && matches!(agent, Agent::Gemini | Agent::Agy) {
                 // Gemini CLI and Antigravity: what was said, read whole (their logs are small).
                 let turns = match agent {
                     Agent::Agy => agentty_bridge::agy::transcript(&path),
@@ -1992,6 +2015,26 @@ impl Workbench {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
                 self.attach_paths(id, &[PathBuf::from(path.trim())], window, cx);
             }
+            // What the pane in front runs and what its chat reads.
+            ("info", _) => {
+                let Some(pane) = self.active_pane() else { return };
+                let view = pane.read(cx);
+                let state = self.chats.get(&pane.entity_id());
+                eprintln!(
+                    "chat-info: tool={} kind={:?} spec={:?} running={:?} current={:?} chat={} plain={} terminal={} rows={} transcript={:?} found={:?}",
+                    view.tool_id(),
+                    view.agent_kind(),
+                    view.spec.kind,
+                    view.running_session(),
+                    view.current_session(),
+                    state.is_some(),
+                    state.is_some_and(|s| s.plain),
+                    state.is_some_and(|s| s.show_terminal),
+                    state.map_or(0, |s| s.shown.len()),
+                    state.and_then(|s| s.transcript.as_ref().map(|(id, _)| id.clone())),
+                    state.and_then(|s| s.found_session.as_ref().and_then(|(_, id)| id.clone())),
+                );
+            }
             // What ⌘C would copy from the selection in the chat (the driver sends no ⌘ keys).
             ("copy", _) => eprintln!("chat-copy: {:?}", selectable::selected_text()),
             ("worker", _) | ("reviewer", _) => {
@@ -2160,7 +2203,8 @@ fn message_list(state: &ChatState, cx: &mut Context<Workbench>) -> AnyElement {
 /// The agent a chat's lead runs as (Claude Code for a chat made before a lead could be Codex).
 fn chat_lead_agent(lead: &Pane, cx: &App) -> Agent {
     let view = lead.read(cx);
-    view.spec.kind.agent().or_else(|| pane_chat_agent(view)).unwrap_or(Agent::Claude)
+    // What runs now: a pane started as Claude Code may run Codex since (quit, then `codex`).
+    pane_chat_agent(view).or_else(|| view.spec.kind.agent()).unwrap_or(Agent::Claude)
 }
 
 /// The agent running in a pane whose conversation chat view can read: Claude Code and Codex (their

@@ -1073,10 +1073,12 @@ impl Workbench {
                             // which agent this is, and the bar needs the room.
                             HudItem::Model => d.child(
                                 div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(
-                                    pane_model_label(view, self.installed.as_ref())
-                                        .map(|model| model.text(false))
-                                        .or_else(|| screen_model.clone())
-                                        .unwrap_or_else(|| name.to_string()),
+                                    if other.is_some() {
+                                        screen_model.clone()
+                                    } else {
+                                        pane_model_label(view, self.installed.as_ref()).map(|model| model.text(false))
+                                    }
+                                    .unwrap_or_else(|| name.to_string()),
                                 ),
                             ),
                             HudItem::Context => d.children(context_meter.take()),

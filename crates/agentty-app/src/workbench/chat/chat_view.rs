@@ -133,7 +133,13 @@ impl Workbench {
                 .filter(|tool| Some(*tool) != state.earlier_tool.as_ref())
                 .map(|(tool, target)| tool_text(tool, target.as_deref(), cx)),
             elapsed: view.working_since.map(|since| crate::workbench::layout::format_elapsed(since.elapsed().as_secs())),
-            model: self.pane_model_text(pane, cx).or_else(|| footer.as_ref().map(|(model, _)| model.clone())),
+            // Antigravity and Gemini CLI: what their screen shows (the pane's own model settings are
+            // the agent it was started as).
+            model: match &footer {
+                Some((model, _)) => Some(model.clone()),
+                None if matches!(agent, agentty_bridge::model::Agent::Agy | agentty_bridge::model::Agent::Gemini) => None,
+                None => self.pane_model_text(pane, cx),
+            },
             context: view.stats.as_ref().and_then(|stats| stats.context_percent().map(|p| (p, stats.context_used, stats.context_window))),
             choices: waits.then(|| screen_choices(&lines)).flatten(),
             question: match &view.status {
