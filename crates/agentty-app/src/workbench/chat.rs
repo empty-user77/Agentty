@@ -131,6 +131,10 @@ pub struct ChatState {
     bar_menu: bool,
     /// The agent's MCP servers, read at most every [`chat_view::MCP_EVERY`]: `None` while read.
     mcp: Option<(Instant, Option<McpServers>)>,
+    /// Earlier sessions of the same agent in the same folder, for the start screen: `None` until
+    /// read (once, while the chat is empty).
+    recent: Option<Vec<agentty_bridge::model::SessionInfo>>,
+    recent_loading: bool,
     /// The agents its workers and reviewers run as.
     roles: ChatRoles,
     /// Plan usage of the agents the chat runs on: the window of each closest to running out.
@@ -620,6 +624,8 @@ impl Workbench {
                 model_menu: false,
                 bar_menu: false,
                 mcp: None,
+                recent: None,
+                recent_loading: false,
                 roles,
                 usage: Vec::new(),
                 usage_checked: None,
@@ -858,6 +864,7 @@ impl Workbench {
     fn poll_chat(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
         self.refresh_chat_usage(id, cx);
         self.refresh_chat_mcp(id, cx);
+        self.refresh_chat_recent(id, cx);
         self.chat_delivery_tick(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);

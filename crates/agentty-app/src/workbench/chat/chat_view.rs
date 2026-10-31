@@ -16,6 +16,9 @@ const SIDE_PANEL_FROM: f32 = 980.;
 const SIDE_PANEL_WIDTH: f32 = 300.;
 /// Steps of a card shown before the earlier ones fold away.
 const STEPS_SHOWN: usize = 4;
+/// Sessions read for the start screen, and how many of those in this folder it shows.
+const RECENT_SCANNED: usize = 200;
+const RECENT_SHOWN: usize = 4;
 /// Height of the conversation's bar.
 const BAR_HEIGHT: f32 = 38.;
 
@@ -143,7 +146,8 @@ impl Workbench {
         let live = self.live(state, cx);
         let side = state.side_open && live.width >= SIDE_PANEL_FROM;
 
-        let messages: AnyElement = if state.shown.is_empty() { self.render_chat_welcome(&live, cx) } else { message_list(state, cx) };
+        let messages: AnyElement =
+            if state.shown.is_empty() { self.render_chat_welcome(state, &live, cx) } else { message_list(state, cx) };
         let approval = live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), cx));
         let activity = (live.working && approval.is_none()).then(|| {
             let mut text = live.activity.clone().unwrap_or_else(|| t(cx, "chat.working").to_string());
@@ -328,54 +332,232 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Before the first message: the agent, where it works, and the way to an earlier session.
-    fn render_chat_welcome(&self, live: &Live, cx: &mut Context<Self>) -> AnyElement {
-        let card_row = |key: &'static str, glyph: &'static str, label: String| {
+    /// Before the first message, as a chat app's start screen: what runs where (agent, model,
+    /// folder, branch), a few ways to begin that fill the composer without sending, and the
+    /// agent's earlier sessions in this folder to pick up again.
+    fn render_chat_welcome(&self, state: &ChatState, live: &Live, cx: &mut Context<Self>) -> AnyElement {
+        let id = state.lead.entity_id();
+        let wide = live.width >= 760.;
+        // Where it runs, one line; the folder and branch open what they name.
+        let fact = |key: &'static str, glyph: &'static str, text: String| {
             div()
                 .id(key)
+                .flex_shrink_0()
                 .flex()
                 .items_center()
-                .gap_3()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .child(icon(glyph, 12., hex(Chrome::MUTED)))
+                .child(div().truncate().max_w(px(220.)).child(text))
+        };
+        let agent_name = match live.agent {
+            agentty_bridge::model::Agent::Codex => "Codex",
+            _ => "Claude Code",
+        };
+        let facts = div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_1()
+            .child(fact(
+                "chat-fact-agent",
+                "bot",
+                match &live.model {
+                    Some(model) => format!("{agent_name} · {model}"),
+                    None => agent_name.to_string(),
+                },
+            ))
+            .child(
+                fact("chat-fact-folder", "folder", folder_name(&live.folder))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .tooltip(crate::ui::Tooltip::text(crate::ui::tilde(&live.folder), None))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_files_panel(None, cx))),
+            )
+            .children(live.branch.clone().map(|branch| {
+                fact("chat-fact-branch", if live.worktree { "git-fork" } else { "git-branch" }, branch)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_page(Page::Git, cx)))
+            }));
+
+        // Ways to begin: each fills the composer, to be edited and sent by the user.
+        let starters: [(&'static str, &'static str); 4] = [
+            ("book-open", "chat.start_explain"),
+            ("git-pull-request", "chat.start_review"),
+            ("wrench", "chat.start_tests"),
+            ("play", "chat.start_run"),
+        ];
+        let starter = |index: usize, glyph: &'static str, key: &'static str, cx: &mut Context<Self>| {
+            let text = t(cx, key).to_string();
+            let fill = text.clone();
+            div()
+                .id(SharedString::from(format!("chat-start-{index}")))
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_start()
+                .gap_2p5()
                 .px_3()
                 .py_2p5()
-                .rounded_md()
+                .rounded_xl()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
                 .cursor_pointer()
-                .hover(|s| s.bg(hex(Chrome::HOVER)))
-                .child(icon(glyph, 16., hex(Chrome::FOREGROUND)))
-                .child(div().min_w_0().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(label))
+                .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex(Chrome::SELECTED)))
+                .child(div().pt(px(2.)).child(icon(glyph, 15., hex(Chrome::ORANGE))))
+                .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::FOREGROUND)).child(text))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.fill_chat_composer(id, &fill, window, cx)))
         };
-        let folder = folder_name(&live.folder);
+        let mut grid = div().w_full().flex().flex_col().gap_2();
+        if wide {
+            for (row, pair) in starters.chunks(2).enumerate() {
+                let mut line = div().w_full().flex().gap_2();
+                for (n, (glyph, key)) in pair.iter().enumerate() {
+                    line = line.child(starter(row * 2 + n, glyph, key, cx));
+                }
+                grid = grid.child(line);
+            }
+        } else {
+            for (index, (glyph, key)) in starters.iter().enumerate() {
+                grid = grid.child(starter(index, glyph, key, cx));
+            }
+        }
+
+        // Earlier sessions here: picked up where they were left, in a workspace of their own.
+        let now = crate::ui::now_ms();
+        let recent = state.recent.as_ref().filter(|sessions| !sessions.is_empty()).map(|sessions| {
+            let rows = sessions.iter().enumerate().map(|(index, session)| {
+                let picked = session.clone();
+                let title = Some(session.title.trim())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| session.last_prompt.clone())
+                    .unwrap_or_else(|| session.id.chars().take(8).collect());
+                div()
+                    .id(SharedString::from(format!("chat-recent-{index}")))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(icon("history", 14., hex(Chrome::MUTED)))
+                    .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(title))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .t_caption()
+                            .text_color(hex(Chrome::MUTED))
+                            .child(crate::ui::relative_time(now, session.updated_at)),
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.resume_session(&picked, window, cx)))
+            });
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px_2()
+                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "chat.recent_here")))
+                        .child(
+                            div()
+                                .id("chat-recent-all")
+                                .t_small()
+                                .text_color(hex(Chrome::MUTED))
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                                .child(t(cx, "chat.recent_all"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_panel(SidePanel::Sessions, cx))),
+                        ),
+                )
+                .children(rows)
+        });
+
         div()
+            .id("chat-welcome")
             .flex_1()
             .min_h_0()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
-            .gap_4()
             .px_6()
-            .child(crate::brand::avatar(live.tool, 40.))
-            .child(div().t_title().text_color(hex(Chrome::BRIGHT)).child(t(cx, "chat.plain_empty")))
+            .py_8()
+            .child(div().flex_1().min_h(px(16.)))
             .child(
                 div()
                     .w_full()
-                    .max_w(px(460.))
-                    .p_1()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(hex(Chrome::BORDER))
+                    .max_w(px(640.))
                     .flex()
                     .flex_col()
+                    .items_center()
+                    .gap_6()
                     .child(
-                        card_row("chat-welcome-sessions", "history", t(cx, "chat.resume_session").to_string())
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_panel(SidePanel::Sessions, cx))),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .child(crate::brand::avatar(live.tool, 44.))
+                            .child(div().pt_1().t_display().text_color(hex(Chrome::BRIGHT)).child(t(cx, "chat.plain_empty")))
+                            .child(facts),
                     )
-                    .child(
-                        card_row("chat-welcome-folder", "folder", folder)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_files_panel(None, cx))),
-                    ),
+                    .child(grid)
+                    .children(recent),
             )
+            .child(div().flex_1().min_h(px(16.)))
             .into_any_element()
+    }
+
+    /// Puts `text` in the composer, to be edited and sent by the user.
+    fn fill_chat_composer(&mut self, id: EntityId, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((input, _)) = self.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
+        let input = input.clone();
+        input.update(cx, |input, cx| input.set_text(text.to_string(), cx));
+        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+    }
+
+    /// Reads the agent's earlier sessions in this folder for the start screen, once, while the
+    /// chat is still empty.
+    pub(super) fn refresh_chat_recent(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        if !state.plain || state.recent.is_some() || state.recent_loading || !state.shown.is_empty() {
+            return;
+        }
+        state.recent_loading = true;
+        let view = state.lead.read(cx);
+        let (agent, folder, current) = (chat_lead_agent(&state.lead, cx), view.display_cwd(), view.current_session());
+        let task = cx.background_spawn(async move {
+            let folder = folder.to_string_lossy().into_owned();
+            agentty_bridge::list(Some(agent), RECENT_SCANNED)
+                .into_iter()
+                .filter(|s| s.cwd.as_deref() == Some(folder.as_str()) && Some(&s.id) != current.as_ref())
+                .take(RECENT_SHOWN)
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let sessions = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(state) = this.chats.get_mut(&id) {
+                    state.recent = Some(sessions);
+                    state.recent_loading = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// The agent's approval or question, its options as buttons.
