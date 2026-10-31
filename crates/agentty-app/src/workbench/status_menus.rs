@@ -74,7 +74,7 @@ fn scope_label(scope: &Scope, cx: &gpui::App) -> String {
 }
 
 /// Runs `<agent> mcp list` in `cwd` through the user's interactive login shell (full output).
-fn mcp_list(agent: Agent, cwd: PathBuf) -> Result<Vec<McpStatus>, String> {
+pub(super) fn mcp_list(agent: Agent, cwd: PathBuf) -> Result<Vec<McpStatus>, String> {
     let program = if agent == Agent::Claude { "claude" } else { "codex" };
     let output = crate::launch::login_shell_command(&[program.to_string(), "mcp".into(), "list".into()])
         .map_err(|e| e.to_string())?

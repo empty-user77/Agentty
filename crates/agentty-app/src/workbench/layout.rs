@@ -64,7 +64,7 @@ impl Workbench {
                         None => *size,
                     };
                     // A chat keeps room to read and write in, however the grid below it grows.
-                    let chat = axis == Axis::Vertical && matches!(child, PaneNode::Leaf(p) if self.chats.contains_key(&p.entity_id()));
+                    let chat = axis == Axis::Vertical && matches!(child, PaneNode::Leaf(p) if self.is_chat_lead(p));
                     container = container.child(
                         div()
                             .flex_basis(relative(0.))
@@ -339,7 +339,12 @@ impl Workbench {
         let resume_hint = self.render_resume_hint(pane, cx);
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
-        let mut agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        // A pane shown as a chat has the same facts under its composer and in its panel.
+        let mut agent_bar =
+            (!split && prefs_bar && !self.plain_chat_in_front(pane, cx)).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        // Chat view: the conversation in place of the terminal, or the way back to it over the terminal.
+        let chat = self.render_plain_chat(pane, cx);
+        let chat_return = chat.is_none().then(|| self.render_plain_chat_return(pane, cx)).flatten();
         let widths = self.pane_bounds.clone();
         let id = pane.entity_id();
 
@@ -372,7 +377,11 @@ impl Workbench {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()))
+                    .child(match chat {
+                        Some(chat) => chat,
+                        None => gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()).into_any_element(),
+                    })
+                    .children(chat_return)
                     .children(find_bar)
                     .children(drop_zones)
                     .children(connect_pick),
@@ -404,6 +413,13 @@ impl Workbench {
         // Focus view comes back after a restart, like the split sizes it overrides.
         self.persist(cx);
         cx.notify();
+    }
+}
+
+impl Workbench {
+    /// The model `pane` runs, as a chat names it under its composer.
+    pub(super) fn pane_model_text(&self, pane: &Pane, cx: &gpui::App) -> Option<String> {
+        pane_model_label(pane.read(cx), self.installed.as_ref()).map(|label| label.text(true))
     }
 }
 

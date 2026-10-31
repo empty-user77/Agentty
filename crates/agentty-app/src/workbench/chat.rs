@@ -12,6 +12,11 @@
 //! [`MAX_WORKERS`] at a time, a finished one making room for the next. When a worker ends a turn,
 //! its last reply goes to the lead as a message starting with [`REPORT_MARK`]; the lead reviews it
 //! and reports in the chat, or sends the worker a follow-up (`agentty tasks send`).
+//!
+//! Chat view (View → Chat View) uses the same machinery without a team: every Claude Code or Codex
+//! pane is drawn as a plain chat over its own session, inside its pane, so splits, tabs and the
+//! pane's bar stay as they are. An approval or question the agent asks is answered from the chat;
+//! anything else it can't show brings the terminal up.
 
 use super::account_usage::Limit;
 use super::chat_team::{folder_brief, limit_note, review_prompt, tightest, usage_level, ChatRoles, RoleAgent, REVIEW_PREFIX, WARN_AT};
@@ -32,7 +37,10 @@ use gpui::{
 };
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+mod chat_view;
 
 /// Workers on screen at once, in a grid of two columns.
 pub const MAX_WORKERS: usize = 4;
@@ -63,6 +71,8 @@ const REMOTE_ENTRIES: usize = 40;
 const REMOTE_TEXT: usize = 3_000;
 /// Tool steps of one reply shown before the rest fold into a count.
 const TOOL_STEPS_SHOWN: usize = 3;
+/// The widest the conversation runs in a wide pane: lines stay readable, as in a chat app.
+const CHAT_COLUMN: f32 = 780.;
 
 /// What the lead is told before the user's first message. English, like every prompt Agentty
 /// ships; the last line names the language to talk in.
@@ -100,10 +110,27 @@ pub enum ChatItem {
     Lead(String),
     /// A worker's report to the lead (sent by Agentty).
     Report(String),
+    /// A reply with its steps apart (chat view's plain chats).
+    Reply(Arc<Vec<agentty_bridge::chat_log::Block>>),
 }
+
+/// The agent's MCP servers as `mcp list` told them, or why it could not.
+type McpServers = Result<Vec<agentty_bridge::extensions::McpStatus>, String>;
 
 pub struct ChatState {
     pub lead: Pane,
+    /// A pane shown as a chat by chat view: no team, no briefing (see the module docs).
+    plain: bool,
+    /// Tool steps and step groups the user opened (by step id, `group:<first step id>`).
+    open: Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    /// Chat view's panel beside the conversation (where it works, context, usage, connectors).
+    side_open: bool,
+    /// The model menu under the composer.
+    model_menu: bool,
+    /// The `⋯` menu of the conversation's bar.
+    bar_menu: bool,
+    /// The agent's MCP servers, read at most every [`chat_view::MCP_EVERY`]: `None` while read.
+    mcp: Option<(Instant, Option<McpServers>)>,
     /// The agents its workers and reviewers run as.
     roles: ChatRoles,
     /// Plan usage of the agents the chat runs on: the window of each closest to running out.
@@ -232,6 +259,39 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
         }
     }
     (items, briefed)
+}
+
+/// A plain chat as its structured log tells it: what the user wrote (as [`chat_items`] cleans it)
+/// and each reply with its steps.
+pub fn plain_items(entries: Vec<agentty_bridge::chat_log::Entry>) -> Vec<ChatItem> {
+    let mut items = Vec::new();
+    for entry in entries {
+        match entry.role {
+            Role::User => {
+                let unwrapped = without_paste_tags(&entry.text);
+                let cleaned = strip_harness_blocks(unwrapped.trim());
+                let text = cleaned.trim();
+                if !text.is_empty() {
+                    items.extend(user_entries(text));
+                }
+            }
+            Role::Assistant if !entry.blocks.is_empty() => items.push(ChatItem::Reply(Arc::new(entry.blocks))),
+            Role::Assistant => {}
+        }
+    }
+    items
+}
+
+/// A reply's words, without its steps (what is copied, and what the remote page shows).
+pub fn reply_text(blocks: &[agentty_bridge::chat_log::Block]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            agentty_bridge::chat_log::Block::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Blocks Claude Code itself puts into the user's turns (a background task's notification, system
@@ -529,10 +589,15 @@ impl Workbench {
 
     /// Makes `lead` the lead of a chat (its tab's first pane).
     pub(super) fn register_chat(&mut self, lead: &Pane, roles: ChatRoles, cx: &mut Context<Self>) {
-        let id = lead.entity_id();
-        if self.chats.contains_key(&id) {
+        // A lead takes over from chat view's plain chat of the same pane.
+        if self.is_chat_lead(lead) {
             return;
         }
+        self.insert_chat(lead, roles, false, cx);
+    }
+
+    fn insert_chat(&mut self, lead: &Pane, roles: ChatRoles, plain: bool, cx: &mut Context<Self>) {
+        let id = lead.entity_id();
         let watch = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(WATCH_INTERVAL).await;
             match this.update(cx, |this, cx| this.poll_chat(id, cx)) {
@@ -549,6 +614,12 @@ impl Workbench {
             id,
             ChatState {
                 lead: lead.clone(),
+                plain,
+                open: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
+                side_open: true,
+                model_menu: false,
+                bar_menu: false,
+                mcp: None,
                 roles,
                 usage: Vec::new(),
                 usage_checked: None,
@@ -559,7 +630,8 @@ impl Workbench {
                 shown: Rc::new(Vec::new()),
                 list,
                 follow,
-                briefed: false,
+                // A plain chat has no instructions to give.
+                briefed: plain,
                 brief_seen: false,
                 brief_sent: false,
                 brief_sent_at: None,
@@ -604,7 +676,24 @@ impl Workbench {
 
     /// The lead of `tab` when it is a chat tab.
     pub(super) fn chat_lead_of_tab(&self, tab: &Tab) -> Option<Pane> {
-        tab.root.leaves().into_iter().next().filter(|lead| self.chats.contains_key(&lead.entity_id()))
+        tab.root.leaves().into_iter().next().filter(|lead| self.is_chat_lead(lead))
+    }
+
+    /// Whether `pane` leads a chat (not just shown as one by chat view).
+    pub(super) fn is_chat_lead(&self, pane: &Pane) -> bool {
+        self.chats.get(&pane.entity_id()).is_some_and(|state| !state.plain)
+    }
+
+    /// Chat view on or off: every agent pane is drawn as a chat, or as its terminal again.
+    pub(super) fn toggle_chat_view(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let on = !crate::settings::settings(cx).chat_view;
+        crate::settings::update_settings(cx, |s| s.chat_view = on);
+        if on {
+            crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "chat_view" }));
+        }
+        // The keyboard follows: to the composer, or back to the terminal.
+        self.refocus = true;
+        cx.notify();
     }
 
     /// The lead of the chat tab `pane` is in (the pane itself when it is the lead).
@@ -626,7 +715,20 @@ impl Workbench {
 
     /// Whether the chat is on screen for `lead` (and not its terminal).
     fn chat_in_front(&self, state: &ChatState, cx: &App) -> bool {
-        !(state.show_terminal || state.setup_screen || state.lead.read(cx).status.needs_user())
+        !(state.show_terminal || Self::terminal_forced(state, cx))
+    }
+
+    /// Whether only the terminal can answer what the agent shows now. A plain chat answers an
+    /// approval or a question with numbered options itself.
+    fn terminal_forced(state: &ChatState, cx: &App) -> bool {
+        let view = state.lead.read(cx);
+        if state.setup_screen {
+            return true;
+        }
+        if !state.plain {
+            return view.status.needs_user();
+        }
+        waits_on_user(view) && screen_choices(&view.screen_lines(40)).is_none()
     }
 
     /// The composer to put the keyboard in instead of `pane`, when `pane` is a lead shown as a chat.
@@ -640,14 +742,32 @@ impl Workbench {
 
     /// Forgets chats whose lead is gone, and gives new ones their composer.
     pub(super) fn prepare_chats(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.chats.is_empty() {
+        let chat_view = crate::settings::settings(cx).chat_view;
+        if self.chats.is_empty() && !chat_view {
             return;
         }
-        let alive: std::collections::HashSet<EntityId> = self.all_panes().iter().map(|p| p.entity_id()).collect();
-        self.chats.retain(|id, _| alive.contains(id));
-        let missing: Vec<EntityId> = self.chats.iter().filter(|(_, s)| s.input.is_none()).map(|(id, _)| *id).collect();
-        for id in missing {
-            let input = cx.new(|cx| TextInput::localized("", "chat.placeholder", window, cx).composer(2));
+        let panes = self.all_panes();
+        let alive: std::collections::HashSet<EntityId> = panes.iter().map(|p| p.entity_id()).collect();
+        // Chat view: agent panes become chats, and stop being one when it is off or their agent left.
+        self.chats.retain(|id, state| alive.contains(id) && (!state.plain || (chat_view && shows_as_chat(&state.lead, cx))));
+        if chat_view {
+            let new: Vec<Pane> = panes.into_iter().filter(|p| !self.chats.contains_key(&p.entity_id()) && shows_as_chat(p, cx)).collect();
+            for pane in new {
+                self.insert_chat(&pane, ChatRoles::default(), true, cx);
+            }
+        }
+        let missing: Vec<(EntityId, bool)> = self.chats.iter().filter(|(_, s)| s.input.is_none()).map(|(id, s)| (*id, s.plain)).collect();
+        for (id, plain) in missing {
+            let placeholder = if plain { "chat.placeholder_plain" } else { "chat.placeholder" };
+            let input = cx.new(|cx| {
+                let input = TextInput::localized("", placeholder, window, cx);
+                // Chat view's composer starts as one line and grows, as a chat app's does.
+                if plain {
+                    input.composer(1).growing(8)
+                } else {
+                    input.composer(2)
+                }
+            });
             let subscription = cx.subscribe_in(&input, window, move |this, _, event: &TextInputEvent, window, cx| {
                 if let TextInputEvent::Confirmed = event {
                     this.send_chat_message(id, window, cx);
@@ -663,6 +783,9 @@ impl Workbench {
     fn chat_agents(&self, id: EntityId, cx: &App) -> Vec<RoleAgent> {
         let Some(state) = self.chats.get(&id) else { return Vec::new() };
         let lead = chat_lead_agent(&state.lead, cx);
+        if state.plain {
+            return RoleAgent::of(lead).into_iter().collect();
+        }
         let uses = |role: RoleAgent| {
             RoleAgent::of(lead) == Some(role)
                 || state.roles.worker == role
@@ -734,11 +857,14 @@ impl Workbench {
     /// Reads the lead's transcript again when it grew. False once the chat is gone (the watch ends).
     fn poll_chat(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
         self.refresh_chat_usage(id, cx);
+        self.refresh_chat_mcp(id, cx);
         self.chat_delivery_tick(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
-        // Until the lead has its instructions, its first-run screens may be in the way.
-        let setup = !state.briefed && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
+        // Until the lead has its instructions (a plain chat: until it has said anything), its
+        // first-run screens may be in the way.
+        let early = !state.briefed || (state.plain && state.items.is_empty());
+        let setup = early && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
         let session = view.current_session();
         if setup != state.setup_screen {
             state.setup_screen = setup;
@@ -749,6 +875,7 @@ impl Workbench {
         }
         let Some(session) = session else { return true };
         let agent = chat_lead_agent(&state.lead, cx);
+        let plain = state.plain;
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
         let seen = if known.is_some() { state.seen_len } else { u64::MAX };
         state.loading = true;
@@ -761,12 +888,16 @@ impl Workbench {
             if len == seen {
                 return Some((session, path, len, None));
             }
-            let turns = match agent {
-                agentty_bridge::model::Agent::Codex => agentty_bridge::codex::transcript(&path),
-                _ => agentty_bridge::claude::transcript(&path),
+            let items = if plain {
+                agentty_bridge::chat_log::read(agent, &path).ok().map(|entries| (plain_items(entries), false))
+            } else {
+                let turns = match agent {
+                    agentty_bridge::model::Agent::Codex => agentty_bridge::codex::transcript(&path),
+                    _ => agentty_bridge::claude::transcript(&path),
+                };
+                turns.ok().map(|(_, turns)| chat_items(&turns))
             };
-            let turns = turns.ok().map(|(_, turns)| turns);
-            Some((session, path, len, turns))
+            Some((session, path, len, items))
         });
         cx.spawn(async move |this, cx| {
             let loaded = task.await;
@@ -777,14 +908,18 @@ impl Workbench {
     }
 
     #[allow(clippy::type_complexity)]
-    fn apply_chat_load(&mut self, id: EntityId, loaded: Option<(String, PathBuf, u64, Option<Vec<Turn>>)>, cx: &mut Context<Self>) {
+    fn apply_chat_load(
+        &mut self,
+        id: EntityId,
+        loaded: Option<(String, PathBuf, u64, Option<(Vec<ChatItem>, bool)>)>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.chats.get_mut(&id) else { return };
         state.loading = false;
-        let Some((session, path, len, turns)) = loaded else { return };
+        let Some((session, path, len, items)) = loaded else { return };
         state.transcript = Some((session, path));
         state.seen_len = len;
-        let Some(turns) = turns else { return };
-        let (items, briefed) = chat_items(&turns);
+        let Some((items, briefed)) = items else { return };
         state.briefed |= briefed;
         let ready = briefed && !state.brief_seen;
         state.brief_seen |= briefed;
@@ -908,7 +1043,10 @@ impl Workbench {
             state.quiet_since = Instant::now();
             return false;
         }
-        state.brief_seen || input_ready(&view.screen_lines(40)) || state.quiet_since.elapsed() >= READY_TIMEOUT
+        state.brief_seen
+            || (state.plain && !state.items.is_empty())
+            || input_ready(&view.screen_lines(40))
+            || state.quiet_since.elapsed() >= READY_TIMEOUT
     }
 
     /// Keeps messages moving: what waited for the lead to start goes in once it is ready, and a
@@ -952,8 +1090,12 @@ impl Workbench {
 
     /// A pane ended a turn: a lead takes what waited for it; a worker reports to its lead.
     pub(super) fn chat_turn_finished(&mut self, pane: &Pane, message: Option<String>, cx: &mut Context<Self>) {
-        if self.chats.contains_key(&pane.entity_id()) {
-            return self.flush_chat_pending(pane, cx);
+        if let Some(plain) = self.chats.get(&pane.entity_id()).map(|state| state.plain) {
+            self.flush_chat_pending(pane, cx);
+            // A worker shown as a chat still reports to its lead.
+            if !plain {
+                return;
+            }
         }
         let Some(lead) = self.chat_lead_of(pane) else { return };
         let view = pane.read(cx);
@@ -984,7 +1126,7 @@ impl Workbench {
 
     /// The lead of the chat whose lead pane is `pane_id`.
     fn chat_by_pane_id(&self, pane_id: u64, cx: &App) -> Option<EntityId> {
-        self.chats.iter().find(|(_, s)| s.lead.read(cx).pane_id == pane_id).map(|(id, _)| *id)
+        self.chats.iter().find(|(_, s)| !s.plain && s.lead.read(cx).pane_id == pane_id).map(|(id, _)| *id)
     }
 
     /// `agentty tasks` from a chat's lead: the workers start at once, in the grid below the chat.
@@ -1298,6 +1440,7 @@ impl Workbench {
                 ChatItem::User(text) => ChatEntry { role: "user", text: truncate(text, REMOTE_TEXT) },
                 ChatItem::Lead(text) => ChatEntry { role: "lead", text: truncate(text, REMOTE_TEXT) },
                 ChatItem::Report(text) => ChatEntry { role: "report", text: truncate(text, REMOTE_TEXT) },
+                ChatItem::Reply(blocks) => ChatEntry { role: "lead", text: truncate(&reply_text(blocks), REMOTE_TEXT) },
             })
             .collect();
         Some(ChatInfo {
@@ -1320,7 +1463,7 @@ impl Workbench {
 
     /// The lead's place in its tab, drawn as the chat (or as its terminal, with the chat's bar on top).
     pub(super) fn render_chat(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let state = self.chats.get(&pane.entity_id())?;
+        let state = self.chats.get(&pane.entity_id()).filter(|state| !state.plain)?;
         let id = pane.entity_id();
         let view = pane.read(cx);
         let forced = state.setup_screen || view.status.needs_user();
@@ -1518,22 +1661,7 @@ impl Workbench {
                 )))
                 .into_any_element()
         } else {
-            let items = state.shown.clone();
-            let lead = chat_lead_agent(&state.lead, cx).id();
-            let rows = list(state.list.clone(), move |index, _, cx| match items.get(index) {
-                Some(item) => div().w_full().px_4().pt_3().child(render_item(index, item, lead, cx)).into_any_element(),
-                None => div().into_any_element(),
-            })
-            .size_full()
-            .pb_3();
-            div()
-                .relative()
-                .group(crate::ui::SCROLL_GROUP)
-                .flex_1()
-                .min_h_0()
-                .child(rows)
-                .child(crate::ui::list_scrollbar(state.list.clone()))
-                .into_any_element()
+            message_list(state, cx)
         };
         // A worker waiting on the user is said here too: the chat is where the user looks.
         let waiting: Vec<AnyElement> = workers
@@ -1648,7 +1776,11 @@ impl Workbench {
 
     /// Debug driver: `chat <folder>`, `chat send:<text>`, `chat terminal`, `chat state`.
     pub(super) fn debug_chat(&mut self, argument: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let front = self.active_pane().and_then(|pane| self.chat_lead_of(&pane)).map(|lead| lead.entity_id());
+        // A chat workspace's lead, else the pane itself when chat view shows it as a chat.
+        let front = self
+            .active_pane()
+            .and_then(|pane| self.chat_lead_of(&pane).or_else(|| self.chats.contains_key(&pane.entity_id()).then_some(pane)))
+            .map(|lead| lead.entity_id());
         match argument.split_once(':').unwrap_or((argument, "")) {
             ("send", text) => {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
@@ -1690,15 +1822,125 @@ impl Workbench {
     }
 }
 
-/// One entry of the chat.
-/// The agent a chat's lead runs as (Claude Code for a chat made before a lead could be Codex).
-fn chat_lead_agent(lead: &Pane, cx: &App) -> agentty_bridge::model::Agent {
-    lead.read(cx).spec.kind.agent().unwrap_or(agentty_bridge::model::Agent::Claude)
+/// `content` in the conversation's column: centered, at most [`CHAT_COLUMN`] wide.
+fn column(content: impl IntoElement) -> gpui::Div {
+    div().w_full().flex().justify_center().child(div().w_full().max_w(px(CHAT_COLUMN)).min_w_0().child(content))
 }
 
-fn render_item(index: usize, item: &ChatItem, lead: &'static str, cx: &App) -> AnyElement {
+/// What a row of the conversation needs to open and close its steps.
+#[derive(Clone)]
+struct Rows {
+    /// Chat view's plain chat (its own look), not a chat workspace's lead.
+    plain: bool,
+    open: Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    list: ListState,
+    workbench: gpui::WeakEntity<Workbench>,
+}
+
+impl Rows {
+    fn is_open(&self, key: &str) -> bool {
+        self.open.borrow().contains(key)
+    }
+
+    /// Opens or closes `key` in row `index`, which is measured again.
+    fn toggle(&self, index: usize, key: &str, cx: &mut App) {
+        {
+            let mut open = self.open.borrow_mut();
+            if !open.remove(key) {
+                open.insert(key.to_string());
+            }
+        }
+        self.list.splice(index..index + 1, 1);
+        let _ = self.workbench.update(cx, |_, cx| cx.notify());
+    }
+}
+
+/// The conversation, newest at the bottom.
+fn message_list(state: &ChatState, cx: &mut Context<Workbench>) -> AnyElement {
+    let items = state.shown.clone();
+    let lead = chat_lead_agent(&state.lead, cx).id();
+    let rows = Rows { plain: state.plain, open: state.open.clone(), list: state.list.clone(), workbench: cx.entity().downgrade() };
+    let rows = list(state.list.clone(), move |index, _, cx| match items.get(index) {
+        Some(item) if rows.plain => {
+            div().w_full().px_4().pt_3().child(column(render_item(index, item, lead, &rows, cx))).into_any_element()
+        }
+        Some(item) => div().w_full().px_4().pt_3().child(render_item(index, item, lead, &rows, cx)).into_any_element(),
+        None => div().into_any_element(),
+    })
+    .size_full()
+    .pb_3();
+    div()
+        .relative()
+        .group(crate::ui::SCROLL_GROUP)
+        .flex_1()
+        .min_h_0()
+        .child(rows)
+        .child(crate::ui::list_scrollbar(state.list.clone()))
+        .into_any_element()
+}
+
+/// The agent a chat's lead runs as (Claude Code for a chat made before a lead could be Codex).
+fn chat_lead_agent(lead: &Pane, cx: &App) -> agentty_bridge::model::Agent {
+    let view = lead.read(cx);
+    view.spec.kind.agent().or_else(|| view.agent_kind().and_then(PaneKind::agent)).unwrap_or(agentty_bridge::model::Agent::Claude)
+}
+
+/// Whether chat view draws `pane` as a chat: an agent whose conversation Agentty can read runs in it.
+fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
+    pane.read(cx).agent_kind().and_then(PaneKind::agent).is_some()
+}
+
+/// The options of the selection at the bottom of an agent's screen (an approval, a question), top
+/// to bottom, and the one highlighted. None without at least two numbered options.
+pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
+    let mut choices: Vec<String> = Vec::new();
+    let mut current = 0;
+    for line in lines {
+        let trimmed = line.trim_start_matches(|c: char| c.is_whitespace() || c == '│');
+        let marked = trimmed.starts_with(['❯', '›', '>']);
+        let rest = trimmed.trim_start_matches(['❯', '›', '>']).trim_start();
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        let Some(label) = rest[digits..].strip_prefix(". ").filter(|_| digits > 0) else { continue };
+        let Ok(number) = rest[..digits].parse::<usize>() else { continue };
+        // A list starting again from 1 is a newer one: only the last counts.
+        if number == 1 {
+            choices.clear();
+            current = 0;
+        } else if number != choices.len() + 1 {
+            continue;
+        }
+        if marked {
+            current = choices.len();
+        }
+        choices.push(label.trim_end_matches('│').trim().to_string());
+    }
+    (choices.len() >= 2).then_some((choices, current))
+}
+
+/// Keys that move a selection from `current` to `target` and pick it.
+fn choice_keys(current: usize, target: usize) -> Vec<u8> {
+    let step: &[u8] = if target < current { b"\x1b[A" } else { b"\x1b[B" };
+    let mut keys = step.repeat(current.abs_diff(target));
+    keys.push(b'\r');
+    keys
+}
+
+fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, cx: &App) -> AnyElement {
     let row = div().id(SharedString::from(format!("chat-item-{index}"))).w_full().flex();
     match item {
+        // Chat view: a neutral bubble, as a chat app draws it.
+        ChatItem::User(text) if rows.plain => row
+            .justify_end()
+            .child(
+                div()
+                    .max_w(gpui::relative(0.8))
+                    .px_3()
+                    .py_2()
+                    .rounded_xl()
+                    .bg(hex(Chrome::SELECTED))
+                    .child(text_block(text, Chrome::BRIGHT)),
+            )
+            .into_any_element(),
         ChatItem::User(text) => row
             .justify_end()
             .child(
@@ -1718,6 +1960,7 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, cx: &App) -> A
             .child(crate::brand::avatar(lead, 20.))
             .child(div().flex_1().min_w_0().pt_0p5().child(lead_block(text, cx)))
             .into_any_element(),
+        ChatItem::Reply(blocks) => chat_view::render_reply(index, blocks, rows, cx),
         ChatItem::Report(text) => {
             let mut lines = text.lines();
             let first = lines.next().unwrap_or_default().to_string();
@@ -1994,6 +2237,27 @@ mod tests {
         assert!(input_ready(&lines(&["❯ "])));
         assert!(!input_ready(&lines(&["Welcome to Claude Code", "starting..."])));
         assert!(!input_ready(&lines(&["Do you trust the files in this folder?", "❯ 1. Yes"])));
+    }
+
+    #[test]
+    fn an_approval_is_read_off_the_screen() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let claude = lines(&[
+            "Steps: 1. read the file",
+            " Do you want to make this edit to main.rs?",
+            " ❯ 1. Yes",
+            "   2. Yes, allow all edits during this session (shift+tab)",
+            "   3. No, and tell Claude what to do differently (esc)",
+        ]);
+        let (choices, current) = screen_choices(&claude).unwrap();
+        assert_eq!(choices.len(), 3);
+        assert_eq!((choices[0].as_str(), current), ("Yes", 0));
+        let codex = lines(&["  Allow command?", "    1. Yes, proceed (y)", "  › 2. Yes, and don't ask again (a)", "    3. No (esc)"]);
+        assert_eq!(screen_choices(&codex).map(|(_, current)| current), Some(1));
+        assert!(screen_choices(&lines(&["1. only one"])).is_none());
+        assert_eq!(choice_keys(0, 2), b"\x1b[B\x1b[B\r".to_vec());
+        assert_eq!(choice_keys(1, 0), b"\x1b[A\r".to_vec());
+        assert_eq!(choice_keys(1, 1), b"\r".to_vec());
     }
 
     #[test]

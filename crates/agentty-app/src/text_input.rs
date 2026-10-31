@@ -80,6 +80,9 @@ pub enum TextInputEvent {
 
 pub struct TextInput {
     focus_handle: FocusHandle,
+    /// A growing field's most rows (0: the field keeps `rows`), and how many its text needs now.
+    grow_to: usize,
+    text_rows: usize,
     content: SharedString,
     placeholder: SharedString,
     /// i18n key of the placeholder, looked up at paint so it follows language changes.
@@ -149,6 +152,8 @@ impl TextInput {
         let len = content.len();
         Self {
             focus_handle,
+            grow_to: 0,
+            text_rows: 1,
             content,
             placeholder: placeholder.into(),
             placeholder_key: None,
@@ -208,9 +213,24 @@ impl TextInput {
         self
     }
 
+    /// The field grows with its text, from `rows` up to `most` rows, as a chat app's composer does.
+    pub fn growing(mut self, most: usize) -> Self {
+        self.grow_to = most;
+        self
+    }
+
+    /// The rows the field takes now.
+    fn shown_rows(&self) -> usize {
+        if self.grow_to > 0 {
+            self.text_rows.clamp(self.rows.max(1), self.grow_to.max(self.rows.max(1)))
+        } else {
+            self.rows.max(1)
+        }
+    }
+
     /// Whether this field holds more than one line.
     pub fn is_multiline(&self) -> bool {
-        self.rows > 1
+        self.rows > 1 || self.grow_to > 1
     }
 
     fn line_starts(&self) -> Vec<usize> {
@@ -821,7 +841,7 @@ impl Element for TextElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        let rows = self.input.read(cx).rows.max(1);
+        let rows = self.input.read(cx).shown_rows();
         style.size.height = (window.line_height() * rows as f32).into();
         (window.request_layout(style, [], cx), ())
     }
@@ -981,13 +1001,13 @@ impl TextElement {
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
         let colors = self.input.read(cx).colors.clone();
-        let (content, selected_range, cursor, rows, placeholder) = {
+        let (content, selected_range, cursor, placeholder) = {
             let input = self.input.read(cx);
             let placeholder = input
                 .content
                 .is_empty()
                 .then(|| input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into()));
-            (input.content.clone(), input.selected_range.clone(), input.cursor_offset(), input.rows.max(1), placeholder)
+            (input.content.clone(), input.selected_range.clone(), input.cursor_offset(), placeholder)
         };
         let text = placeholder.clone().unwrap_or_else(|| content.clone());
         let color = if placeholder.is_some() { hex_alpha(Chrome::FOREGROUND, 0.4) } else { style.color };
@@ -1029,6 +1049,14 @@ impl TextElement {
         // Keep the cursor's row in view, and never scroll past text that has since shrunk.
         let cursor_row = rows_of_text.iter().rposition(|(start, end)| *start <= cursor && cursor <= *end).unwrap_or(0);
         let total = rows_of_text.len();
+        // A growing field shows as many rows as its text needs now (laid out to them next frame).
+        let rows = self.input.update(cx, |input, cx| {
+            if input.grow_to > 0 && input.text_rows != total {
+                input.text_rows = total;
+                cx.notify();
+            }
+            input.shown_rows()
+        });
         let scroll = self.input.update(cx, |input, _| {
             input.scroll_line = input.scroll_line.min(total.saturating_sub(1));
             if cursor_row < input.scroll_line {
