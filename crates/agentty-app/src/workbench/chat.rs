@@ -175,6 +175,10 @@ pub struct ChatState {
     pending: Vec<Pending>,
     transcript: Option<(String, PathBuf)>,
     seen_len: u64,
+    /// A plain chat's transcript as read so far (each poll reads only what was added), and the
+    /// rows each of its entries makes.
+    log: Option<(PathBuf, Arc<std::sync::Mutex<agentty_bridge::chat_log::Reader>>)>,
+    entry_rows: Vec<Vec<ChatItem>>,
     loading: bool,
     /// A plain chat that hasn't read its conversation yet, since when: its terminal stays in front
     /// meanwhile, so switching to the chat never flashes the start screen before the history.
@@ -272,25 +276,31 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
     (items, briefed)
 }
 
-/// A plain chat as its structured log tells it: what the user wrote (as [`chat_items`] cleans it)
-/// and each reply with its steps.
-pub fn plain_items(entries: Vec<agentty_bridge::chat_log::Entry>) -> Vec<ChatItem> {
-    let mut items = Vec::new();
-    for entry in entries {
-        match entry.role {
-            Role::User => {
-                let unwrapped = without_paste_tags(&entry.text);
-                let cleaned = strip_harness_blocks(unwrapped.trim());
-                let text = cleaned.trim();
-                if !text.is_empty() {
-                    items.extend(user_entries(text));
-                }
+/// A plain chat as its structured log tells it, one entry at a time: what the user wrote (as
+/// [`chat_items`] cleans it) and each reply with its steps (none, for an empty entry).
+fn entry_rows(entry: agentty_bridge::chat_log::Entry) -> Vec<ChatItem> {
+    match entry.role {
+        Role::User => {
+            let unwrapped = without_paste_tags(&entry.text);
+            let cleaned = strip_harness_blocks(unwrapped.trim());
+            let text = cleaned.trim();
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                user_entries(text)
             }
-            Role::Assistant if !entry.blocks.is_empty() => items.push(ChatItem::Reply(Arc::new(entry.blocks))),
-            Role::Assistant => {}
         }
+        Role::Assistant if !entry.blocks.is_empty() => vec![ChatItem::Reply(Arc::new(entry.blocks))],
+        Role::Assistant => Vec::new(),
     }
-    items
+}
+
+/// What a poll read from a chat's transcript.
+enum Loaded {
+    /// The whole conversation (a chat workspace's lead), and whether its briefing is in it.
+    All(Vec<ChatItem>, bool),
+    /// A plain chat's rows from its `usize`th entry on: the ones before are as they were.
+    From(usize, Vec<Vec<ChatItem>>, Arc<std::sync::Mutex<agentty_bridge::chat_log::Reader>>),
 }
 
 /// A reply's words, without its steps (what is copied, and what the remote page shows).
@@ -500,7 +510,12 @@ fn top_share<T: Clone + PartialEq>(root: &PaneNode<T>, lead: &T) -> f32 {
 
 /// The chat entries that changed: the list re-measures only those.
 fn splice_list(list: &ListState, old: &[ChatItem], new: &[ChatItem]) {
-    let common = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    // A reply kept from the last read is the same one: no need to compare what it holds.
+    let same = |a: &ChatItem, b: &ChatItem| match (a, b) {
+        (ChatItem::Reply(a), ChatItem::Reply(b)) => Arc::ptr_eq(a, b) || a == b,
+        _ => a == b,
+    };
+    let common = old.iter().zip(new).take_while(|(a, b)| same(a, b)).count();
     if common == old.len() && common == new.len() {
         return;
     }
@@ -681,6 +696,8 @@ impl Workbench {
                     .unwrap_or_default(),
                 transcript: None,
                 seen_len: 0,
+                log: None,
+                entry_rows: Vec::new(),
                 loading: false,
                 first_load: plain.then(Instant::now),
                 _watch: watch,
@@ -960,6 +977,7 @@ impl Workbench {
         let plain = state.plain;
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
         let seen = if known.is_some() { state.seen_len } else { u64::MAX };
+        let log = state.log.clone();
         state.loading = true;
         let task = cx.background_spawn(async move {
             let path = match known {
@@ -971,13 +989,26 @@ impl Workbench {
                 return Some((session, path, len, None));
             }
             let items = if plain {
-                agentty_bridge::chat_log::read(agent, &path).ok().map(|entries| (plain_items(entries), false))
+                // The same file goes on where it was read to; another (a new session) from the start.
+                let reader = match log {
+                    Some((read, reader)) if read == path => reader,
+                    _ => Arc::new(std::sync::Mutex::new(agentty_bridge::chat_log::Reader::new(agent))),
+                };
+                let update = reader.lock().map_err(|_| ()).and_then(|mut r| r.update(&path).map_err(|_| ()));
+                match update {
+                    Ok(Some((from, entries))) => Some(Loaded::From(from, entries.into_iter().map(entry_rows).collect(), reader)),
+                    Ok(None) => None,
+                    Err(()) => None,
+                }
             } else {
                 let turns = match agent {
                     agentty_bridge::model::Agent::Codex => agentty_bridge::codex::transcript(&path),
                     _ => agentty_bridge::claude::transcript(&path),
                 };
-                turns.ok().map(|(_, turns)| chat_items(&turns))
+                turns.ok().map(|(_, turns)| {
+                    let (items, briefed) = chat_items(&turns);
+                    Loaded::All(items, briefed)
+                })
             };
             Some((session, path, len, items))
         });
@@ -990,21 +1021,40 @@ impl Workbench {
     }
 
     #[allow(clippy::type_complexity)]
-    fn apply_chat_load(
-        &mut self,
-        id: EntityId,
-        loaded: Option<(String, PathBuf, u64, Option<(Vec<ChatItem>, bool)>)>,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_chat_load(&mut self, id: EntityId, loaded: Option<(String, PathBuf, u64, Option<Loaded>)>, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get_mut(&id) else { return };
         state.loading = false;
         if state.first_load.take().is_some() {
             cx.notify();
         }
         let Some((session, path, len, items)) = loaded else { return };
-        state.transcript = Some((session, path));
         state.seen_len = len;
-        let Some((items, briefed)) = items else { return };
+        let (items, briefed) = match items {
+            Some(Loaded::All(items, briefed)) => (items, briefed),
+            Some(Loaded::From(from, rows, reader)) => {
+                // Read anew (another session): no row of the old one stays.
+                if state.log.as_ref().is_none_or(|(read, _)| *read != path) {
+                    state.entry_rows.clear();
+                }
+                state.log = Some((path.clone(), reader));
+                state.entry_rows.truncate(from);
+                state.entry_rows.extend(rows);
+                (state.entry_rows.iter().flatten().cloned().collect(), false)
+            }
+            None => {
+                // Another session with nothing in it yet: the old one's rows go.
+                if state.log.as_ref().is_some_and(|(read, _)| *read != path) {
+                    state.log = None;
+                    state.entry_rows.clear();
+                    state.items.clear();
+                    Self::show_chat_items(state);
+                    cx.notify();
+                }
+                state.transcript = Some((session, path));
+                return;
+            }
+        };
+        state.transcript = Some((session, path));
         state.briefed |= briefed;
         let ready = briefed && !state.brief_seen;
         state.brief_seen |= briefed;
@@ -1022,12 +1072,14 @@ impl Workbench {
     fn show_chat_items(state: &mut ChatState) {
         let mut shown = state.items.clone();
         shown.extend(state.echo.iter().cloned().map(ChatItem::User));
-        if state.follow.get() {
+        if state.follow.get() && !state.plain {
             // Measured again from the end, so a reply that keeps growing stays in view.
             if shown != *state.shown {
                 state.list.reset(shown.len());
             }
         } else {
+            // Only the rows that changed are measured again (a plain chat's long conversation
+            // gets a new line many times a second); at the bottom, the list stays there.
             splice_list(&state.list, &state.shown, &shown);
         }
         state.shown = Rc::new(shown);

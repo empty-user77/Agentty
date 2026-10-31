@@ -90,6 +90,56 @@ pub fn read(agent: Agent, path: &Path) -> Result<Vec<Entry>> {
     })
 }
 
+/// A transcript read as it grows: each [`Reader::update`] parses only what was written since the
+/// last one, so a long session is not read again from the start on every new line.
+pub struct Reader {
+    agent: Agent,
+    builder: Builder,
+    /// How far the file has been read.
+    offset: u64,
+    /// The end of the file when it stops mid-line: the rest of that line comes later.
+    partial: Vec<u8>,
+}
+
+impl Reader {
+    pub fn new(agent: Agent) -> Self {
+        Reader { agent, builder: Builder::default(), offset: 0, partial: Vec::new() }
+    }
+
+    /// Reads what was appended to `path`. When something changed: the first entry that did, and
+    /// the entries from there on (what came before is as it was). A file that got shorter (a new
+    /// one in its place) is read again from the start.
+    pub fn update(&mut self, path: &Path) -> Result<Option<(usize, Vec<Entry>)>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = File::open(path)?;
+        let len = file.metadata()?.len();
+        if len < self.offset {
+            *self = Reader::new(self.agent);
+            self.builder.changed_from = Some(0);
+        }
+        if len > self.offset {
+            file.seek(SeekFrom::Start(self.offset))?;
+            let mut bytes = Vec::with_capacity((len - self.offset) as usize);
+            file.take(len - self.offset).read_to_end(&mut bytes)?;
+            self.offset += bytes.len() as u64;
+            self.partial.extend_from_slice(&bytes);
+            let complete = self.partial.iter().rposition(|b| *b == b'\n').map_or(0, |at| at + 1);
+            let lines: Vec<u8> = self.partial.drain(..complete).collect();
+            for line in lines.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+                let line = String::from_utf8_lossy(line);
+                match self.agent {
+                    Agent::Codex => codex_line(&mut self.builder, &line),
+                    _ => claude_line(&mut self.builder, &line),
+                }
+            }
+        }
+        Ok(self.builder.changed_from.take().map(|from| {
+            let from = from.min(self.builder.entries.len());
+            (from, self.builder.entries[from..].to_vec())
+        }))
+    }
+}
+
 /// Builds entries, keeping where each tool step is so its result can be put next to it.
 #[derive(Default)]
 struct Builder {
@@ -99,18 +149,26 @@ struct Builder {
     tasks: Vec<(String, Todo)>,
     /// Tasks created so far: Claude Code numbers them on, deleted ones included.
     tasks_created: usize,
+    /// The first entry added or changed since [`Reader::update`] last looked.
+    changed_from: Option<usize>,
 }
 
 impl Builder {
+    fn changed(&mut self, entry: usize) {
+        self.changed_from = Some(self.changed_from.map_or(entry, |from| from.min(entry)));
+    }
+
     fn user(&mut self, text: String) {
+        self.changed(self.entries.len());
         self.entries.push(Entry { role: Role::User, text, blocks: Vec::new() });
     }
 
-    /// The reply being written: the last entry when it is one, else a new one.
+    /// The reply being written (to be changed): the last entry when it is one, else a new one.
     fn reply(&mut self) -> &mut Entry {
         if self.entries.last().is_none_or(|e| e.role != Role::Assistant) {
             self.entries.push(Entry { role: Role::Assistant, text: String::new(), blocks: Vec::new() });
         }
+        self.changed(self.entries.len() - 1);
         self.entries.last_mut().expect("just pushed")
     }
 
@@ -143,6 +201,7 @@ impl Builder {
 
     fn result(&mut self, id: &str, output: String, failed: bool) {
         let Some(&(entry, block)) = self.steps.get(id) else { return };
+        self.changed(entry);
         if let Some(Block::Tool(step)) = self.entries.get_mut(entry).and_then(|e| e.blocks.get_mut(block)) {
             step.output = Some(clip_output(&output));
             step.failed = failed;
@@ -167,42 +226,46 @@ fn str_field<'a>(input: &'a Value, keys: &[&str]) -> Option<&'a str> {
 fn claude_entries(lines: impl Iterator<Item = String>) -> Vec<Entry> {
     let mut b = Builder::default();
     for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-        if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
-            continue;
-        }
-        match v["type"].as_str() {
-            Some("user") => {
-                if let Some(blocks) = v["message"]["content"].as_array() {
-                    for block in blocks.iter().filter(|b| b["type"].as_str() == Some("tool_result")) {
-                        let id = block["tool_use_id"].as_str().unwrap_or_default();
-                        let failed = block["is_error"].as_bool() == Some(true);
-                        b.result(id, result_text(&block["content"]), failed);
-                    }
-                }
-                if let Some(text) = crate::claude::user_text(&v) {
-                    b.user(text);
-                }
-            }
-            Some("attachment") => {
-                if let Some(text) = crate::claude::queued_text(&v) {
-                    b.user(text);
-                }
-            }
-            Some("assistant") => {
-                let Some(blocks) = v["message"]["content"].as_array() else { continue };
-                for block in blocks {
-                    match block["type"].as_str() {
-                        Some("text") => b.text(block["text"].as_str().unwrap_or_default()),
-                        Some("tool_use") => claude_tool(&mut b, block),
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
+        claude_line(&mut b, &line);
     }
     b.entries
+}
+
+fn claude_line(b: &mut Builder, line: &str) {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+    if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
+        return;
+    }
+    match v["type"].as_str() {
+        Some("user") => {
+            if let Some(blocks) = v["message"]["content"].as_array() {
+                for block in blocks.iter().filter(|b| b["type"].as_str() == Some("tool_result")) {
+                    let id = block["tool_use_id"].as_str().unwrap_or_default();
+                    let failed = block["is_error"].as_bool() == Some(true);
+                    b.result(id, result_text(&block["content"]), failed);
+                }
+            }
+            if let Some(text) = crate::claude::user_text(&v) {
+                b.user(text);
+            }
+        }
+        Some("attachment") => {
+            if let Some(text) = crate::claude::queued_text(&v) {
+                b.user(text);
+            }
+        }
+        Some("assistant") => {
+            let Some(blocks) = v["message"]["content"].as_array() else { return };
+            for block in blocks {
+                match block["type"].as_str() {
+                    Some("text") => b.text(block["text"].as_str().unwrap_or_default()),
+                    Some("tool_use") => claude_tool(b, block),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn result_text(content: &Value) -> String {
@@ -319,85 +382,89 @@ fn script_command(script: &str) -> Option<String> {
 fn codex_entries(lines: impl Iterator<Item = String>) -> Vec<Entry> {
     let mut b = Builder::default();
     for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-        if v["type"].as_str() != Some("response_item") {
-            continue;
-        }
-        let payload = &v["payload"];
-        match payload["type"].as_str() {
-            Some("message") => {
-                let Some(turn) = crate::codex::message_turn(payload) else { continue };
-                match turn.role {
-                    Role::User => b.user(turn.text),
-                    Role::Assistant => b.text(&turn.text),
-                }
-            }
-            Some("function_call" | "custom_tool_call") => {
-                let name = payload["name"].as_str().unwrap_or("tool").to_string();
-                let raw = payload["arguments"].as_str().or(payload["input"].as_str()).unwrap_or("");
-                let args: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
-                if name == "update_plan" {
-                    let todos = args["plan"]
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|t| {
-                                    Some(Todo {
-                                        text: str_field(t, &["step"])?.to_string(),
-                                        active: None,
-                                        status: TodoStatus::parse(t["status"].as_str().unwrap_or_default()),
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    b.todos(todos);
-                    continue;
-                }
-                let command = match &args["command"] {
-                    Value::Array(parts) => {
-                        let parts: Vec<&str> = parts.iter().filter_map(Value::as_str).collect();
-                        // `bash -lc "<script>"`: the script is what was run.
-                        Some(match parts.as_slice() {
-                            [_, flag, script] if flag.starts_with('-') && flag.ends_with('c') => script.to_string(),
-                            _ => parts.join(" "),
-                        })
-                    }
-                    Value::String(s) => Some(s.clone()),
-                    _ => None,
-                };
-                let detail = command
-                    .or_else(|| str_field(&args, &["cmd", "path", "file_path", "query", "url"]).map(str::to_string))
-                    // Codex's `exec` tool runs a script that calls its tools: the command is in it.
-                    .or_else(|| script_command(raw))
-                    .or_else(|| (!raw.is_empty() && args.is_null()).then(|| raw.to_string()))
-                    .map(|s| truncate_chars(s.trim(), DETAIL_CHARS));
-                b.step(ToolStep {
-                    id: payload["call_id"].as_str().unwrap_or_default().to_string(),
-                    name,
-                    description: None,
-                    detail,
-                    output: None,
-                    failed: false,
-                    diff: None,
-                });
-            }
-            Some("function_call_output" | "custom_tool_call_output") => {
-                let id = payload["call_id"].as_str().unwrap_or_default();
-                let output = match &payload["output"] {
-                    Value::String(s) => serde_json::from_str::<Value>(s)
-                        .ok()
-                        .and_then(|v| v["output"].as_str().map(str::to_string))
-                        .unwrap_or_else(|| s.clone()),
-                    other => other["output"].as_str().map(str::to_string).unwrap_or_else(|| result_text(other)),
-                };
-                b.result(id, output, false);
-            }
-            _ => {}
-        }
+        codex_line(&mut b, &line);
     }
     b.entries
+}
+
+fn codex_line(b: &mut Builder, line: &str) {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+    if v["type"].as_str() != Some("response_item") {
+        return;
+    }
+    let payload = &v["payload"];
+    match payload["type"].as_str() {
+        Some("message") => {
+            let Some(turn) = crate::codex::message_turn(payload) else { return };
+            match turn.role {
+                Role::User => b.user(turn.text),
+                Role::Assistant => b.text(&turn.text),
+            }
+        }
+        Some("function_call" | "custom_tool_call") => {
+            let name = payload["name"].as_str().unwrap_or("tool").to_string();
+            let raw = payload["arguments"].as_str().or(payload["input"].as_str()).unwrap_or("");
+            let args: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+            if name == "update_plan" {
+                let todos = args["plan"]
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|t| {
+                                Some(Todo {
+                                    text: str_field(t, &["step"])?.to_string(),
+                                    active: None,
+                                    status: TodoStatus::parse(t["status"].as_str().unwrap_or_default()),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                b.todos(todos);
+                return;
+            }
+            let command = match &args["command"] {
+                Value::Array(parts) => {
+                    let parts: Vec<&str> = parts.iter().filter_map(Value::as_str).collect();
+                    // `bash -lc "<script>"`: the script is what was run.
+                    Some(match parts.as_slice() {
+                        [_, flag, script] if flag.starts_with('-') && flag.ends_with('c') => script.to_string(),
+                        _ => parts.join(" "),
+                    })
+                }
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            };
+            let detail = command
+                .or_else(|| str_field(&args, &["cmd", "path", "file_path", "query", "url"]).map(str::to_string))
+                // Codex's `exec` tool runs a script that calls its tools: the command is in it.
+                .or_else(|| script_command(raw))
+                .or_else(|| (!raw.is_empty() && args.is_null()).then(|| raw.to_string()))
+                .map(|s| truncate_chars(s.trim(), DETAIL_CHARS));
+            b.step(ToolStep {
+                id: payload["call_id"].as_str().unwrap_or_default().to_string(),
+                name,
+                description: None,
+                detail,
+                output: None,
+                failed: false,
+                diff: None,
+            });
+        }
+        Some("function_call_output" | "custom_tool_call_output") => {
+            let id = payload["call_id"].as_str().unwrap_or_default();
+            let output = match &payload["output"] {
+                Value::String(s) => serde_json::from_str::<Value>(s)
+                    .ok()
+                    .and_then(|v| v["output"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| s.clone()),
+                other => other["output"].as_str().map(str::to_string).unwrap_or_else(|| result_text(other)),
+            };
+            b.result(id, output, false);
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +564,36 @@ mod tests {
         );
         assert_eq!(script_command(r#"{"cmd":"echo \"hi\""}"#).as_deref(), Some(r#"echo "hi""#));
         assert_eq!(script_command("console.log(1)"), None);
+    }
+
+    #[test]
+    fn a_growing_transcript_is_read_from_where_it_was() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("agentty-reader-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let user = |text: &str| format!(r#"{{"type":"user","message":{{"role":"user","content":"{text}"}}}}"#);
+        let say = |text: &str| format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#);
+        std::fs::write(&path, format!("{}\n{}\n", user("first"), say("one"))).unwrap();
+        let mut reader = Reader::new(Agent::Claude);
+        let (from, entries) = reader.update(&path).unwrap().unwrap();
+        assert_eq!((from, entries.len()), (0, 2));
+        assert!(reader.update(&path).unwrap().is_none(), "nothing new");
+        // The reply goes on (it changes), half a line is written, then the rest of it.
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let next = say("two");
+        write!(file, "{}\n{}", next, &user("second")[..10]).unwrap();
+        let (from, entries) = reader.update(&path).unwrap().unwrap();
+        assert_eq!((from, entries.len()), (1, 1));
+        assert_eq!(entries[0].blocks.len(), 2);
+        writeln!(file, "{}", &user("second")[10..]).unwrap();
+        let (from, entries) = reader.update(&path).unwrap().unwrap();
+        assert_eq!((from, entries[0].text.as_str()), (2, "second"));
+        // A new file in its place is read from the start.
+        std::fs::write(&path, format!("{}\n", user("again"))).unwrap();
+        let (from, entries) = reader.update(&path).unwrap().unwrap();
+        assert_eq!((from, entries.len()), (0, 1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
