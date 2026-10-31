@@ -804,7 +804,31 @@ def main():
     c.add_argument("footage")
     c.add_argument("out")
     c.add_argument("pieces", nargs="+", help="from:to[:speed] in the footage's seconds")
+    f = sub.add_parser("film", help="build with HyperFrames: camera, cursor, transitions, word captions")
+    f.add_argument("storyboard")
+    f.add_argument("--out")
+    f.add_argument("--langs")
+    f.add_argument("--project", help="where the HyperFrames projects go (default: film/ beside the storyboard)")
+    f.add_argument("--jobs", default="2", help="renders at once")
+    f.add_argument("--no-render", action="store_true", help="write and check the projects only")
+    w = sub.add_parser("review", help="scene and seam sheets of a `film` video, and a narration check")
+    w.add_argument("video")
+    q = sub.add_parser("verify", help="read back every caption, headline, label and click target of a `film` video")
+    q.add_argument("video")
+    q.add_argument("--checks", help="the checks file (default: <slug>.<lang>.checks.json beside the video)")
+    q.add_argument("--lang")
+    q.add_argument("--strict", action="store_true", help="also fail on narration gaps and missing translations")
+    q.add_argument("--self-test", action="store_true", help="plant errors in a copy of the checks and confirm each is caught")
     args = parser.parse_args()
+    if args.cmd in ("film", "review", "verify"):
+        sys.path.insert(0, str(Path(__file__).parent))
+        if args.cmd == "verify":
+            import verify
+
+            return verify.verify(args)
+        import film
+
+        return film.film(args) if args.cmd == "film" else film.review(args)
     if args.cmd == "cut":
         cut(args)
     elif args.cmd == "build":

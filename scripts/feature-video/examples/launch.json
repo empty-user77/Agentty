@@ -1,0 +1,42 @@
+{
+ "about": "Launch form: hook, problem, reveal, proof, payoff, end card. 45-75 s of body. Footage names are placeholders.",
+ "slug": "feature-launch",
+ "title": { "en": "Feature name", "ko": "기능 이름", "ja": "機能名", "zh": "功能名称" },
+ "tagline": { "en": "One line on what it gives you", "ko": "무엇을 주는지 한 줄로", "ja": "何をもたらすかを一行で", "zh": "一句话说明它带来什么" },
+ "narration": "en",
+ "scenes": [
+  {
+   "layout": "title",
+   "headline": { "en": "The question your viewer already has", "ko": "보는 사람이 이미 가진 질문" },
+   "say": [{ "en": "One sentence that names the pain.", "ko": "불편함을 짚는 한 문장." }]
+  },
+  {
+   "clip": "footage/problem.mov", "from": "@before", "to": "@before+6", "speed": 1.2, "transition": "curve-left",
+   "headline": { "en": "Today: the slow way", "ko": "지금은 이렇게 번거롭습니다" },
+   "say": [{ "en": "What it takes without the feature.", "ko": "이 기능 없이 드는 수고." }]
+  },
+  {
+   "clip": "footage/turn-on.mov", "from": "@on", "to": "@on+8", "zoom": "auto", "transition": "zoom-through",
+   "headline": { "en": "Turn it on", "ko": "켜기만 하면 됩니다" },
+   "subline": { "en": "Where the switch is", "ko": "스위치가 있는 곳" },
+   "say": [{ "en": "Where to find it, in one click.", "ko": "어디서 켜는지, 클릭 한 번." }]
+  },
+  {
+   "clip": "footage/live.mov", "pieces": [["@start", "@start+4"], ["@result-1", "@result+2", 1.5]], "zoom": "auto", "transition": "curve-left",
+   "headline": { "en": "Watch it work", "ko": "실제로 동작합니다" },
+   "callouts": [{ "rect": [400, 300, 600, 200], "at": [2.0, 4.5], "label": { "en": "the result", "ko": "결과" } }],
+   "say": [{ "en": "The moment it works, live.", "ko": "실제로 동작하는 순간." }]
+  },
+  {
+   "layout": "stat", "value": "3×", "transition": "inverse-zoom",
+   "label": { "en": "faster than before", "ko": "더 빨라졌습니다" },
+   "subline": { "en": "measured on the demo project", "ko": "데모 프로젝트에서 잰 값" },
+   "say": [{ "en": "A real number from the recording, never a guess.", "ko": "녹화에서 나온 실제 숫자." }]
+  },
+  {
+   "layout": "steps", "transition": "curve-up",
+   "items": [{ "en": "First payoff", "ko": "첫째 이점" }, { "en": "Second payoff", "ko": "둘째 이점" }, { "en": "How to start", "ko": "시작하는 법" }],
+   "say": [{ "en": "What the viewer walks away with.", "ko": "보는 사람이 가져갈 것." }]
+  }
+ ]
+}
