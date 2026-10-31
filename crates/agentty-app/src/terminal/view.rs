@@ -1438,9 +1438,10 @@ impl TerminalView {
     /// Debug driver: which session this pane follows and why (`panes`).
     pub fn debug_session(&self) -> String {
         format!(
-            "pane {} kind={:?} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
+            "pane {} kind={:?} tool={} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
             self.pane_id,
             self.agent_kind(),
+            self.tool_id(),
             self.session_id_live,
             self.spec.session_id,
             self.hook_session,

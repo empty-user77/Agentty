@@ -52,7 +52,7 @@ impl Workbench {
     /// Text was selected in `pane`'s terminal (the agent copied its own selection, or Agentty's
     /// selection ended): an agent's pane gets the bar where the button was let go.
     pub(in crate::workbench) fn terminal_selected(&mut self, pane: &Pane, text: &str, at: Point<Pixels>, cx: &mut Context<Self>) {
-        if pane.read(cx).agent_kind().and_then(crate::launch::PaneKind::agent).is_none() || text.trim().is_empty() {
+        if pane_chat_agent(pane.read(cx)).is_none() || text.trim().is_empty() {
             return;
         }
         let text = text.to_string();

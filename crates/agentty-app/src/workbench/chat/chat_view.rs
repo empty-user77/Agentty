@@ -62,6 +62,22 @@ fn effort_of(lines: &[String]) -> Option<&'static str> {
     })
 }
 
+/// The model (and effort) Antigravity and Gemini CLI print at the right of their footer
+/// (`? for shortcuts      Gemini 3.8 Flash · high`).
+pub(in crate::workbench) fn footer_model(lines: &[String]) -> Option<(String, Option<&'static str>)> {
+    // The rows under a short screen are empty: the footer is among the last ones with text.
+    let line = lines.iter().rev().filter(|l| !l.trim().is_empty()).take(10).find(|l| {
+        let right = l.trim_end().rsplit("  ").next().unwrap_or_default().trim();
+        right.starts_with("Gemini") || right.starts_with("Claude") || right.starts_with("GPT")
+    })?;
+    let right = line.trim_end().rsplit("  ").next()?.trim();
+    let (model, effort) = match right.split_once(" · ") {
+        Some((model, effort)) => (model, effort_of(&[format!("/effort {effort}")])),
+        None => (right, None),
+    };
+    Some((model.to_string(), effort))
+}
+
 /// What the screen and the pane say about the agent, read once per frame.
 struct Live {
     tool: &'static str,
@@ -95,14 +111,29 @@ impl Workbench {
         let agent = chat_lead_agent(pane, cx);
         let lines = view.screen_lines(40);
         let waits = waits_on_user(view);
+        // Antigravity and Gemini CLI draw from the top of a tall screen: their footer can sit above
+        // the last rows read for the rest.
+        let footer = matches!(agent, agentty_bridge::model::Agent::Agy | agentty_bridge::model::Agent::Gemini)
+            .then(|| footer_model(&view.screen_lines(200)))
+            .flatten();
+        // Claude Code and Codex show a running turn on screen ("esc to interrupt"): a turn stopped
+        // without the hook that says it ended is not shown as running (its Stop would do nothing,
+        // and a second Esc opens Claude Code's rewind menu). A turn just sent has a moment to show.
+        let shows_turn = !matches!(agent, agentty_bridge::model::Agent::Claude | agentty_bridge::model::Agent::Codex)
+            || crate::terminal::classify_screen(&lines).busy
+            || view.working_since.is_some_and(|since| since.elapsed() < Duration::from_secs(5));
         Live {
             tool: view.tool_id(),
             agent,
-            working: view.status.in_turn(),
+            working: view.status.in_turn() && shows_turn,
             interrupted: matches!(view.status, AgentStatus::Interrupted),
-            activity: view.last_tool.as_ref().map(|(tool, target)| tool_text(tool, target.as_deref(), cx)),
+            activity: view
+                .last_tool
+                .as_ref()
+                .filter(|tool| Some(*tool) != state.earlier_tool.as_ref())
+                .map(|(tool, target)| tool_text(tool, target.as_deref(), cx)),
             elapsed: view.working_since.map(|since| crate::workbench::layout::format_elapsed(since.elapsed().as_secs())),
-            model: self.pane_model_text(pane, cx),
+            model: self.pane_model_text(pane, cx).or_else(|| footer.as_ref().map(|(model, _)| model.clone())),
             context: view.stats.as_ref().and_then(|stats| stats.context_percent().map(|p| (p, stats.context_used, stats.context_window))),
             choices: waits.then(|| screen_choices(&lines)).flatten(),
             question: match &view.status {
@@ -111,7 +142,7 @@ impl Workbench {
             }
             .or_else(|| crate::terminal::classify_screen(&lines).permission),
             mode: (agent == agentty_bridge::model::Agent::Claude).then(|| Mode::of(&lines)),
-            effort: effort_of(&lines),
+            effort: effort_of(&lines).or_else(|| footer.and_then(|(_, effort)| effort)),
             folder: view.display_cwd(),
             branch: view.git_branch.clone(),
             worktree: view.worktree.is_some(),
@@ -254,10 +285,7 @@ impl Workbench {
                 .child(icon(glyph, 12., hex(Chrome::MUTED)))
                 .child(div().truncate().max_w(px(220.)).child(text))
         };
-        let agent_name = match live.agent {
-            agentty_bridge::model::Agent::Codex => "Codex",
-            _ => "Claude Code",
-        };
+        let agent_name = live.agent.display_name();
         let facts = div()
             .flex()
             .flex_wrap()
@@ -391,7 +419,8 @@ impl Workbench {
             let folder = folder.to_string_lossy().into_owned();
             agentty_bridge::list(Some(agent), RECENT_SCANNED)
                 .into_iter()
-                .filter(|s| s.cwd.as_deref() == Some(folder.as_str()) && Some(&s.id) != current.as_ref())
+                // One with no time of its own (an unreadable record) is left out.
+                .filter(|s| s.cwd.as_deref() == Some(folder.as_str()) && Some(&s.id) != current.as_ref() && s.updated_at > 0)
                 .take(RECENT_SHOWN)
                 .collect::<Vec<_>>()
         });
@@ -667,7 +696,7 @@ impl Workbench {
                 ("sonnet", "Sonnet".into()),
                 ("haiku", "Haiku".into()),
             ],
-            // Codex chooses in a picker of its own, in the terminal.
+            // Codex, Antigravity and Gemini CLI choose in a picker of their own, in the terminal.
             _ => vec![("", t(cx, "chat.model_pick_in_terminal").to_string())],
         };
         let rows = options.into_iter().enumerate().map(|(index, (model, label))| {
@@ -760,9 +789,48 @@ impl Workbench {
     }
 
     /// Stops the agent's turn, as Esc in its terminal does.
+    /// Stops the turn: one Esc, and only while a turn runs on screen. A second Esc (a double click,
+    /// or a turn that already ended) would open Claude Code's rewind menu instead.
     fn interrupt_chat(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        let Some(state) = self.chats.get(&id) else { return };
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        if state.stopped_at.is_some_and(|at| at.elapsed() < Duration::from_millis(1500)) {
+            return;
+        }
+        if !crate::terminal::classify_screen(&state.lead.read(cx).screen_lines(40)).busy {
+            return cx.notify();
+        }
+        state.stopped_at = Some(Instant::now());
         state.lead.update(cx, |view, _| view.write(b"\x1b".to_vec()));
+        // Stopped before it answered, Claude Code puts the message back in its input: it goes back
+        // to the composer instead, or the next message would be sent after it.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(900)).await;
+            let _ = this.update(cx, |this, cx| this.take_back_stopped_message(id, cx));
+        })
+        .detach();
+    }
+
+    fn take_back_stopped_message(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.get(&id) else { return };
+        let lines = state.lead.read(cx).screen_lines(12);
+        // What was last sent is what comes back (the screen's copy of it may be cut or wrapped).
+        let last = state.echo.last().cloned().or_else(|| {
+            state.shown.iter().rev().find_map(|item| match item {
+                ChatItem::User(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if !last.as_deref().is_some_and(|sent| returned_to_input(&lines, sent)) {
+            return;
+        }
+        // Ctrl+E, Ctrl+U: to the end of the input, and all of it out.
+        state.lead.update(cx, |view, _| view.write(b"\x05\x15".to_vec()));
+        if let (Some(text), Some((input, _))) = (last, state.input.as_ref()) {
+            if input.read(cx).text().trim().is_empty() {
+                input.update(cx, |input, cx| input.set_text(text, cx));
+            }
+        }
+        cx.notify();
     }
 
     /// The next permission mode, as Shift+Tab in Claude Code.
@@ -920,6 +988,17 @@ impl Workbench {
         });
         Some(div().flex().flex_wrap().items_end().gap_2().px_1p5().pt_1p5().pb_1().children(items))
     }
+}
+
+/// Whether Claude Code's input box holds `sent` again (put back after a stop): its last prompt
+/// row (`❯`) starts as `sent` does, spaces aside (the screen spaces out wide letters).
+fn returned_to_input(lines: &[String], sent: &str) -> bool {
+    let bare = |text: &str| text.chars().filter(|c| !c.is_whitespace() && *c != '\u{a0}').collect::<String>();
+    let Some(shown) = lines.iter().rev().take(8).find_map(|line| line.trim_start().strip_prefix('❯')).map(bare) else {
+        return false;
+    };
+    let start: String = shown.chars().take(8).collect();
+    !start.is_empty() && bare(sent).starts_with(&start)
 }
 
 /// A sent message's files, and where its words start.
@@ -1603,6 +1682,24 @@ fn inline_spans(text: &str) -> (String, Vec<(std::ops::Range<usize>, bool)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_footer_names_the_model() {
+        let screen = |rows: &[&str]| rows.iter().map(|r| r.to_string()).collect::<Vec<_>>();
+        let (model, effort) = footer_model(&screen(&["> ", "? for shortcuts                       Gemini 3.8 Flash · high"])).unwrap();
+        assert_eq!((model.as_str(), effort), ("Gemini 3.8 Flash", Some("chat.effort_high")));
+        assert!(footer_model(&screen(&["? for shortcuts"])).is_none());
+    }
+
+    #[test]
+    fn a_stopped_message_is_found_back_in_the_input() {
+        let screen = |rows: &[&str]| rows.iter().map(|r| r.to_string()).collect::<Vec<_>>();
+        let sent = "도구 쓰지 말고 1부터 200까지 써줘";
+        assert!(returned_to_input(&screen(&["────", "❯\u{a0}도 구  쓰 지  말 고  1부 터", "────"]), sent));
+        // The placeholder of a new session, or an empty input, is not it.
+        assert!(!returned_to_input(&screen(&["❯ Try \"how do I log an error?\""]), sent));
+        assert!(!returned_to_input(&screen(&["❯ "]), sent));
+    }
 
     #[test]
     fn sent_files_lead_the_message() {

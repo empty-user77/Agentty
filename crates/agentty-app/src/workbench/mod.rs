@@ -5371,7 +5371,7 @@ impl Workbench {
                         .iter()
                         .enumerate()
                         .filter(|(_, l)| !l.trim().is_empty())
-                        .map(|(i, l)| format!("{i}:{}", l.chars().take(60).collect::<String>()))
+                        .map(|(i, l)| format!("{i}:{}", l.chars().take(200).collect::<String>()))
                         .collect();
                     eprintln!("screen-lines: total={} {:?} state={state:?}", lines.len(), &shown[shown.len().saturating_sub(10)..]);
                 }

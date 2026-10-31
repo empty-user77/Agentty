@@ -376,10 +376,10 @@ impl Workbench {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(match chat {
-                        Some(chat) => chat,
-                        None => gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()).into_any_element(),
-                    })
+                    // The terminal stays laid out under a chat: the agent keeps the pane's real width
+                    // (its footer, its wrapping), and switching back shows it as it is.
+                    .child(gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()))
+                    .children(chat.map(|chat| div().absolute().inset_0().occlude().child(chat)))
                     .children(chat_return)
                     .children(find_bar)
                     .children(drop_zones)
@@ -1024,9 +1024,20 @@ impl Workbench {
         let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
         let mut context_meter = Some(self.context_meter(pane, percent, false, cx));
         let view = pane.read(cx);
-        let kind = view.agent_kind()?;
+        // Claude Code and Codex tell their state, context and model through their hooks and logs.
+        // Antigravity and Gemini CLI only through their screen: their bar has the model it shows
+        // and the pane's own chips.
+        let kind = view.agent_kind();
+        let other = kind.is_none().then(|| super::chat::pane_chat_agent(view)).flatten();
+        if kind.is_none() && other.is_none() {
+            return None;
+        }
         let (status, status_color) = status_label_sized(view, width < COMPACT_METER_WIDTH, cx);
-        let name = crate::brand::brand(crate::brand::kind_id(kind)).name;
+        let name = crate::brand::brand(view.tool_id()).name;
+        let screen_model = other.and_then(|_| super::chat::footer_model(&view.screen_lines(200))).map(|(model, _)| model);
+        if other.is_some() {
+            context_meter = None;
+        }
         let working = view.working_since.is_some();
         // A chat's worker says which one it is: the grid shows several side by side.
         let worker = self.chat_worker_title(pane, cx);
@@ -1064,10 +1075,12 @@ impl Workbench {
                                 div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(
                                     pane_model_label(view, self.installed.as_ref())
                                         .map(|model| model.text(false))
+                                        .or_else(|| screen_model.clone())
                                         .unwrap_or_else(|| name.to_string()),
                                 ),
                             ),
                             HudItem::Context => d.children(context_meter.take()),
+                            HudItem::Usage | HudItem::Status | HudItem::Elapsed if other.is_some() => d,
                             HudItem::Usage => d
                                 .when_some(view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && width >= 700.), |d, percent| {
                                     d.child(meter("Usage", percent))

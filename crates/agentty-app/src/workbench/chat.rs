@@ -30,7 +30,7 @@ use crate::terminal::AgentStatus;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
-use agentty_bridge::model::{Role, Turn};
+use agentty_bridge::model::{Agent, Role, Turn};
 use gpui::{
     div, list, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, EntityId, ListAlignment, ListState, SharedString,
     Subscription, Task, Window,
@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod chat_view;
+pub(super) use chat_view::footer_model;
 mod selectable;
 pub(super) mod selection_ui;
 
@@ -53,6 +54,10 @@ const BRIEF_END: &str = "<!-- /agentty:chat-lead -->";
 const REPORT_MARK: &str = "[Agentty]";
 /// How often the lead's transcript is checked for news.
 const WATCH_INTERVAL: Duration = Duration::from_millis(700);
+/// How often the session of an agent that doesn't name it is looked up again: after it was found
+/// (a new conversation is a new one), and while none is.
+const SESSION_RECHECK: Duration = Duration::from_secs(15);
+const SESSION_RETRY: Duration = Duration::from_secs(3);
 /// How long a plain chat waits for its agent to name its conversation before it shows the start
 /// screen (an agent started a moment ago names it only after its first screen).
 const FIRST_LOAD_WAIT: Duration = Duration::from_millis(1500);
@@ -131,6 +136,14 @@ pub struct ChatState {
     attachments: Vec<PathBuf>,
     /// What the next message replies to: a selection, quoted in front of it.
     quote: Option<String>,
+    /// When Stop last sent its Esc.
+    stopped_at: Option<Instant>,
+    /// Gemini CLI and Antigravity don't say which session they write: the newest one in the pane's
+    /// folder, looked up now and then (and whether a lookup runs).
+    found_session: Option<(Instant, Option<String>)>,
+    finding_session: bool,
+    /// The agent's last tool when the user last wrote: an older turn's, not shown as what it does now.
+    earlier_tool: Option<(String, Option<String>)>,
     /// Earlier sessions of the same agent in the same folder, for the start screen: `None` until
     /// read (once, while the chat is empty).
     recent: Option<Vec<agentty_bridge::model::SessionInfo>>,
@@ -665,6 +678,10 @@ impl Workbench {
                 model_menu: false,
                 attachments: Vec::new(),
                 quote: None,
+                stopped_at: None,
+                found_session: None,
+                finding_session: false,
+                earlier_tool: None,
                 recent: None,
                 recent_loading: false,
                 roles,
@@ -808,7 +825,11 @@ impl Workbench {
         if !state.plain {
             return view.status.needs_user();
         }
-        waits_on_user(view) && screen_choices(&view.screen_lines(40)).is_none()
+        let lines = view.screen_lines(40);
+        // A menu of the agent's own (Claude Code's rewind, a picker) that is not numbered options
+        // the chat can show as buttons: only its terminal can answer it.
+        let menu = lines.iter().rev().take(6).any(|line| line.to_lowercase().contains("esc to cancel"));
+        (waits_on_user(view) || menu) && screen_choices(&lines).is_none()
     }
 
     /// The composer to put the keyboard in instead of `pane`, when `pane` is a lead shown as a chat.
@@ -957,7 +978,31 @@ impl Workbench {
         // terminal, not on a button.
         let early = !state.briefed || state.plain;
         let setup = early && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
-        let session = view.current_session();
+        let agent = chat_lead_agent(&state.lead, cx);
+        let named = !matches!(agent, Agent::Gemini | Agent::Agy);
+        let session = if named { view.current_session() } else { state.found_session.as_ref().and_then(|(_, id)| id.clone()) };
+        // Looked up again now and then: a new conversation (`/clear`) is a new session.
+        let look_up = !named
+            && !state.finding_session
+            && state
+                .found_session
+                .as_ref()
+                .is_none_or(|(at, id)| at.elapsed() >= if id.is_some() { SESSION_RECHECK } else { SESSION_RETRY });
+        if look_up {
+            state.finding_session = true;
+            let (cwd, since) = (view.display_cwd(), view.launched_at_ms);
+            let find = cx.background_spawn(async move { agentty_bridge::find_recent(agent, &cwd, since) });
+            cx.spawn(async move |this, cx| {
+                let found = find.await;
+                let _ = this.update(cx, |this, _| {
+                    if let Some(state) = this.chats.get_mut(&id) {
+                        state.finding_session = false;
+                        state.found_session = Some((Instant::now(), found));
+                    }
+                });
+            })
+            .detach();
+        }
         if setup != state.setup_screen {
             state.setup_screen = setup;
             cx.notify();
@@ -973,7 +1018,6 @@ impl Workbench {
             }
             return true;
         };
-        let agent = chat_lead_agent(&state.lead, cx);
         let plain = state.plain;
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
         let seen = if known.is_some() { state.seen_len } else { u64::MAX };
@@ -982,13 +1026,20 @@ impl Workbench {
         let task = cx.background_spawn(async move {
             let path = match known {
                 Some(path) => path,
-                None => agentty_bridge::transcript_path(agent, &session)?,
+                None => chat_transcript_path(agent, &session)?,
             };
-            let len = std::fs::metadata(&path).ok()?.len();
+            let len = transcript_len(&path)?;
             if len == seen {
                 return Some((session, path, len, None));
             }
-            let items = if plain {
+            let items = if plain && !named {
+                // Gemini CLI and Antigravity: what was said, read whole (their logs are small).
+                let turns = match agent {
+                    Agent::Agy => agentty_bridge::agy::transcript(&path),
+                    _ => agentty_bridge::gemini::transcript(&path),
+                };
+                turns.ok().map(|(_, turns)| Loaded::All(said_rows(&turns), false))
+            } else if plain {
                 // The same file goes on where it was read to; another (a new session) from the start.
                 let reader = match log {
                     Some((read, reader)) if read == path => reader,
@@ -1112,6 +1163,7 @@ impl Workbench {
     fn say_to_lead(&mut self, id: EntityId, text: String, cx: &mut Context<Self>) {
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.resolved().code());
         let Some(state) = self.chats.get_mut(&id) else { return };
+        state.earlier_tool = state.lead.read(cx).last_tool.clone();
         // A slash command is for Claude Code itself, not a message to brief the lead with.
         let brief = (!state.briefed && !text.starts_with('/')).then(|| brief_message(language, &Self::lead_folder_brief(&state.lead, cx)));
         let prompt = text.clone();
@@ -2106,14 +2158,63 @@ fn message_list(state: &ChatState, cx: &mut Context<Workbench>) -> AnyElement {
 }
 
 /// The agent a chat's lead runs as (Claude Code for a chat made before a lead could be Codex).
-fn chat_lead_agent(lead: &Pane, cx: &App) -> agentty_bridge::model::Agent {
+fn chat_lead_agent(lead: &Pane, cx: &App) -> Agent {
     let view = lead.read(cx);
-    view.spec.kind.agent().or_else(|| view.agent_kind().and_then(PaneKind::agent)).unwrap_or(agentty_bridge::model::Agent::Claude)
+    view.spec.kind.agent().or_else(|| pane_chat_agent(view)).unwrap_or(Agent::Claude)
+}
+
+/// The agent running in a pane whose conversation chat view can read: Claude Code and Codex (their
+/// own pane kinds), and Gemini CLI and Antigravity, known by the program in the foreground.
+pub(super) fn pane_chat_agent(view: &crate::terminal::TerminalView) -> Option<Agent> {
+    view.agent_kind().and_then(PaneKind::agent).or_else(|| match view.tool_id() {
+        "gemini" => Some(Agent::Gemini),
+        "agy" => Some(Agent::Agy),
+        _ => None,
+    })
 }
 
 /// Whether chat view draws `pane` as a chat: an agent whose conversation Agentty can read runs in it.
 fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
-    pane.read(cx).agent_kind().and_then(PaneKind::agent).is_some()
+    pane_chat_agent(pane.read(cx)).is_some()
+}
+
+/// Where an agent keeps session `id`.
+fn chat_transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
+    match agent {
+        Agent::Gemini => agentty_bridge::gemini::find(id).ok(),
+        Agent::Agy => agentty_bridge::agy::find(id).ok(),
+        _ => agentty_bridge::transcript_path(agent, id),
+    }
+}
+
+/// How much a transcript holds, to tell when it grew. Antigravity's is an SQLite database whose
+/// new rows wait in its write-ahead log first.
+fn transcript_len(path: &std::path::Path) -> Option<u64> {
+    let len = std::fs::metadata(path).ok()?.len();
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    Some(len + std::fs::metadata(std::path::Path::new(&wal)).map_or(0, |m| m.len()))
+}
+
+/// The rows of a conversation read as what each side said (Gemini CLI, Antigravity): the user's
+/// words, and each reply as one block of text.
+fn said_rows(turns: &[Turn]) -> Vec<ChatItem> {
+    let mut rows = Vec::new();
+    for turn in turns {
+        match turn.role {
+            Role::User => {
+                let text = turn.text.trim();
+                if !text.is_empty() {
+                    rows.extend(user_entries(text));
+                }
+            }
+            Role::Assistant if !turn.text.trim().is_empty() => {
+                rows.push(ChatItem::Reply(Arc::new(vec![agentty_bridge::chat_log::Block::Text(turn.text.trim().to_string())])))
+            }
+            Role::Assistant => {}
+        }
+    }
+    rows
 }
 
 /// The options of the selection at the bottom of an agent's screen (an approval, a question), top

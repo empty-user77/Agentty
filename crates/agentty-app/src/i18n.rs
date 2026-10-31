@@ -977,7 +977,7 @@ strings! {
     "launcher.target_tab" => ["New tab", "새 탭", "新しいタブ", "新标签页", "Neuer Tab"],
     "launcher.target_right" => ["Split right", "오른쪽 분할", "右に分割", "向右分屏", "Rechts teilen"],
     "launcher.target_down" => ["Split down", "아래 분할", "下に分割", "向下分屏", "Unten teilen"],
-    "worktree.shared" => ["Another AI session already works in this folder, so the two can overwrite each other's files. Open agents from the + menu (new tab or split) to be asked about a working tree of its own.", "이 폴더에서 이미 다른 AI 세션이 작업 중이라 서로의 파일을 덮어쓸 수 있습니다. + 메뉴(새 탭 · 분할)로 에이전트를 열면 별도 워크트리로 시작할지 물어봅니다.", "このフォルダでは別の AI セッションが作業中のため、互いのファイルを上書きする可能性があります。+ メニュー（新しいタブ・分割）からエージェントを開くと、専用のワークツリーで始めるか尋ねます。", "此文件夹中已有其他 AI 会话在工作，两者可能互相覆盖文件。通过 + 菜单（新标签页或分屏）打开代理时，会询问是否使用独立的工作树。", "In diesem Ordner arbeitet bereits eine andere KI-Sitzung, deshalb können beide die Dateien des anderen überschreiben. Öffne Agenten über das +-Menü (neuer Tab oder geteilter Bereich), um nach einem eigenen Worktree gefragt zu werden."],
+    "worktree.shared" => ["Another AI is working in this folder. For a separate worktree, open agents from the + menu.", "다른 AI가 이 폴더에서 작업 중입니다. 별도 워크트리는 + 메뉴로 여세요.", "別の AI がこのフォルダで作業中です。別のワークツリーは + メニューから開いてください。", "其他 AI 正在此文件夹中工作。如需独立工作树，请从 + 菜单打开。", "Eine andere KI arbeitet in diesem Ordner. Für einen eigenen Worktree Agenten über das +-Menü öffnen."],
     "run.chip" => ["Run", "실행", "実行", "运行", "Ausführen"],
     "run.chip_running" => ["{n} running", "{n} 실행 중", "{n} 実行中", "{n} 运行中", "{n} aktiv"],
     "run.chip_tooltip" => ["Run configurations and servers of this project", "이 프로젝트의 실행 구성과 서버", "このプロジェクトの実行構成とサーバー", "此项目的运行配置和服务器", "Ausführungskonfigurationen und Server dieses Projekts"],
