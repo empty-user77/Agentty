@@ -186,6 +186,7 @@ actions!(
         JumpToUnread,
         OpenPalette,
         ToggleZoom,
+        ToggleChatView,
         ToggleVoiceInput,
     ]
 );
@@ -3710,6 +3711,7 @@ impl Render for Workbench {
                     this.resume_session(&session, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleChatView, window, cx| this.toggle_chat_view(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleZoom, window, cx| {
                 if let Some(pane) = this.active_pane() {
                     this.toggle_zoom(&pane, window, cx);

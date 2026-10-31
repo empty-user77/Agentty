@@ -4,6 +4,7 @@ pub mod agent_auth;
 pub mod agy;
 pub mod amp;
 pub mod backup;
+pub mod chat_log;
 pub mod claude;
 pub mod claude_features;
 pub mod claude_trust;

@@ -315,6 +315,7 @@ mod tests {
         ("cmd-shift-u", None),
         ("cmd-shift-p", None),
         ("cmd-shift-enter", None),
+        ("cmd-shift-j", None),
         ("cmd-shift-o", None),
         ("ctrl-1", None),
         ("ctrl-9", None),

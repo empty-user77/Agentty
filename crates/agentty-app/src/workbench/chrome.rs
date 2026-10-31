@@ -2342,6 +2342,13 @@ impl Workbench {
                             cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
                         ))
                     })
+                    .child(header_icon(
+                        "header-chat-view",
+                        "message-square",
+                        crate::settings::settings(cx).chat_view,
+                        (t(cx, "menu.chat_view"), Some("⇧⌘J")),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_chat_view(window, cx)),
+                    ))
                     .child(ringed(
                         header_icon(
                             "header-browser",
