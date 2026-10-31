@@ -46,7 +46,7 @@ You need:
 ## Setup
 
 1. Click **Remote access** (the globe-and-monitor icon) in the side menu
-2. Set a **Web password** (at least 8 characters in English letters, digits and symbols, entered twice; the eye button shows what you typed)
+2. Set a **Web password** (at least 12 characters in English letters, digits and symbols, entered twice; the eye button shows what you typed)
 3. Press **Issue certificate** under **Before turning it on**: Tailscale gets this computer's HTTPS certificate (once per computer; the first time can take a minute, and Tailscale renews it by itself)
 4. Turn on **Remote access** — the switch works once every step in **Before turning it on** is checked
 5. Copy the address that appears (`https://<machine>.<tailnet>.ts.net:8743/`), or tap **Open** to go there directly

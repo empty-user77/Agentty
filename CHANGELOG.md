@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-10-31
+
+### Added
+- Remote access takes workspaces sent from a phone: they open under their own name in a group of their own, and
+  files sent with them are saved in the workspace's folder (kept out of git). The device list names the Agentty
+  Remote app instead of "Browser".
+
+### Changed
+- A new web password for remote access needs at least 12 characters. Passwords already set keep working.
+
+### Fixed
+- The context meter showed the wrong window for some models (Claude Haiku 5.5 read as 200K, so it passed 100%).
+  The window now comes from the agent itself — Claude Code reports it to its status line — instead of being
+  guessed from the model's name; until it is known, the meter shows tokens without a percentage.
+
+### Security
+- Remote access holds at most a few uploads in memory at once, ignores a workspace group named like a built-in
+  one, keeps a dev server behind the dev proxy from setting the page's sign-in cookie, and no longer lets an open
+  live-reload connection keep a session alive.
+
 ## [0.3.6] - 2026-10-30
 
 ### Added
