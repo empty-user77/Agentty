@@ -849,13 +849,14 @@ impl Workbench {
 
         let panes = self.all_panes();
         let alive: std::collections::HashSet<EntityId> = panes.iter().map(|p| p.entity_id()).collect();
-        self.chat_modes.retain(|id, _| alive.contains(id));
+        // A pane's choice lasts while its agent runs: the next agent started in it (after `exit`)
+        // takes the setting again, not what the last one was switched to.
+        let running: std::collections::HashSet<EntityId> = panes.iter().filter(|p| shows_as_chat(p, cx)).map(|p| p.entity_id()).collect();
+        self.chat_modes.retain(|id, _| running.contains(id));
         // An agent takes the setting when it starts (in a terminal too: `claude` typed into a
         // shell); changing the setting later leaves running agents as they are.
-        for pane in &panes {
-            if !self.chat_modes.contains_key(&pane.entity_id()) && shows_as_chat(pane, cx) {
-                self.chat_modes.insert(pane.entity_id(), chat_view);
-            }
+        for id in &running {
+            self.chat_modes.entry(*id).or_insert(chat_view);
         }
         // Chat view: agent panes become chats (each by its own choice, else by the setting), and stop
         // being one when switched off or when their agent left.
