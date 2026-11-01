@@ -67,6 +67,12 @@ pub enum TerminalEvent {
     },
     /// Clicked a link (URL in the text or an OSC 8 hyperlink).
     OpenLink(String),
+    /// Text was just selected with the mouse: the program's own selection it copied (OSC 52), or
+    /// the terminal's. `at`: where the button was let go, in the window.
+    Selected {
+        text: String,
+        at: Point<Pixels>,
+    },
     /// Clicked a file or folder path printed in the terminal: show it in Finder.
     /// A file or folder clicked in the text; for a file, the `line:column` written after it
     /// (from 1), when one was.
@@ -283,6 +289,9 @@ pub struct TerminalView {
     layout: Option<Layout>,
     scroll_remainder: f32,
     selecting: bool,
+    /// Where and when the left button was last let go: a copy the program makes right after it is
+    /// the user's selection.
+    last_mouse_up: Option<(Point<Pixels>, Instant)>,
     /// The selection the user made and its text when last seen. A program redrawing a line
     /// (Codex its prompt, every frame) makes the terminal drop any selection touching it, even
     /// when the same text is written back; it comes back as long as its text is unchanged.
@@ -301,6 +310,10 @@ pub struct TerminalView {
     pub live_agent: Option<PaneKind>,
     /// When that agent was first seen. A shell pane can be much older than the agent typed into it.
     pub agent_since_ms: Option<u64>,
+    /// The agent that last ran in the pane (it stays known after it quits).
+    last_agent: Option<PaneKind>,
+    /// The agent running now was started by hand after the launched one quit: no hooks report it.
+    by_hand: bool,
     /// Any known agent CLI in the foreground, by brand id (`claude`, `gemini`, `agy`, …).
     pub live_tool: Option<&'static str>,
     /// The process running `live_tool` (on Windows the only way to reach the agent itself).
@@ -477,6 +490,7 @@ impl TerminalView {
             layout: None,
             scroll_remainder: 0.,
             selecting: false,
+            last_mouse_up: None,
             kept_selection: None,
             search: None,
             mouse_reporting: false,
@@ -486,6 +500,8 @@ impl TerminalView {
             cursor_visible: true,
             live_agent: None,
             agent_since_ms: None,
+            last_agent: None,
+            by_hand: false,
             live_tool: None,
             live_tool_pid: None,
             esc_at: None,
@@ -633,10 +649,22 @@ impl TerminalView {
             self.cwd_gone = gone;
             changed = true;
         }
+        // An agent started again by hand after the one the pane was launched with quit has none of
+        // the hooks Agentty gives a launched agent: its turns are read off the screen, as in a shell.
+        if live_agent.is_some() && self.live_agent.is_none() && self.agent_seen && self.agent_exited {
+            self.by_hand = true;
+        }
         if self.spec.kind != PaneKind::Shell {
-            if live_agent.is_some() {
+            if live_agent == Some(self.spec.kind) {
                 self.agent_seen = true;
                 self.agent_exited = false;
+            } else if live_agent.is_some() {
+                // Another agent took over the pane (`claude` quit, then `codex`): the pane is that
+                // one's now, not the one it was started as.
+                if !self.agent_exited {
+                    self.agent_exited = true;
+                    changed = true;
+                }
             } else if (self.agent_seen || self.probe_ticks > 20) && !self.agent_exited {
                 // `claude` / `codex` quit and the pane fell back to its shell.
                 self.agent_exited = true;
@@ -648,6 +676,16 @@ impl TerminalView {
         }
         if live_agent.is_some() && self.live_agent.is_none() {
             self.agent_since_ms = Some(crate::ui::now_ms());
+        }
+        // Another agent than the one the pane last ran: nothing it read about that one's session
+        // (its id, the model on its screen) is this one's.
+        if live_agent.is_some() && live_agent != self.live_agent && live_agent != self.last_agent {
+            if self.last_agent.is_some() {
+                self.session_id_live = None;
+                self.banner_model = None;
+                self.stats = None;
+            }
+            self.last_agent = live_agent;
         }
         if live_agent != self.live_agent {
             cx.emit(TerminalEvent::SessionChanged);
@@ -899,6 +937,15 @@ impl TerminalView {
         }
     }
 
+    /// Esc sent for the user (chat view's Stop): the turn it stops reads as interrupted, as when
+    /// Esc is pressed in the terminal.
+    pub fn interrupt(&mut self) {
+        if self.status.in_turn() {
+            self.esc_at = Some(Instant::now());
+        }
+        self.write(b"\x1b".to_vec());
+    }
+
     /// What a key tells about the agent's state, before it reaches the program: Esc may interrupt
     /// a turn, and Enter in Codex starts one.
     fn note_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
@@ -1004,7 +1051,7 @@ impl TerminalView {
                 self.working_since = None;
                 self.esc_at = None;
             } else if self.quiet_ticks >= 4 {
-                if self.spec.kind == PaneKind::Shell && self.status == AgentStatus::Working {
+                if (self.spec.kind == PaneKind::Shell || self.by_hand) && self.status == AgentStatus::Working {
                     // Started by hand, so no hooks will say so: report the finished turn here.
                     self.working_since = None;
                     self.ask_gate.resume();
@@ -1171,8 +1218,9 @@ impl TerminalView {
             cx.emit(TerminalEvent::StatusChanged);
             cx.notify();
         }
-        // The session the pane was launched with, for a resumed session of either agent.
-        let known = self.spec.session_id.clone();
+        // The session the pane was launched with, for a resumed session of either agent: only
+        // while that agent is the one running (not one started in the pane after it quit).
+        let known = self.spec.session_id.clone().filter(|_| self.spec.kind.agent() == Some(agent));
         // Claude Code registers itself under its pid, which is the only thing that tells two
         // sessions in the same folder apart.
         let agent_pid = self
@@ -1382,6 +1430,12 @@ impl TerminalView {
     /// Title for tabs and lists: shell titles like `user@host:~/code` are shortened to the path.
     /// The Claude Code session this pane's agent writes to now: the one its hooks named last (a
     /// `/clear` starts another), else the one it was started or found with.
+    /// The session the running agent itself named (its hooks, or what was found for it), without
+    /// falling back on the one the pane was launched with.
+    pub fn running_session(&self) -> Option<String> {
+        self.hook_session.clone().or_else(|| self.session_id_live.clone())
+    }
+
     pub fn current_session(&self) -> Option<String> {
         self.hook_session.clone().or_else(|| self.session_id_live.clone()).or_else(|| self.spec.session_id.clone())
     }
@@ -1428,9 +1482,10 @@ impl TerminalView {
     /// Debug driver: which session this pane follows and why (`panes`).
     pub fn debug_session(&self) -> String {
         format!(
-            "pane {} kind={:?} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
+            "pane {} kind={:?} tool={} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
             self.pane_id,
             self.agent_kind(),
+            self.tool_id(),
             self.session_id_live,
             self.spec.session_id,
             self.hook_session,
@@ -1838,7 +1893,14 @@ impl TerminalView {
                     cx.emit(TerminalEvent::TitleChanged);
                 }
                 TermEvent::PtyWrite(text) => self.write(text.into_bytes()),
-                TermEvent::ClipboardStore(_, text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+                TermEvent::ClipboardStore(_, text) => {
+                    // A copy right after the button was let go is the program's own selection
+                    // (Claude Code copies what is dragged over).
+                    if let Some((at, _)) = self.last_mouse_up.filter(|(_, when)| when.elapsed() < Duration::from_millis(1500)) {
+                        cx.emit(TerminalEvent::Selected { text: text.clone(), at });
+                    }
+                    cx.write_to_clipboard(ClipboardItem::new_string(text))
+                }
                 // Programs may not read the clipboard via OSC 52: any output (a `cat`-ed file, a remote
                 // host) could otherwise exfiltrate it. Writes are still allowed.
                 TermEvent::ClipboardLoad(..) => {}
@@ -2237,6 +2299,7 @@ impl TerminalView {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.last_mouse_up = Some((event.position, Instant::now()));
         if std::mem::take(&mut self.mouse_reporting) {
             self.last_mouse_cell = None;
             if let Some(cell) = self.viewport_cell(event.position) {
@@ -2244,15 +2307,22 @@ impl TerminalView {
             }
             return;
         }
-        self.selecting = false;
+        let dragged = std::mem::take(&mut self.selecting);
         self.restore_selection();
         let mut empty_selection = true;
+        let mut selected = None;
         if let Some(backend) = &self.backend {
             let mut term = backend.term.lock();
             if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
                 term.selection = None;
             }
             empty_selection = term.selection.is_none();
+            if dragged {
+                selected = term.selection_to_string().filter(|text| !text.trim().is_empty());
+            }
+        }
+        if let Some(text) = selected {
+            cx.emit(TerminalEvent::Selected { text, at: event.position });
         }
         if empty_selection {
             self.kept_selection = None;

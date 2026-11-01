@@ -64,7 +64,7 @@ impl Workbench {
                         None => *size,
                     };
                     // A chat keeps room to read and write in, however the grid below it grows.
-                    let chat = axis == Axis::Vertical && matches!(child, PaneNode::Leaf(p) if self.chats.contains_key(&p.entity_id()));
+                    let chat = axis == Axis::Vertical && matches!(child, PaneNode::Leaf(p) if self.is_chat_lead(p));
                     container = container.child(
                         div()
                             .flex_basis(relative(0.))
@@ -339,7 +339,11 @@ impl Workbench {
         let resume_hint = self.render_resume_hint(pane, cx);
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
+        // A pane shown as a chat has the same facts under its composer and in its panel.
         let mut agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        // Chat view: the conversation in place of the terminal, or the way back to it over the terminal.
+        let chat = self.render_plain_chat(pane, cx);
+        let chat_return = chat.is_none().then(|| self.render_plain_chat_return(pane, cx)).flatten();
         let widths = self.pane_bounds.clone();
         let id = pane.entity_id();
 
@@ -372,7 +376,11 @@ impl Workbench {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    // The terminal stays laid out under a chat: the agent keeps the pane's real width
+                    // (its footer, its wrapping), and switching back shows it as it is.
                     .child(gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()))
+                    .children(chat.map(|chat| div().absolute().inset_0().occlude().child(chat)))
+                    .children(chat_return)
                     .children(find_bar)
                     .children(drop_zones)
                     .children(connect_pick),
@@ -404,6 +412,13 @@ impl Workbench {
         // Focus view comes back after a restart, like the split sizes it overrides.
         self.persist(cx);
         cx.notify();
+    }
+}
+
+impl Workbench {
+    /// The model `pane` runs, as a chat names it under its composer.
+    pub(super) fn pane_model_text(&self, pane: &Pane, cx: &gpui::App) -> Option<String> {
+        pane_model_label(pane.read(cx), self.installed.as_ref()).map(|label| label.text(true))
     }
 }
 
@@ -648,7 +663,7 @@ impl Workbench {
     /// Opens the pane's branch in the default browser: `origin`'s web page for it, or the repository's
     /// page while the branch has not been pushed (its page would be a 404). Always the external
     /// browser, whatever links are set to open in: repository hosts need the user's own login.
-    fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+    pub(super) fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         let (repo, branch, pushed) = {
             let view = pane.read(cx);
             (view.display_cwd(), view.git_branch.clone(), view.git_ahead.is_some())
@@ -1009,9 +1024,20 @@ impl Workbench {
         let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
         let mut context_meter = Some(self.context_meter(pane, percent, false, cx));
         let view = pane.read(cx);
-        let kind = view.agent_kind()?;
+        // Claude Code and Codex tell their state, context and model through their hooks and logs.
+        // Antigravity and Gemini CLI only through their screen: their bar has the model it shows
+        // and the pane's own chips.
+        let kind = view.agent_kind();
+        let other = kind.is_none().then(|| super::chat::pane_chat_agent(view)).flatten();
+        if kind.is_none() && other.is_none() {
+            return None;
+        }
         let (status, status_color) = status_label_sized(view, width < COMPACT_METER_WIDTH, cx);
-        let name = crate::brand::brand(crate::brand::kind_id(kind)).name;
+        let name = crate::brand::brand(view.tool_id()).name;
+        let screen_model = other.and_then(|_| super::chat::footer_model(&view.screen_lines(200))).map(|(model, _)| model);
+        if other.is_some() {
+            context_meter = None;
+        }
         let working = view.working_since.is_some();
         // A chat's worker says which one it is: the grid shows several side by side.
         let worker = self.chat_worker_title(pane, cx);
@@ -1047,12 +1073,16 @@ impl Workbench {
                             // which agent this is, and the bar needs the room.
                             HudItem::Model => d.child(
                                 div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(
-                                    pane_model_label(view, self.installed.as_ref())
-                                        .map(|model| model.text(false))
-                                        .unwrap_or_else(|| name.to_string()),
+                                    if other.is_some() {
+                                        screen_model.clone()
+                                    } else {
+                                        pane_model_label(view, self.installed.as_ref()).map(|model| model.text(false))
+                                    }
+                                    .unwrap_or_else(|| name.to_string()),
                                 ),
                             ),
                             HudItem::Context => d.children(context_meter.take()),
+                            HudItem::Usage | HudItem::Status | HudItem::Elapsed if other.is_some() => d,
                             HudItem::Usage => d
                                 .when_some(view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && width >= 700.), |d, percent| {
                                     d.child(meter("Usage", percent))

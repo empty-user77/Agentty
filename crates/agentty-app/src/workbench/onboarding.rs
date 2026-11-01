@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet};
 pub(super) enum Step {
     Appearance,
     Agents,
+    /// How agents are shown: their terminal, or a chat.
+    Mode,
     Look,
     Work,
     Notify,

@@ -1488,17 +1488,17 @@ impl Workbench {
                 cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = position)),
             ));
         }
+        // First: how agents open, as the onboarding asks it (a picture of each).
+        let modes = div().flex().gap_3().pb_2().children(
+            [false, true].map(|on| super::onboarding_setup::mode_card("settings-mode", on, prefs.chat_view == on, 120., cx).w(px(300.))),
+        );
         div()
             .flex()
             .flex_col()
             .child(
-                section_with_hint(t(cx, "ai.advisor"), t(cx, "ai.advisor_hint"))
-                    .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
-                    .child(row_with_hint(
-                        t(cx, "ai.advisor_status"),
-                        t(cx, "ai.advisor_status_hint"),
-                        toggle("advisor-status", prefs.advisor_status, |s| s.advisor_status = !s.advisor_status, cx),
-                    )),
+                section(t(cx, "settings.group.agent_view"))
+                    .child(row_with_hint(t(cx, "settings.chat_view"), t(cx, "settings.chat_view_hint"), div()))
+                    .child(modes),
             )
             .child(self.render_orchestration_settings(&prefs, cx))
             .child(
@@ -1518,6 +1518,15 @@ impl Workbench {
                         t(cx, "settings.agent_tasks"),
                         t(cx, "settings.agent_tasks_hint"),
                         toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                    )),
+            )
+            .child(
+                section_with_hint(t(cx, "ai.advisor"), t(cx, "ai.advisor_hint"))
+                    .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
+                    .child(row_with_hint(
+                        t(cx, "ai.advisor_status"),
+                        t(cx, "ai.advisor_status_hint"),
+                        toggle("advisor-status", prefs.advisor_status, |s| s.advisor_status = !s.advisor_status, cx),
                     )),
             )
             .child(

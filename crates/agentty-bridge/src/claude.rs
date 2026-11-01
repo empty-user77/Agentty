@@ -236,7 +236,7 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
 }
 
 /// Text the human typed. Tool results and harness-injected wrappers are excluded.
-fn user_text(v: &Value) -> Option<String> {
+pub(crate) fn user_text(v: &Value) -> Option<String> {
     let content = &v["message"]["content"];
     let text = match content {
         Value::String(s) => s.clone(),
@@ -256,7 +256,7 @@ fn user_text(v: &Value) -> Option<String> {
 
 /// What the user typed mid-turn: a `queued_command` attachment's prompt (the harness queues its own
 /// background-task notifications the same way; those are dropped like other injected text).
-fn queued_text(v: &Value) -> Option<String> {
+pub(crate) fn queued_text(v: &Value) -> Option<String> {
     let attachment = &v["attachment"];
     if attachment["type"].as_str() != Some("queued_command") {
         return None;

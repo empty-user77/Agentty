@@ -186,6 +186,8 @@ actions!(
         JumpToUnread,
         OpenPalette,
         ToggleZoom,
+        ToggleChatView,
+        CopyChatSelection,
         ToggleVoiceInput,
     ]
 );
@@ -428,6 +430,13 @@ pub struct Workbench {
     sidebar_open: bool,
     page: Option<Page>,
     launcher_open: bool,
+    /// The split button's menu (right or down), and whether the pointer is on the button / the menu:
+    /// it opens on hover and closes a moment after the pointer left both.
+    split_menu: bool,
+    split_menu_hover: (bool, bool),
+    /// The split menu was opened (or kept) by a click: leaving it with the pointer doesn't close it.
+    split_menu_pinned: bool,
+    split_button_at: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// Where the + menu opens what is picked: a tab (default each time it opens) or a split.
     launcher_target: LaunchTarget,
     workspace_menu: Option<u64>,
@@ -814,6 +823,13 @@ pub struct Workbench {
     /// Chat tabs, by their lead agent's pane: the tab's first pane is drawn as a chat, the others
     /// are the workers it started.
     chats: HashMap<gpui::EntityId, chat::ChatState>,
+    /// Agent panes switched to a chat (true) or to their terminal (false) on their own; the others
+    /// follow `chat_view` in the settings, the mode new panes open in.
+    chat_modes: HashMap<gpui::EntityId, bool>,
+    /// A selection's bar, menu or side-chat question in a plain chat.
+    chat_select: Option<chat::selection_ui::SelectUi>,
+    /// Side chats opened with a question: asked as their first message.
+    side_questions: HashMap<gpui::EntityId, String>,
     /// The "Clone from Git" dialog, while open.
     clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
@@ -887,6 +903,10 @@ impl Workbench {
             sidebar_open: true,
             page: None,
             launcher_open: false,
+            split_menu: false,
+            split_menu_hover: (false, false),
+            split_menu_pinned: false,
+            split_button_at: Rc::default(),
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
@@ -1109,6 +1129,9 @@ impl Workbench {
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
             chats: HashMap::new(),
+            chat_modes: HashMap::new(),
+            chat_select: None,
+            side_questions: HashMap::new(),
             clone_dialog: None,
             welcome: false,
             screen_seen: None,
@@ -1340,6 +1363,7 @@ impl Workbench {
                 this.board_status_changed(&pane, cx);
                 cx.notify();
             }
+            TerminalEvent::Selected { text, at } => this.terminal_selected(&pane, text, *at, cx),
             // A link in a terminal opens in that terminal's tab.
             TerminalEvent::OpenLink(url) => {
                 let pane_id = pane.read(cx).pane_id;
@@ -1522,6 +1546,11 @@ impl Workbench {
             return;
         }
         let Some(pane) = target.filter(|_| self.page.is_none()) else { return };
+        // A pane shown as a chat attaches them to the message being written.
+        if self.plain_chat_in_front(&pane, cx) {
+            self.mark_active(&pane, cx);
+            return self.attach_paths(pane.entity_id(), paths, window, cx);
+        }
         pane.update(cx, |view, cx| {
             view.drop_paths(paths);
             cx.notify();
@@ -3710,6 +3739,7 @@ impl Render for Workbench {
                     this.resume_session(&session, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleChatView, window, cx| this.toggle_chat_view(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleZoom, window, cx| {
                 if let Some(pane) = this.active_pane() {
                     this.toggle_zoom(&pane, window, cx);
@@ -3827,6 +3857,9 @@ impl Render for Workbench {
                                 )
                             })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
+                            .children(self.render_split_menu(cx))
+                            // A selection's bar, menu or side-chat question (a chat's, or a terminal's).
+                            .children(self.render_select_ui(cx))
                             // Opens under the sync icon, left of the bell.
                             .when(self.sync.popover_open, |d| {
                                 d.child(
@@ -5338,7 +5371,7 @@ impl Workbench {
                         .iter()
                         .enumerate()
                         .filter(|(_, l)| !l.trim().is_empty())
-                        .map(|(i, l)| format!("{i}:{}", l.chars().take(60).collect::<String>()))
+                        .map(|(i, l)| format!("{i}:{}", l.chars().take(200).collect::<String>()))
                         .collect();
                     eprintln!("screen-lines: total={} {:?} state={state:?}", lines.len(), &shown[shown.len().saturating_sub(10)..]);
                 }

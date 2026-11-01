@@ -264,6 +264,10 @@ pub struct Settings {
     /// Draws ordinary text at bold weight (what the terminal marks bold then goes heavier still).
     #[serde(default)]
     pub bold_text: bool,
+    /// Agent panes (Claude Code, Codex) are drawn as a chat over their session instead of their
+    /// terminal. The terminal stays one click away in each pane.
+    #[serde(default)]
+    pub chat_view: bool,
     /// Colours of the chosen theme the user replaced, as `0xRRGGBB`. Unset means the theme's own.
     #[serde(default)]
     pub color_background: Option<u32>,
@@ -990,6 +994,7 @@ impl Default for Settings {
             cursor_blink: true,
             letter_spacing: 0.0,
             bold_text: false,
+            chat_view: false,
             color_background: None,
             color_foreground: None,
             color_cursor: None,

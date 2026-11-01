@@ -294,6 +294,23 @@ impl Workbench {
         .into_any_element()
     }
 
+    /// Mini mode's button, by the sidebar button when the tabs are in the title bar.
+    fn render_mini_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let button = super::chrome::header_icon(
+            "header-mini",
+            "picture-in-picture-2",
+            false,
+            (t(cx, "mini.enter"), Some("⌃⌘M")),
+            cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+        );
+        // The onboarding tour's ring, as on the tab strip's buttons.
+        if self.tour_target() == Some("header-mini") {
+            button.child(crate::ui::pulse_ring("header-mini", false)).into_any_element()
+        } else {
+            button.into_any_element()
+        }
+    }
+
     /// The unified header's row: room for the traffic lights, the sidebar button, then the tabs.
     pub(super) fn render_unified_header(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let fullscreen = window.is_fullscreen();
@@ -306,6 +323,7 @@ impl Workbench {
             // Full screen hides the traffic lights: nothing to leave room for.
             .pl(px(if fullscreen { 8. } else { TRAFFIC_LIGHTS_WIDTH }))
             .child(div().flex_shrink_0().mr_1().child(self.render_sidebar_toggle(cx)))
+            .when(crate::platform::HAS_MINI_MODE, |d| d.child(div().flex_shrink_0().mr_1().child(self.render_mini_button(cx))))
             .child(div().flex_1().min_w_0().h_full().child(self.render_tab_strip_in(true, cx)))
             .into_any_element()
     }

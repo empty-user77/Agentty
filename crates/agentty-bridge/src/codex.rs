@@ -174,7 +174,7 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
 }
 
 /// User/assistant message text. Developer prompts and injected context blocks are excluded.
-fn message_turn(payload: &Value) -> Option<Turn> {
+pub(crate) fn message_turn(payload: &Value) -> Option<Turn> {
     let role = match payload["role"].as_str()? {
         "user" => Role::User,
         "assistant" => Role::Assistant,

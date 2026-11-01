@@ -15,7 +15,7 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, W
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The steps on the card, in order.
-const STEPS: [Step; 5] = [Step::Appearance, Step::Agents, Step::Look, Step::Work, Step::Notify];
+const STEPS: [Step; 6] = [Step::Appearance, Step::Agents, Step::Mode, Step::Look, Step::Work, Step::Notify];
 
 /// The card's own surfaces: a shade darker than the panels, as a sheet laid over the app.
 const CARD: u32 = 0x19191b;
@@ -43,6 +43,7 @@ impl Workbench {
         let body = match step {
             Step::Appearance => self.setup_appearance(cx),
             Step::Agents => self.setup_agents(cx),
+            Step::Mode => self.setup_mode(cx),
             Step::Look => self.setup_look(cx),
             Step::Work => self.setup_work(cx),
             _ => self.setup_notify(cx),
@@ -244,6 +245,16 @@ impl Workbench {
                         .flex_none()
                 },
             )))
+    }
+
+    /// Terminal or chat, as two cards like the appearance step's: what agents open as.
+    fn setup_mode(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let chat = settings(cx).chat_view;
+        div().flex().flex_col().child(title(t(cx, "onboarding.mode_title"))).child(subtitle(t(cx, "onboarding.mode_body"))).child(
+            div().mt(px(36.)).w_full().flex().justify_between().children(
+                [false, true].map(|on| mode_card("onboarding-mode", on, chat == on, 170., cx).w(gpui::relative(0.49)).flex_none()),
+            ),
+        )
     }
 
     fn setup_look(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -679,6 +690,128 @@ fn theme_preview(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut C
                 .gap_2()
                 .child(div().min_w_0().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(theme.name.clone()))
                 .when(selected, |d| d.child(icon("circle-check", IconSize::INLINE, hex(Chrome::BRIGHT)))),
+        )
+}
+
+/// What agents open as, terminal (`chat` false) or chat, as a card with a small picture of it:
+/// the onboarding's step and the AI settings' choice. Width is the caller's.
+pub(super) fn mode_card(
+    id: &'static str,
+    chat: bool,
+    selected: bool,
+    preview_height: f32,
+    cx: &mut Context<Workbench>,
+) -> gpui::Stateful<gpui::Div> {
+    let (glyph, name, body, preview) = if chat {
+        ("message-square", "onboarding.mode_chat", "onboarding.mode_chat_body", chat_preview(preview_height))
+    } else {
+        ("square-terminal", "onboarding.mode_terminal", "onboarding.mode_terminal_body", terminal_preview(preview_height))
+    };
+    div()
+        .id((id, chat as usize))
+        .p_2()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .rounded_lg()
+        .cursor_pointer()
+        .bg(hex(if selected { Chrome::SELECTED } else { TILE }))
+        .border_1()
+        .border_color(if selected { hex_alpha(Chrome::BRIGHT, 0.6) } else { hex(CARD_BORDER) })
+        .hover(|s| s.border_color(hex_alpha(Chrome::BRIGHT, 0.35)))
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.chat_view = chat)))
+        .child(preview)
+        // As the appearance cards: the name with its icon, what it is on the right.
+        .child(
+            div()
+                .px_1()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(icon(glyph, IconSize::BUTTON, hex(Chrome::FOREGROUND)))
+                        .child(div().t_large().text_color(hex(Chrome::BRIGHT)).child(t(cx, name))),
+                )
+                .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
+        )
+}
+
+/// The terminal card's picture: an agent's screen, monospaced lines and an input line at the foot.
+/// Fixed colours (`raw`), as the other previews: they show the choice, not the chrome around it.
+fn terminal_preview(height: f32) -> gpui::Div {
+    let raw = crate::theme::raw;
+    let line = |width: f32, color: u32| div().h(px(5.)).w(px(width)).rounded_full().bg(raw(color));
+    div()
+        .h(px(height))
+        .overflow_hidden()
+        .p_3()
+        .rounded_md()
+        .bg(raw(0x0f0f11))
+        .border_1()
+        .border_color(hex_alpha(Chrome::BRIGHT, 0.08))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().flex().gap_1p5().child(line(10., 0xd97757)).child(line(70., 0xd4d4d8)))
+        .child(div().flex().gap_1p5().child(line(10., 0x71717a)).child(line(120., 0x71717a)))
+        .child(div().flex().gap_1p5().child(div().size(px(5.)).rounded_full().bg(raw(0xd4d4d8))).child(line(150., 0xd4d4d8)))
+        .child(line(110., 0xa1a1aa))
+        .child(div().flex().gap_1p5().child(line(26., 0x4ade80)).child(line(60., 0xa1a1aa)))
+        .child(div().flex_1())
+        .child(div().h(px(1.)).w_full().bg(raw(0x3f3f46)))
+        .child(div().flex().gap_1p5().child(line(8., 0xd4d4d8)).child(div().h(px(9.)).w(px(2.)).bg(raw(0xd4d4d8))))
+}
+
+/// The chat card's picture: a message on the right, a reply with a step card, and the composer.
+fn chat_preview(height: f32) -> gpui::Div {
+    let raw = crate::theme::raw;
+    let line = |width: f32, color: u32| div().h(px(5.)).w(px(width)).rounded_full().bg(raw(color));
+    div()
+        .h(px(height))
+        .overflow_hidden()
+        .p_3()
+        .rounded_md()
+        .bg(raw(0x1c1c1f))
+        .border_1()
+        .border_color(hex_alpha(Chrome::BRIGHT, 0.08))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().flex().justify_end().child(div().px_2().py(px(6.)).rounded_lg().bg(raw(0x2e2e33)).child(line(80., 0xd4d4d8))))
+        .child(
+            div()
+                .w(px(150.))
+                .px_2()
+                .py(px(6.))
+                .rounded_md()
+                .border_1()
+                .border_color(raw(0x3f3f46))
+                .flex()
+                .gap_1p5()
+                .child(div().size(px(5.)).rounded_full().bg(raw(0x4ade80)))
+                .child(line(90., 0xa1a1aa)),
+        )
+        .child(line(160., 0xd4d4d8))
+        .child(line(120., 0xd4d4d8))
+        .child(div().flex_1())
+        .child(
+            div()
+                .h(px(22.))
+                .px_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(raw(0x3f3f46))
+                .bg(raw(0x26262a))
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(line(70., 0x71717a))
+                .child(div().size(px(12.)).rounded_full().bg(raw(0xebebee))),
         )
 }
 

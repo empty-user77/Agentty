@@ -98,7 +98,13 @@ const USER_INPUT: i64 = 14;
 const RESPONSE: i64 = 15;
 
 pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
-    let rows = sqlite_json(path, "select step_type, hex(step_payload) as payload from steps order by idx")?;
+    // Only what was said, and the first step (it names the folder): tool steps are most of a long
+    // conversation, and the chat view reads this again whenever the conversation grows.
+    let query = format!(
+        "select step_type, hex(step_payload) as payload from steps \
+         where step_type in ({USER_INPUT}, {RESPONSE}) or idx = (select min(idx) from steps) order by idx"
+    );
+    let rows = sqlite_json(path, &query)?;
     let mut cwd = None;
     let mut turns = Vec::new();
     for row in rows {

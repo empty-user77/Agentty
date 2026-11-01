@@ -3,6 +3,6 @@ mod keys;
 mod view;
 
 pub use view::{
-    classify_screen, path_and_place_at, strip_agent_mark, tool_label, AgentStatus, Clear, Copy, NoticeKind, Paste, SelectAll, SubagentRun,
-    TerminalEvent, TerminalView,
+    classify_screen, path_and_place_at, strip_agent_mark, tool_label, AgentStatus, Clear, Copy, NoticeKind, Paste, ScreenState, SelectAll,
+    SubagentRun, TerminalEvent, TerminalView,
 };
