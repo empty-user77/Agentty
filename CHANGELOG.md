@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-11-01
+
+### Added
+- Chat view: a Claude Code, Codex, Antigravity or Gemini CLI pane can be shown as a desktop-style chat while the
+  CLI keeps running underneath. Switch the pane in front with the title bar's speech bubble, **View → Chat View**
+  or ⇧⌘J; the mode new agents open in is a setting (**AI settings → How agents open**), also offered in
+  onboarding.
+- In the chat: formatted replies with syntax-colored code, tool steps folded into cards, to-do lists, approvals
+  and numbered questions answered in place, attachments by + or drag and drop, a start screen with the agent's
+  earlier sessions in the folder, and text selection across messages with ⌘C, quoted replies and side chats.
+- Stop interrupts the running turn and puts a message the agent handed back into the composer.
+
+### Changed
+- The split buttons are one dropdown, mini mode sits by the sidebar button, and the lead-and-workers workspace is
+  called a team workspace.
+
+### Fixed
+- A pane that runs another agent than the one it was launched with (quit, then start another) now shows that
+  agent's model, context and conversation instead of the previous one's.
+- An agent started again by hand in a pane no longer stays on "Thinking" after its turn.
+
 ## [0.3.7] - 2026-10-31
 
 ### Added

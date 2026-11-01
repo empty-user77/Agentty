@@ -91,6 +91,15 @@
           }
         },
         {
+          "slug": "chat-view",
+          "title": {
+            "en": "Chat view",
+            "ko": "채팅 보기",
+            "ja": "チャット表示",
+            "zh": "聊天视图"
+          }
+        },
+        {
           "slug": "chat-workspace",
           "title": {
             "en": "Chat workspace",

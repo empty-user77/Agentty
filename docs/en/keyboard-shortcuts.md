@@ -42,6 +42,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Git / Extensions | ⇧⌘G / ⇧⌘X |
 | Orchestration / Monitoring / Settings | ⇧⌘F / ⌥⌘U / ⌘, |
 | In-app browser / Files panel | ⇧⌘B / ⌥⌘B |
+| Chat view for the pane in front | ⇧⌘J |
 | Command palette / Jump to unread | ⇧⌘P / ⇧⌘U |
 | Voice input (record · ⏎ send · Esc cancel) | ⇧⌘M |
 | Search local sessions | ⇧⌘O |
