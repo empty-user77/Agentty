@@ -762,7 +762,9 @@ fn reap(records: impl IntoIterator<Item = Record>) -> usize {
             continue;
         }
         if end_tree(record.group) {
-            eprintln!("agentty: ended a run left from before (process group {})", record.group);
+            if crate::debug::enabled() {
+                eprintln!("agentty: ended a run left from before (process group {})", record.group);
+            }
             ended += 1;
         }
     }

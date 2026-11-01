@@ -307,6 +307,8 @@ impl Workbench {
     pub(super) fn close_onboarding(&mut self, cx: &mut Context<Self>) {
         self.onboarding = None;
         update_settings(cx, |s| s.onboarding_done = true);
+        // The onboarding asked how agents open: no card announcing it afterwards.
+        self.feature_tip_seen(super::feature_tip::CHAT_VIEW, cx);
         cx.notify();
     }
 

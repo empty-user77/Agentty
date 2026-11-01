@@ -70,6 +70,11 @@ impl Workbench {
                             .flex_basis(relative(0.))
                             .min_w_0()
                             .min_h_0()
+                            // The other axis given outright, not left to stretch: a stretched pane
+                            // was laid out once to measure it and again at its size, and each split
+                            // inside it doubled that again (a few chats in a split took ~30 ms a frame).
+                            .when(axis == Axis::Horizontal, |d| d.h_full())
+                            .when(axis == Axis::Vertical, |d| d.w_full())
                             .when(chat, |d| d.min_h(px(super::chat::CHAT_MIN_HEIGHT)))
                             .map(|mut d| {
                                 d.style().flex_grow = Some(size);

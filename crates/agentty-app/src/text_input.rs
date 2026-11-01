@@ -1009,16 +1009,28 @@ impl TextElement {
                 .then(|| input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into()));
             (input.content.clone(), input.selected_range.clone(), input.cursor_offset(), placeholder)
         };
-        let text = placeholder.clone().unwrap_or_else(|| content.clone());
         let color = if placeholder.is_some() { hex_alpha(Chrome::FOREGROUND, 0.4) } else { style.color };
         let shape = |window: &mut Window, piece: &str| {
             let run = TextRun { len: piece.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
             let runs = if run.len > 0 { vec![run] } else { Vec::new() };
             window.text_system().shape_line(SharedString::from(piece.to_string()), font_size, &runs, None)
         };
+        let width = bounds.size.width - px(2.);
+        // The hint keeps to one line, cut short where the field is narrower: wrapped, it grew an
+        // empty composer a word a row in a narrow pane.
+        let text = match &placeholder {
+            Some(hint) if shape(window, hint).width > width => {
+                let mut cut: String = hint.to_string();
+                while !cut.is_empty() && shape(window, &format!("{cut}…")).width > width {
+                    cut.pop();
+                }
+                SharedString::from(format!("{}…", cut.trim_end()))
+            }
+            Some(hint) => hint.clone(),
+            None => content.clone(),
+        };
         // Each line is cut into the rows that fit the field's width (at a space when there is
         // one), so a long sentence wraps instead of running out of the field.
-        let width = bounds.size.width - px(2.);
         let mut rows_of_text: Vec<(usize, usize)> = Vec::new();
         let mut offset = 0;
         for line_text in text.split('\n') {

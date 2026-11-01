@@ -795,7 +795,24 @@ impl Workbench {
         }
         // The keyboard follows: to the composer, or back to the terminal.
         self.refocus = true;
+        // Saved with the layout, so a restart shows the pane the same way.
+        self.persist(cx);
         cx.notify();
+    }
+
+    /// What to save for `pane` so a restart shows it the same way: its agent as a chat or as its
+    /// terminal. `None` for a pane without an agent. A pane restored a moment ago whose agent has not
+    /// started yet keeps what it was restored with.
+    pub(super) fn saved_chat_view(&self, pane: &Pane, cx: &App) -> Option<bool> {
+        if let Some(restored) = pane.read(cx).spec.chat_view {
+            return Some(restored);
+        }
+        if !shows_as_chat(pane, cx) {
+            return None;
+        }
+        let on = self.chat_modes.get(&pane.entity_id()).copied().unwrap_or(false);
+        let switched_back = self.chats.get(&pane.entity_id()).filter(|state| state.plain).is_some_and(|state| state.show_terminal);
+        Some(on && !switched_back)
     }
 
     /// Whether the title bar's chat button shows on: the pane in front shows its chat.
@@ -864,12 +881,21 @@ impl Workbench {
         let alive: std::collections::HashSet<EntityId> = panes.iter().map(|p| p.entity_id()).collect();
         // A pane's choice lasts while its agent runs: the next agent started in it (after `exit`)
         // takes the setting again, not what the last one was switched to.
-        let running: std::collections::HashSet<EntityId> = panes.iter().filter(|p| shows_as_chat(p, cx)).map(|p| p.entity_id()).collect();
-        self.chat_modes.retain(|id, _| running.contains(id));
+        let running: Vec<&Pane> = panes.iter().filter(|p| shows_as_chat(p, cx)).collect();
+        let running_ids: std::collections::HashSet<EntityId> = running.iter().map(|p| p.entity_id()).collect();
+        self.chat_modes.retain(|id, _| running_ids.contains(id));
         // An agent takes the setting when it starts (in a terminal too: `claude` typed into a
-        // shell); changing the setting later leaves running agents as they are.
-        for id in &running {
-            self.chat_modes.entry(*id).or_insert(chat_view);
+        // shell); changing the setting later leaves running agents as they are. A restored pane's
+        // agent takes what the pane showed when it was saved instead, once.
+        for pane in running {
+            if self.chat_modes.contains_key(&pane.entity_id()) {
+                continue;
+            }
+            let restored = pane.read(cx).spec.chat_view;
+            if restored.is_some() {
+                pane.update(cx, |view, _| view.spec.chat_view = None);
+            }
+            self.chat_modes.insert(pane.entity_id(), restored.unwrap_or(chat_view));
         }
         // Chat view: agent panes become chats (each by its own choice, else by the setting), and stop
         // being one when switched off or when their agent left.
@@ -2035,6 +2061,8 @@ impl Workbench {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
                 self.say_to_lead(id, text.trim().to_string(), cx);
             }
+            // What ⇧⌘J does on the pane in front: chat view on or off.
+            ("view", _) => self.toggle_chat_view(window, cx),
             ("terminal", _) => {
                 if let Some(id) = front {
                     self.toggle_chat_terminal(id, window, cx);
@@ -2100,7 +2128,9 @@ impl Workbench {
 
 /// `content` in the conversation's column: centered, at most [`CHAT_COLUMN`] wide.
 fn column(content: impl IntoElement) -> gpui::Div {
-    div().w_full().flex().justify_center().child(div().w_full().max_w(px(CHAT_COLUMN)).min_w_0().child(content))
+    // A fixed basis that shrinks, not `w_full` under a max width: in a pane narrower than the
+    // column (a split), the percentage left the composer at its content's narrowest width.
+    div().w_full().flex().justify_center().child(div().flex_basis(px(CHAT_COLUMN)).flex_shrink().min_w_0().child(content))
 }
 
 /// What a row of the conversation needs to open and close its steps.

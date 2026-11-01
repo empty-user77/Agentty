@@ -28,6 +28,7 @@ mod docker_panel;
 mod drop_split;
 mod editor_host;
 pub mod editor_session;
+mod feature_tip;
 mod file_diff;
 mod files_panel;
 mod find;
@@ -848,6 +849,8 @@ pub struct Workbench {
     onboarding: Option<onboarding::Onboarding>,
     /// The first-run tour opens once the system check finds the environment ready.
     onboarding_waits_for_setup: bool,
+    /// A feature announced to someone who updated (`feature_tip`), until they answer the card.
+    feature_tip: Option<&'static str>,
     next_id: u64,
 }
 
@@ -1142,6 +1145,7 @@ impl Workbench {
             plugins_page: Default::default(),
             onboarding: None,
             onboarding_waits_for_setup: false,
+            feature_tip: None,
             next_id: 1,
         };
         this.restore(window, cx);
@@ -1158,6 +1162,7 @@ impl Workbench {
         // Told the window's own appearance, not the app's: see `settings::apply_appearance_with`.
         cx.observe_window_appearance(window, |_, window, cx| crate::settings::apply_appearance_with(window.appearance(), cx)).detach();
         this.first_run_onboarding(cx);
+        this.prepare_feature_tip(cx);
         this.startup_system_check(cx);
         this.refresh_sessions(cx);
         this.refresh_folder_branches(cx);
@@ -3023,6 +3028,7 @@ impl Workbench {
             title: view.display_title(),
             session_id,
             tool: Some(view.tool_id().to_string()),
+            chat_view: None,
         }
     }
 
@@ -3033,6 +3039,10 @@ impl Workbench {
             // A chat's worker keeps the title its lead gave it: the lead names it by that title.
             if lead.as_ref().is_some_and(|lead| lead != pane) {
                 snapshot.title = pane.read(cx).spec.title.clone();
+            }
+            // Chat view or terminal, as the pane shows its agent now (a chat tab is a chat anyway).
+            if lead.is_none() {
+                snapshot.chat_view = self.saved_chat_view(pane, cx);
             }
             snapshot
         });
@@ -3378,6 +3388,29 @@ impl Workbench {
         } else if self.flow.is_dragging() {
             self.flow.drag_to(event.position);
             cx.notify();
+        }
+    }
+
+    /// Whether a divider or a panel's edge is being dragged.
+    fn resizing(&self) -> bool {
+        self.sidebar_resizing
+            || self.browser_resizing
+            || self.files_resizing
+            || self.side_resizing.is_some()
+            || self.session_board.threads_drag.is_some()
+            || self.session_board.feed_drag.is_some()
+            || self.runs.log.drag.is_some()
+            || self.files_trees_drag.is_some()
+            || self.browser_net_drag.is_some()
+            || self.split_drag.is_some()
+            || self.plugin_ws_drag.is_some()
+            || self.editor_session_drag.is_some()
+    }
+
+    /// The button was let go: a divider or edge being dragged stays where it is.
+    fn end_resize_drags(&mut self, cx: &mut Context<Self>) {
+        if self.resizing() {
+            self.end_drags(cx);
         }
     }
 
@@ -3752,7 +3785,32 @@ impl Render for Workbench {
                     this.open_palette(window, cx);
                 }
             }))
-            .on_mouse_move(cx.listener(Self::on_root_mouse_move))
+            // Window-wide, ahead of everything under the pointer, rather than `on_mouse_move` and
+            // `on_mouse_up`, which only fire while the root's own hitbox is under the pointer: a pane
+            // shown as a chat covers its terminal (`occlude`), and a divider or panel edge dragged
+            // over it stopped following the pointer there, and kept going after the button was let go.
+            .child({
+                let this = cx.entity().downgrade();
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let moved = this.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == gpui::DispatchPhase::Capture {
+                                moved.update(cx, |this, cx| this.on_root_mouse_move(event, window, cx)).ok();
+                            }
+                        });
+                        let released = this.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Capture && event.button == MouseButton::Left {
+                                released.update(cx, |this, cx| this.end_resize_drags(cx)).ok();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0()
+            })
             // Windows / Linux: files dropped from the file manager (macOS uses a native hook, `file_drop`).
             .when(!cfg!(target_os = "macos"), |root| {
                 root.on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
@@ -3768,21 +3826,7 @@ impl Render for Workbench {
                     if this.flow.is_dragging() {
                         this.finish_flow_drag(cx);
                     }
-                    if this.sidebar_resizing
-                        || this.browser_resizing
-                        || this.files_resizing
-                        || this.side_resizing.is_some()
-                        || this.session_board.threads_drag.is_some()
-                        || this.session_board.feed_drag.is_some()
-                        || this.runs.log.drag.is_some()
-                        || this.files_trees_drag.is_some()
-                        || this.browser_net_drag.is_some()
-                        || this.split_drag.is_some()
-                        || this.plugin_ws_drag.is_some()
-                        || this.editor_session_drag.is_some()
-                    {
-                        this.end_drags(cx);
-                    }
+                    this.end_resize_drags(cx);
                 }),
             )
             .relative()
@@ -3899,6 +3943,7 @@ impl Render for Workbench {
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
             .children(self.render_connect_pick_bar(cx))
             .children(self.render_install_hint(cx))
+            .children(self.render_feature_tip(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
             .children(self.render_orchestrator_dialog(cx))

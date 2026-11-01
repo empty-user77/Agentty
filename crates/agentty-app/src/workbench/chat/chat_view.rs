@@ -12,6 +12,10 @@ const STEPS_SHOWN: usize = 4;
 /// Sessions read for the start screen, and how many of those in this folder it shows.
 const RECENT_SCANNED: usize = 200;
 const RECENT_SHOWN: usize = 4;
+/// Below this pane width the composer has no microphone button.
+const NARROW_COMPOSER: f32 = 240.;
+/// Below this one it keeps the send button alone (files still come in by dropping them).
+const TINY_COMPOSER: f32 = 160.;
 
 /// The permission mode Claude Code shows under its input box (Shift+Tab moves to the next one).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -173,7 +177,7 @@ impl Workbench {
             if state.shown.is_empty() { self.render_chat_welcome(state, &live, cx) } else { message_list(state, cx) };
         let approval = live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), cx));
         let interrupted = (!live.working && live.interrupted).then(|| {
-            div().flex_shrink_0().px_4().pb_1().child(column(
+            div().flex_shrink_0().w_full().px_4().pb_1().child(column(
                 div()
                     .flex()
                     .items_center()
@@ -189,7 +193,7 @@ impl Workbench {
             if let Some(elapsed) = &live.elapsed {
                 text = format!("{text}  {elapsed}");
             }
-            div().flex_shrink_0().px_4().pb_1().child(column(
+            div().flex_shrink_0().w_full().px_4().pb_1().child(column(
                 div()
                     .flex()
                     .items_center()
@@ -216,6 +220,9 @@ impl Workbench {
             div()
                 .id(SharedString::from(format!("plain-chat-{}", id.as_u64())))
                 .size_full()
+                // A pane squeezed narrower than the composer keeps it inside, off its neighbour
+                // (its menus are deferred, drawn over everything, so nothing of them is cut).
+                .overflow_hidden()
                 .flex()
                 .flex_col()
                 .bg(hex(Chrome::EDITOR))
@@ -278,6 +285,7 @@ impl Workbench {
     /// folder, branch), a few ways to begin that fill the composer without sending, and the
     /// agent's earlier sessions in this folder to pick up again.
     fn render_chat_welcome(&self, state: &ChatState, live: &Live, cx: &mut Context<Self>) -> AnyElement {
+        let tiny = live.width < TINY_COMPOSER;
         // Where it runs, one line; the folder and branch open what they name.
         let fact = |key: &'static str, glyph: &'static str, text: String| {
             div()
@@ -387,7 +395,7 @@ impl Workbench {
             .flex()
             .flex_col()
             .items_center()
-            .px_6()
+            .px_4()
             .py_8()
             .child(div().flex_1().min_h(px(16.)))
             .child(
@@ -400,15 +408,28 @@ impl Workbench {
                     .gap_6()
                     .child(
                         div()
+                            .w_full()
                             .flex()
                             .flex_col()
                             .items_center()
                             .gap_2()
                             .child(crate::brand::avatar(live.tool, 44.))
-                            .child(div().pt_1().t_display().text_color(hex(Chrome::BRIGHT)).child(t(cx, "chat.plain_empty")))
-                            .child(facts),
+                            // Wraps in a narrow pane instead of running past both edges; a pane
+                            // squeezed to a sliver keeps the logo alone, not a word a letter a line.
+                            .when(!tiny, |d| {
+                                d.child(
+                                    div()
+                                        .max_w_full()
+                                        .pt_1()
+                                        .t_display()
+                                        .text_center()
+                                        .text_color(hex(Chrome::BRIGHT))
+                                        .child(t(cx, "chat.plain_empty")),
+                                )
+                                .child(facts)
+                            }),
                     )
-                    .children(recent),
+                    .children(recent.filter(|_| !tiny)),
             )
             .child(div().flex_1().min_h(px(16.)))
             .into_any_element()
@@ -487,6 +508,7 @@ impl Workbench {
         });
         div()
             .flex_shrink_0()
+            .w_full()
             .px_4()
             .pb_2()
             .child(column(
@@ -533,7 +555,8 @@ impl Workbench {
             .tooltip(crate::ui::Tooltip::text(t(cx, "chat.attach"), None))
             .child(icon("plus", 17., hex(Chrome::FOREGROUND)))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.attach_to_chat(id, window, cx)));
-        let mic = super::super::voice_input_available().then(|| {
+        // A pane too narrow for both keeps the send button and drops the microphone (⇧⌘M still works).
+        let mic = (super::super::voice_input_available() && live.width >= NARROW_COMPOSER).then(|| {
             round(div().id("chat-mic"))
                 .hover(|s| s.bg(hex(Chrome::HOVER)))
                 .tooltip(crate::ui::Tooltip::text(t(cx, "shortcuts.voice"), None))
@@ -562,7 +585,7 @@ impl Workbench {
             .flex()
             .items_end()
             .gap_1()
-            .child(attach)
+            .when(live.width >= TINY_COMPOSER, |d| d.child(attach))
             .child(div().flex_1().min_w_0().pt(px(5.)).pb(px(5.)).px_1().t_body().text_color(hex(Chrome::BRIGHT)).child(input.clone()))
             .children(mic)
             .child(action);
@@ -594,14 +617,16 @@ impl Workbench {
                 .cursor_pointer()
                 .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
         };
+        // In a narrow pane the chips go to a second line rather than out of the pane.
         let footer = div()
             .flex()
+            .flex_wrap()
+            .justify_end()
             .items_center()
             .gap_1()
             .px_1()
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .child(div().flex_1())
             .children(live.model.clone().map(|model| {
                 chip("chat-footer-model")
                     .text_color(hex(Chrome::FOREGROUND))
@@ -641,6 +666,7 @@ impl Workbench {
         Some(
             div()
                 .flex_shrink_0()
+                .w_full()
                 .px_4()
                 .pt_1()
                 .pb_3()
