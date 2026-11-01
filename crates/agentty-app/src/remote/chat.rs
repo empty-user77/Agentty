@@ -102,6 +102,12 @@ impl Follow {
             *self = Follow { source: Some(source.clone()), ..Follow::new() };
         }
         let Some(session) = &source.session else { return };
+        // Claude Code moves a session's file when it enters a worktree: looked for again, and what
+        // was read of it still holds.
+        if self.path.as_ref().is_some_and(|path| !path.is_file()) {
+            self.path = None;
+            self.looked = None;
+        }
         if self.path.is_none() && self.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY) {
             self.looked = Some(Instant::now());
             self.path = chat_log::transcript_file(source.agent, session);

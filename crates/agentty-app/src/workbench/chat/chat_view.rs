@@ -125,6 +125,8 @@ struct Live {
     context: Option<(f64, u64, u64)>,
     choices: Option<(Vec<String>, usize)>,
     question: Option<String>,
+    /// What a held message says, under its question.
+    question_detail: Vec<String>,
     mode: Option<Mode>,
     effort: Option<&'static str>,
     folder: PathBuf,
@@ -151,6 +153,7 @@ impl Workbench {
         let lines = view.screen_lines(40);
         let screen = crate::terminal::classify_screen(&lines);
         let waits = waits_on_screen(view, &screen);
+        let held = screen.held_message.then(|| held_message(&lines));
         // Antigravity and Gemini CLI draw from the top of a tall screen: their footer can sit above
         // the last rows read for the rest.
         let tall =
@@ -163,6 +166,7 @@ impl Workbench {
         // and a second Esc opens Claude Code's rewind menu). A turn just sent has a moment to show.
         let shows_turn = !matches!(agent, agentty_bridge::model::Agent::Claude | agentty_bridge::model::Agent::Codex)
             || screen.busy
+            || view.screen_busy_recently()
             || view.working_since.is_some_and(|since| since.elapsed() < Duration::from_secs(5));
         Live {
             tool: view.tool_id(),
@@ -183,13 +187,22 @@ impl Workbench {
                 None => self.pane_model_text(pane, cx),
             },
             context: view.stats.as_ref().and_then(|stats| stats.context_percent().map(|p| (p, stats.context_used, stats.context_window))),
-            choices: waits.then(|| screen_choices(&lines)).flatten(),
-            question: match &view.status {
-                AgentStatus::Permission(Some(what)) | AgentStatus::Question(Some(what)) => Some(what.clone()),
-                _ => None,
-            }
-            .or(screen.permission),
-            mode: (agent == agentty_bridge::model::Agent::Claude).then(|| Mode::of(&lines)),
+            choices: waits.then(|| screen_choices(&lines)).flatten().map(|(choices, current)| match held {
+                Some(_) => (vec![t(cx, "chat.peer_deny").to_string(), t(cx, "chat.peer_deliver").to_string()], current),
+                None => (choices, current),
+            }),
+            question: match &held {
+                Some((Some(name), _)) => Some(tf(cx, "chat.peer_held", &[("name", name)])),
+                Some((None, _)) => Some(t(cx, "chat.peer_held_unnamed").to_string()),
+                None => match &view.status {
+                    AgentStatus::Permission(Some(what)) | AgentStatus::Question(Some(what)) => Some(what.clone()),
+                    _ => None,
+                }
+                .or(screen.permission),
+            },
+            question_detail: held.map(|(_, body)| body).unwrap_or_default(),
+            // A prompt covers the footer the mode is read from: not shown rather than shown wrong.
+            mode: (agent == agentty_bridge::model::Agent::Claude && !waits).then(|| Mode::of(&lines)),
             effort: effort_of(&lines).or_else(|| footer.and_then(|(_, effort)| effort)),
             folder: view.display_cwd(),
             branch: view.git_branch.clone(),
@@ -231,8 +244,13 @@ impl Workbench {
         let live = self.live_of(&pane, None, cx);
         let view = pane.read(cx);
         let needs_terminal = only_the_terminal_answers(view) || is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
+        // A held message is decided on what it says: the app's question carries it.
+        let detail = live.question_detail;
         let question = live.choices.map(|(options, current)| crate::remote::chat::ChatQuestion {
-            text: live.question.unwrap_or_else(|| t(cx, "chat.agent_asks").to_string()),
+            text: std::iter::once(live.question.unwrap_or_else(|| t(cx, "chat.agent_asks").to_string()))
+                .chain(detail)
+                .collect::<Vec<_>>()
+                .join("\n"),
             options,
             current,
         });
@@ -255,7 +273,9 @@ impl Workbench {
         }
         let view = pane.read(cx);
         let Some(agent) = pane_chat_agent(view) else { return };
-        if matches!(agent, Agent::Claude | Agent::Codex) && !crate::terminal::classify_screen(&view.screen_lines(40)).busy {
+        let screen = crate::terminal::classify_screen(&view.screen_lines(40));
+        // Over a held message, Esc would turn it down.
+        if matches!(agent, Agent::Claude | Agent::Codex) && (!screen.busy || screen.held_message) {
             return;
         }
         let pane_id = view.pane_id;
@@ -303,7 +323,8 @@ impl Workbench {
 
         let messages: AnyElement =
             if state.shown.is_empty() { self.render_chat_welcome(state, &live, cx) } else { message_list(state, cx) };
-        let approval = live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), cx));
+        let approval =
+            live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), &live.question_detail, cx));
         let interrupted = (!live.working && live.interrupted).then(|| {
             div().flex_shrink_0().w_full().px_4().pb_1().child(column(
                 div()
@@ -601,6 +622,7 @@ impl Workbench {
         id: EntityId,
         (choices, current): (Vec<String>, usize),
         question: Option<String>,
+        detail: &[String],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let options = choices.into_iter().enumerate().map(|(index, label)| {
@@ -666,6 +688,20 @@ impl Workbench {
                                     .child(question.unwrap_or_else(|| t(cx, "chat.agent_asks").to_string())),
                             ),
                     )
+                    .when(!detail.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .mb_1()
+                                .pl_2()
+                                .border_l_2()
+                                .border_color(hex(Chrome::BORDER))
+                                .flex()
+                                .flex_col()
+                                .t_small()
+                                .text_color(hex(Chrome::MUTED))
+                                .children(detail.iter().map(|line| div().min_w_0().child(line.clone()))),
+                        )
+                    })
                     .children(options),
             ))
             .into_any_element()
@@ -958,7 +994,9 @@ impl Workbench {
         // Claude Code and Codex: only a turn on screen is stopped (a second Esc opens Claude Code's
         // rewind menu). Gemini CLI and Antigravity say it otherwise; their Esc cancels a turn.
         let checks = matches!(chat_lead_agent(&state.lead, cx), agentty_bridge::model::Agent::Claude | agentty_bridge::model::Agent::Codex);
-        if checks && !crate::terminal::classify_screen(&state.lead.read(cx).screen_lines(40)).busy {
+        let screen = crate::terminal::classify_screen(&state.lead.read(cx).screen_lines(40));
+        // Over a held message, Esc would turn it down.
+        if checks && (!screen.busy || screen.held_message) {
             return cx.notify();
         }
         state.stopped_at = Some(Instant::now());
@@ -1680,7 +1718,7 @@ fn fxhash(text: &str) -> u64 {
 
 /// Markdown as a chat shows it: headings, lists, quotes, code blocks, and `code` and **bold** in
 /// running text.
-fn markdown(text: &str, index: usize) -> AnyElement {
+pub(super) fn markdown(text: &str, index: usize) -> AnyElement {
     let mut out = div().w_full().flex().flex_col().gap_1p5().t_body().text_color(hex(Chrome::FOREGROUND));
     let mut lines = text.lines().peekable();
     let mut paragraph: Vec<String> = Vec::new();
@@ -1770,9 +1808,17 @@ fn markdown(text: &str, index: usize) -> AnyElement {
                 div().pl_3().border_l_2().border_color(hex(Chrome::BORDER)).text_color(hex(Chrome::MUTED)).child(inline(quote.trim())),
             );
         } else if trimmed.starts_with('|') {
-            // Tables keep their columns in a fixed-width font.
             out = flush(out, &mut paragraph);
-            if !trimmed.trim_matches(|c| c == '|' || c == '-' || c == ':' || c == ' ').is_empty() {
+            let aligns = lines.peek().and_then(|next| table_aligns(next));
+            if let Some(aligns) = aligns {
+                lines.next();
+                let mut rows = vec![table_cells(trimmed)];
+                while let Some(row) = lines.next_if(|next| next.trim_start().starts_with('|')) {
+                    rows.push(table_cells(row.trim_start()));
+                }
+                out = out.child(markdown_table(rows, aligns));
+            } else if !trimmed.trim_matches(|c| c == '|' || c == '-' || c == ':' || c == ' ').is_empty() {
+                // A line of bars with no table under it keeps its columns in a fixed-width font.
                 out = out.child(div().font_family("JetBrains Mono").t_small().child(trimmed.to_string()));
             }
         } else if trimmed.chars().all(|c| c == '-' || c == '*' || c == '_') && trimmed.len() >= 3 {
@@ -1787,6 +1833,113 @@ fn markdown(text: &str, index: usize) -> AnyElement {
     out.into_any_element()
 }
 
+/// A table row's cells: split at its bars, except one written `\\|` or inside `code`.
+fn table_cells(line: &str) -> Vec<String> {
+    let line = line.trim();
+    let line = line.strip_prefix('|').unwrap_or(line);
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut code = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cell.push('|');
+                chars.next();
+            }
+            '`' => {
+                code = !code;
+                cell.push(c);
+            }
+            '|' if !code => cells.push(std::mem::take(&mut cell).trim().to_string()),
+            c => cell.push(c),
+        }
+    }
+    // What follows the last bar is a cell only when there is something in it.
+    if !cell.trim().is_empty() {
+        cells.push(cell.trim().to_string());
+    }
+    cells
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CellAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// The columns' alignments when `line` is the line under a table's header (`|---|:--:|`).
+fn table_aligns(line: &str) -> Option<Vec<CellAlign>> {
+    if !line.trim_start().starts_with('|') {
+        return None;
+    }
+    let cells = table_cells(line);
+    if cells.is_empty() {
+        return None;
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            let dashes = cell.trim_matches(':');
+            if dashes.is_empty() || !dashes.chars().all(|c| c == '-') {
+                return None;
+            }
+            Some(match (cell.starts_with(':'), cell.ends_with(':')) {
+                (true, true) => CellAlign::Center,
+                (false, true) => CellAlign::Right,
+                _ => CellAlign::Left,
+            })
+        })
+        .collect()
+}
+
+/// How much of a table's width each of its columns gets: what its longest cell needs, within limits
+/// that keep a short column readable and a long one from taking everything.
+fn table_widths(rows: &[Vec<String>], columns: usize) -> Vec<f32> {
+    let width = |cell: &String| inline_spans(cell).0.chars().map(|c| if c.is_ascii() { 1. } else { 2. }).sum::<f32>();
+    let wanted: Vec<f32> =
+        (0..columns).map(|column| rows.iter().filter_map(|row| row.get(column)).map(width).fold(0., f32::max).clamp(6., 48.)).collect();
+    let total: f32 = wanted.iter().sum();
+    wanted.iter().map(|w| w / total).collect()
+}
+
+/// A table: `rows[0]` is its header. Its width is the chat's, its cells wrap.
+fn markdown_table(rows: Vec<Vec<String>>, aligns: Vec<CellAlign>) -> AnyElement {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0).max(aligns.len());
+    let widths = table_widths(&rows, columns);
+    let table = rows.into_iter().enumerate().map(|(index, row)| {
+        let cells = (0..columns).map(|column| {
+            let align = aligns.get(column).copied().unwrap_or(CellAlign::Left);
+            div()
+                .min_w_0()
+                .w(gpui::relative(widths[column]))
+                .px_2()
+                .py_1()
+                .flex()
+                .when(align == CellAlign::Center, |d| d.justify_center())
+                .when(align == CellAlign::Right, |d| d.justify_end())
+                .child(div().min_w_0().child(inline(row.get(column).map_or("", String::as_str))))
+        });
+        div()
+            .w_full()
+            .flex()
+            .when(index > 0, |d| d.border_t_1().border_color(hex(Chrome::BORDER)))
+            .when(index == 0, |d| d.bg(hex(Chrome::PANEL)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)))
+            .children(cells)
+    });
+    div()
+        .w_full()
+        .my_0p5()
+        .rounded_md()
+        .border_1()
+        .border_color(hex(Chrome::BORDER))
+        .overflow_hidden()
+        .t_small()
+        .children(table)
+        .into_any_element()
+}
+
 fn numbered(line: &str) -> Option<(&str, &str)> {
     let digits = line.chars().take_while(char::is_ascii_digit).count();
     let rest = line[digits..].strip_prefix(". ")?;
@@ -1796,6 +1949,7 @@ fn numbered(line: &str) -> Option<(&str, &str)> {
 /// Running text with `code` and **bold** set apart, selectable, its addresses opening.
 fn inline(text: &str) -> AnyElement {
     let (plain, spans) = inline_spans(text);
+    let (plain, spans, links) = named_links(plain, spans);
     let highlights = spans.into_iter().map(|(range, code)| {
         let style = if code {
             HighlightStyle { color: Some(hex(Chrome::ORANGE)), background_color: Some(hex(Chrome::PANEL)), ..Default::default() }
@@ -1804,7 +1958,80 @@ fn inline(text: &str) -> AnyElement {
         };
         (range, style)
     });
-    super::selectable::selectable(plain, highlights.collect::<Vec<_>>())
+    super::selectable::selectable_with_links(plain, highlights.collect::<Vec<_>>(), links)
+}
+
+/// The end of the `(target)` opening at `open`, past any brackets inside it.
+fn target_end(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    for (at, c) in text[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + at);
+                }
+            }
+            '\n' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `[words](target)` as its words, which open a web address or a file (the ranges returned). `arr[0](x)`
+/// is not a link, nor is anything inside `code`; another scheme is left as words with nothing to open.
+/// The `spans` are moved along with the text.
+#[allow(clippy::type_complexity)]
+fn named_links(
+    text: String,
+    spans: Vec<(std::ops::Range<usize>, bool)>,
+) -> (String, Vec<(std::ops::Range<usize>, bool)>, Vec<(std::ops::Range<usize>, String)>) {
+    let mut out = String::with_capacity(text.len());
+    // Taken out of the text: where (in `text`), and how much.
+    let mut removed: Vec<(usize, usize)> = Vec::new();
+    let mut links = Vec::new();
+    let mut from = 0;
+    while let Some(open) = text[from..].find('[').map(|at| from + at) {
+        let in_code = |at: usize| spans.iter().any(|(range, code)| *code && range.contains(&at));
+        let parsed = (|| {
+            if in_code(open) || text[..open].ends_with('!') {
+                return None;
+            }
+            let close = open + text[open..].find(']')?;
+            let words = &text[open + 1..close];
+            if words.is_empty() || words.contains('[') || words.contains('\n') || !text[close + 1..].starts_with('(') {
+                return None;
+            }
+            let end = target_end(&text, close + 1)?;
+            // `(address "title")`: the address alone.
+            let target = text[close + 2..end].split_whitespace().next()?;
+            let web = target.starts_with("https://") || target.starts_with("http://");
+            let other_scheme = !web && !target.starts_with("file://") && (target.contains("://") || target.starts_with("mailto:"));
+            (web || other_scheme || target.contains('/') || target.contains('.'))
+                .then(|| (close, end, (!other_scheme).then(|| target.to_string())))
+        })();
+        let Some((close, end, address)) = parsed else {
+            out.push_str(&text[from..=open]);
+            from = open + 1;
+            continue;
+        };
+        out.push_str(&text[from..open]);
+        let start = out.len();
+        out.push_str(&text[open + 1..close]);
+        if let Some(address) = address {
+            links.push((start..out.len(), address));
+        }
+        removed.push((open, 1));
+        removed.push((close, end + 1 - close));
+        from = end + 1;
+    }
+    out.push_str(&text[from..]);
+    let moved = |at: usize| at - removed.iter().map(|(gone, len)| if *gone < at { (*len).min(at - gone) } else { 0 }).sum::<usize>();
+    let spans =
+        spans.iter().map(|(range, code)| (moved(range.start)..moved(range.end), *code)).filter(|(range, _)| !range.is_empty()).collect();
+    (out, spans, links)
 }
 
 /// `text` without its `` ` `` and `**` marks, and the ranges they marked (true: code).
@@ -1902,6 +2129,58 @@ mod tests {
         assert!(spans.is_empty());
         assert_eq!(numbered("12. twelve"), Some(("12", "twelve")));
         assert_eq!(numbered("2024. not a list"), None);
+    }
+
+    #[test]
+    fn named_links_show_their_words_and_open_their_address() {
+        let parse = |text: &str| {
+            let (plain, spans) = inline_spans(text);
+            named_links(plain, spans)
+        };
+        let (text, spans, links) = parse("[PR #241](https://github.com/a/pull/241)이 열려 있고");
+        assert_eq!(text, "PR #241이 열려 있고");
+        assert!(spans.is_empty());
+        assert_eq!(links, vec![(0..7, "https://github.com/a/pull/241".to_string())]);
+        // Styles around it stay on their words; more than one; a title; brackets in the address.
+        let (text, spans, links) = parse("**bold** [a](https://a.dev/x_(y) \"t\") `code` [b](http://b.dev)");
+        assert_eq!(text, "bold a code b");
+        assert_eq!(spans, vec![(0..4, false), (7..11, true)]);
+        assert_eq!(links, vec![(5..6, "https://a.dev/x_(y)".to_string()), (12..13, "http://b.dev".to_string())]);
+        // Bold words holding a link.
+        let (text, spans, links) = parse("**[a](https://a.dev)** then");
+        assert_eq!((text.as_str(), spans), ("a then", vec![(0..1, false)]));
+        assert_eq!(links[0].0, 0..1);
+        // A file: its words, opening it.
+        let (text, _, links) = parse("see [view.rs:12](crates/app/view.rs#L12) there");
+        assert_eq!(text, "see view.rs:12 there");
+        assert_eq!(links, vec![(4..14, "crates/app/view.rs#L12".to_string())]);
+        // Another scheme: its words, nothing to open.
+        for other in ["[a](ftp://a.dev/x)", "[a](mailto:me@a.dev)"] {
+            let (text, _, links) = parse(other);
+            assert_eq!(text, "a");
+            assert!(links.is_empty(), "{other}");
+        }
+        // Not links: code, an index being called, a picture, brackets alone, an unclosed one.
+        for same in ["arr[0](x) call", "![pic](https://a.dev/p.png)", "[a] (b)", "[a](https://a.dev", "[](https://a.dev)", "[한글"] {
+            assert_eq!(parse(same).0, same);
+            assert!(parse(same).2.is_empty(), "{same}");
+        }
+        let (text, spans, links) = parse("`[a](https://a.dev)`");
+        assert_eq!((text.as_str(), spans.len(), links.len()), ("[a](https://a.dev)", 1, 0));
+    }
+
+    #[test]
+    fn tables_are_read_cell_by_cell() {
+        assert_eq!(table_cells("| 남는 코드 | `a|b` | c\\|d |"), ["남는 코드", "`a|b`", "c|d"]);
+        assert_eq!(table_cells("| a | | c"), ["a", "", "c"]);
+        assert_eq!(table_aligns("|---|:--|--:|:-:|"), Some(vec![CellAlign::Left, CellAlign::Left, CellAlign::Right, CellAlign::Center]));
+        assert_eq!(table_aligns("| a | b |"), None);
+        assert_eq!(table_aligns("---"), None);
+        assert_eq!(table_aligns("| |"), None);
+        let rows = vec![vec!["a".to_string(), "x".repeat(200)], vec!["한글".to_string()]];
+        let widths = table_widths(&rows, 2);
+        assert!((widths.iter().sum::<f32>() - 1.).abs() < 0.001);
+        assert!(widths[0] > 0.05 && widths[1] < 0.95);
     }
 
     #[test]

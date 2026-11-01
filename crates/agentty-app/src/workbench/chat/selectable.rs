@@ -130,6 +130,15 @@ pub(in crate::workbench) fn take_press() -> bool {
 
 /// `text` with its `runs` (sorted, not overlapping), selectable, its web addresses as links.
 pub(in crate::workbench) fn selectable(text: String, runs: Vec<(Range<usize>, HighlightStyle)>) -> AnyElement {
+    selectable_with_links(text, runs, Vec::new())
+}
+
+/// [`selectable`], with words that open an address they don't show (`[words](address)`).
+pub(in crate::workbench) fn selectable_with_links(
+    text: String,
+    runs: Vec<(Range<usize>, HighlightStyle)>,
+    named: Vec<(Range<usize>, String)>,
+) -> AnyElement {
     let place = NEXT.with(|next| {
         let place = next.get();
         next.set((place.0, place.1, place.2 + 1));
@@ -143,10 +152,16 @@ pub(in crate::workbench) fn selectable(text: String, runs: Vec<(Range<usize>, Hi
         }
         blocks.insert(place, text.clone());
     });
-    let links = find_links(&text);
+    let mut links = named;
+    for link in find_links(&text) {
+        if !links.iter().any(|(named, _)| named.start < link.end && link.start < named.end) {
+            let address = text[link.clone()].to_string();
+            links.push((link, address));
+        }
+    }
     let mut runs = runs;
     // Addresses not already styled (inside `code`, say) read as links.
-    for link in &links {
+    for (link, _) in &links {
         if !runs.iter().any(|(range, _)| range.start < link.end && link.start < range.end) {
             runs.push((link.clone(), HighlightStyle { color: Some(crate::theme::hex(Chrome::BLUE)), ..Default::default() }));
         }
@@ -221,8 +236,8 @@ pub(in crate::workbench) fn selectable(text: String, runs: Vec<(Range<usize>, Hi
             // A click (no drag) on an address opens it.
             if clicked {
                 let at = index_at(&up_layout, &up_text, event.position);
-                if let Some(link) = up_links.iter().find(|link| link.contains(&at)) {
-                    open_link(up_text[link.clone()].to_string(), window, cx);
+                if let Some((_, address)) = up_links.iter().find(|(link, _)| link.contains(&at)) {
+                    open_link(place.0, address.clone(), window, cx);
                 }
             }
         })
@@ -230,9 +245,16 @@ pub(in crate::workbench) fn selectable(text: String, runs: Vec<(Range<usize>, Hi
         .into_any_element()
 }
 
-fn open_link(url: String, window: &mut Window, cx: &mut App) {
+/// A web address goes to the browser; anything else a link names is a file of the chat's folder.
+fn open_link(chat: u64, target: String, window: &mut Window, cx: &mut App) {
     if let Some(Some(workbench)) = window.root::<Workbench>() {
-        workbench.update(cx, |workbench, cx| workbench.open_link(url, cx));
+        workbench.update(cx, |workbench, cx| {
+            if target.starts_with("https://") || target.starts_with("http://") {
+                workbench.open_link(target, cx);
+            } else {
+                workbench.open_chat_file(chat, &target, window, cx);
+            }
+        });
     }
 }
 
@@ -259,15 +281,45 @@ fn word_at(text: &str, at: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// Where the address starting at `start` ends: at a character no address holds, or a bracket
+/// closing one opened before it. Korean in a path starts a part of it (`/wiki/한글`, `?q=한글`); right
+/// after other characters it is a particle, written with no space (`…/pull/241이`).
+fn address_end(text: &str, start: usize) -> usize {
+    let (mut round, mut square) = (0u32, 0u32);
+    let mut previous = ' ';
+    let mut in_words = false;
+    for (at, c) in text[start..].char_indices() {
+        let before = std::mem::replace(&mut previous, c);
+        if !c.is_ascii() {
+            in_words = c.is_alphanumeric() && (in_words || matches!(before, '/' | '=' | '&' | '(' | '_' | '-' | '+' | '#'));
+            if !in_words {
+                return start + at;
+            }
+            continue;
+        }
+        in_words = false;
+        match c {
+            '(' => round += 1,
+            '[' => square += 1,
+            ')' if round == 0 => return start + at,
+            ']' if square == 0 => return start + at,
+            ')' => round -= 1,
+            ']' => square -= 1,
+            c if c.is_ascii_whitespace() || c.is_ascii_control() || matches!(c, '<' | '>' | '"' | '`') => return start + at,
+            _ => {}
+        }
+    }
+    text.len()
+}
+
 /// The `http://` and `https://` addresses in `text`, without the punctuation that ends a sentence.
 fn find_links(text: &str) -> Vec<Range<usize>> {
     let mut links = Vec::new();
     let mut from = 0;
     while let Some(found) = ["https://", "http://"].iter().filter_map(|scheme| text[from..].find(scheme)).min() {
         let start = from + found;
-        let mut end =
-            text[start..].find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`')).map_or(text.len(), |i| start + i);
-        while end > start && text[..end].ends_with(['.', ',', ')', ';', ':', '!', '?', '\'']) {
+        let mut end = address_end(text, start);
+        while end > start && text[..end].ends_with(['.', ',', ';', ':', '!', '?', '\'', '*']) {
             end -= 1;
         }
         if end > start + "https://".len() - 1 {
@@ -320,6 +372,26 @@ mod tests {
         let links: Vec<&str> = find_links(text).into_iter().map(|r| &text[r]).collect();
         assert_eq!(links, vec!["https://agentty.run/docs", "http://localhost:3000"]);
         assert!(find_links("no address here").is_empty());
+    }
+
+    #[test]
+    fn links_stop_where_the_address_does() {
+        let found = |text: &'static str| -> Vec<&'static str> { find_links(text).into_iter().map(|r| &text[r]).collect() };
+        // A Korean particle right after it, in or out of brackets.
+        assert_eq!(found("https://github.com/a/pull/241이 열려"), ["https://github.com/a/pull/241"]);
+        assert_eq!(found("[PR](https://github.com/a/pull/241)이 열려"), ["https://github.com/a/pull/241"]);
+        assert_eq!(found("주소는 https://a.dev/x를 보세요"), ["https://a.dev/x"]);
+        assert_eq!(found("**https://a.dev/x**"), ["https://a.dev/x"]);
+        assert_eq!(found("[https://a.dev/x]"), ["https://a.dev/x"]);
+        // Korean that is a part of the path, and what ends it.
+        assert_eq!(found("https://ko.wikipedia.org/wiki/한글 문서"), ["https://ko.wikipedia.org/wiki/한글"]);
+        assert_eq!(found("https://a.dev/s?q=한글&p=1, 다음"), ["https://a.dev/s?q=한글&p=1"]);
+        assert_eq!(found("https://a.dev/위키/문서_(역사)이다"), ["https://a.dev/위키/문서_(역사)"]);
+        assert_eq!(found("https://a.dev/한글。"), ["https://a.dev/한글"]);
+        // Brackets that belong to it stay.
+        assert_eq!(found("https://a.dev/Foo_(bar) next"), ["https://a.dev/Foo_(bar)"]);
+        assert_eq!(found("(https://a.dev/Foo_(bar))."), ["https://a.dev/Foo_(bar)"]);
+        assert_eq!(found("https://a.dev/x?a=1&b=%ED%95%9C#top, then"), ["https://a.dev/x?a=1&b=%ED%95%9C#top"]);
     }
 
     #[test]

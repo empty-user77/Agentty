@@ -36,7 +36,7 @@ impl Workbench {
     }
 
     /// [`Self::open_in_editor`] with the cursor at `line:column` (from 1).
-    fn open_in_editor_at(
+    pub(super) fn open_in_editor_at(
         &mut self,
         path: &Path,
         project: &Path,

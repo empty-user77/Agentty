@@ -138,6 +138,7 @@ impl Workbench {
             self.chats.get(&id).and_then(|state| state.shown.get(item)).map(|item| match item {
                 ChatItem::User(text) => text.clone(),
                 ChatItem::Reply(blocks) => reply_text(blocks),
+                ChatItem::Peer { text, .. } => text.clone(),
                 _ => String::new(),
             })
         } else {
