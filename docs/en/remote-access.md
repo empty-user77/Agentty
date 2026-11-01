@@ -103,6 +103,14 @@ Only you get in, the same as on the page: Agentty answers that address itself an
 
 The address goes away when the server stops, when remote access is turned off and when Agentty quits. Agentty doesn't open a port that Tailscale already serves for something else, or one shared publicly with Funnel; the page tells you why instead.
 
+## Chat and orchestrations from the phone apps
+
+The Agentty Remote apps can show a pane as a chat and follow your orchestrations, with the same sign-in and the same checks as the page. Choosing the chat on the phone doesn't change how the pane shows on the Mac. The Mac stays on the workspace it shows when an orchestration starts or resumes from the phone; a toast says so.
+
+A workspace you left out of remote access, and any orchestration in it, doesn't appear. An orchestration started from the phone works in a folder under `~/AgenttyRemote`, and it doesn't read links or files named in its goal beforehand as the Mac's dialog does: the agent just gets the goal.
+
+A conversation holds whatever your agents read and printed. Before it leaves your Mac, your home folder is shortened to `~`, and text that looks like a known kind of credential is masked. That catches common shapes, not everything, so treat it like the terminal: it is the same session.
+
 ## Hiding the feature
 
 Don't use remote access at all? Turn off **Settings → General → Remote access feature** (on by default), or press **Disable remote access** on the Remote access page. Its icon leaves the side menu and remote access turns off. Turn the setting back on to bring it back.

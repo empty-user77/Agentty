@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote access: the phone apps can read a pane's conversation as a chat and follow, start, approve, stop and
+  resume orchestrations (`/api/chat`, `/api/board`, `/api/orchestration`).
+
 ## [0.3.9] - 2026-11-01
 
 Everything from 0.3.8, which was withdrawn shortly after release, ships in this version.

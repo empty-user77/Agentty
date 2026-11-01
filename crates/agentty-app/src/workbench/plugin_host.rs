@@ -754,6 +754,27 @@ impl Workbench {
         starting_spec(starter, text, cwd, submit, (restricted, model))
     }
 
+    /// An agent started on a prompt the way [`Self::deliver_prompt`] starts one, in a pane of its
+    /// own not put anywhere yet: for what opens without moving the desktop (the remote page's).
+    pub(super) fn spawn_with_prompt(
+        &mut self,
+        pick: crate::agents::AgentPick,
+        text: &str,
+        title: Option<&str>,
+        cwd: PathBuf,
+        model: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<Pane, String> {
+        let text = agentty_bridge::plugins::spill_long_prompt(text, title).map_err(|e| e.to_string())?;
+        let starter = Starter::Agent(pick);
+        let kind = starter.kind();
+        let cwd = if kind.agent().is_some() { self.own_tree_now(kind, &cwd, cx).unwrap_or(cwd) } else { cwd };
+        let (spec, later) = starting_spec(starter, text, cwd, true, (false, model));
+        let pane = self.spawn_pane(spec, cx);
+        type_later(&pane, later, cx);
+        Ok(pane)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn launch_with_prompt(
         &mut self,
