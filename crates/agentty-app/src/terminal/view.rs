@@ -937,6 +937,15 @@ impl TerminalView {
         }
     }
 
+    /// Esc sent for the user (chat view's Stop): the turn it stops reads as interrupted, as when
+    /// Esc is pressed in the terminal.
+    pub fn interrupt(&mut self) {
+        if self.status.in_turn() {
+            self.esc_at = Some(Instant::now());
+        }
+        self.write(b"\x1b".to_vec());
+    }
+
     /// What a key tells about the agent's state, before it reaches the program: Esc may interrupt
     /// a turn, and Enter in Codex starts one.
     fn note_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {

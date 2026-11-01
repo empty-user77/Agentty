@@ -90,6 +90,9 @@ pub fn read(agent: Agent, path: &Path) -> Result<Vec<Entry>> {
     })
 }
 
+/// How much of a transcript [`Reader::update`] reads at a time.
+const READ_CHUNK: usize = 1 << 20;
+
 /// A transcript read as it grows: each [`Reader::update`] parses only what was written since the
 /// last one, so a long session is not read again from the start on every new line.
 pub struct Reader {
@@ -119,18 +122,29 @@ impl Reader {
         }
         if len > self.offset {
             file.seek(SeekFrom::Start(self.offset))?;
-            let mut bytes = Vec::with_capacity((len - self.offset) as usize);
-            file.take(len - self.offset).read_to_end(&mut bytes)?;
-            self.offset += bytes.len() as u64;
-            self.partial.extend_from_slice(&bytes);
-            let complete = self.partial.iter().rposition(|b| *b == b'\n').map_or(0, |at| at + 1);
-            let lines: Vec<u8> = self.partial.drain(..complete).collect();
-            for line in lines.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
-                let line = String::from_utf8_lossy(line);
-                match self.agent {
-                    Agent::Codex => codex_line(&mut self.builder, &line),
-                    _ => claude_line(&mut self.builder, &line),
+            // In pieces: a first read of a long session (pictures sent in it are long lines) holds
+            // one piece and the line it ends in, not the whole file.
+            let mut rest = file.take(len - self.offset);
+            let mut chunk = vec![0; READ_CHUNK];
+            loop {
+                let read = rest.read(&mut chunk)?;
+                if read == 0 {
+                    break;
                 }
+                self.offset += read as u64;
+                let start = self.partial.len();
+                self.partial.extend_from_slice(&chunk[..read]);
+                // Only the new bytes can hold the end of a line.
+                let Some(end) = self.partial[start..].iter().rposition(|b| *b == b'\n') else { continue };
+                let complete = start + end + 1;
+                for line in self.partial[..complete].split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+                    let line = String::from_utf8_lossy(line);
+                    match self.agent {
+                        Agent::Codex => codex_line(&mut self.builder, &line),
+                        _ => claude_line(&mut self.builder, &line),
+                    }
+                }
+                self.partial.drain(..complete);
             }
         }
         Ok(self.builder.changed_from.take().map(|from| {
@@ -593,6 +607,16 @@ mod tests {
         std::fs::write(&path, format!("{}\n", user("again"))).unwrap();
         let (from, entries) = reader.update(&path).unwrap().unwrap();
         assert_eq!((from, entries.len()), (0, 1));
+        // Lines longer than a piece read at a time, and one ending right at a piece's end.
+        let long = "x".repeat(READ_CHUNK + 10);
+        let edge = "y".repeat(READ_CHUNK - user("").len() - 1);
+        std::fs::write(&path, format!("{}\n{}\n{}\n", user(&edge), user(&long), say("after"))).unwrap();
+        let mut reader = Reader::new(Agent::Claude);
+        let (_, entries) = reader.update(&path).unwrap().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].text.len(), edge.len());
+        assert_eq!(entries[1].text.len(), long.len());
+        assert!(reader.partial.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

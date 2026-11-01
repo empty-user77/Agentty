@@ -34,10 +34,15 @@ pub fn project_path(slug: &str) -> Option<String> {
 /// Id of the newest chat in `cwd` written after `since_ms` (Gemini runs as a command in a pane,
 /// so its session is found from its files).
 pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
-    find_recent_in(&tmp_dir(), &project_paths(), cwd, since_ms)
+    find_recent_in(&tmp_dir(), &project_paths(), cwd, since_ms, &[])
 }
 
-fn find_recent_in(tmp: &Path, projects: &HashMap<String, String>, cwd: &Path, since_ms: u64) -> Option<String> {
+/// [`find_recent`] leaving out the sessions in `taken` (other panes' own).
+pub fn find_recent_except(cwd: &Path, since_ms: u64, taken: &[String]) -> Option<String> {
+    find_recent_in(&tmp_dir(), &project_paths(), cwd, since_ms, taken)
+}
+
+fn find_recent_in(tmp: &Path, projects: &HashMap<String, String>, cwd: &Path, since_ms: u64, taken: &[String]) -> Option<String> {
     let cwd = cwd.to_string_lossy();
     let mut chats: Vec<(u64, PathBuf)> =
         files_in(tmp).into_iter().map(|p| (fsutil::mtime_ms(&p), p)).filter(|(t, _)| *t >= since_ms).collect();
@@ -49,7 +54,7 @@ fn find_recent_in(tmp: &Path, projects: &HashMap<String, String>, cwd: &Path, si
         }
         let slug = path.parent().and_then(Path::parent).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let dir = meta["directories"][0].as_str().map(str::to_string).or_else(|| slug.and_then(|s| projects.get(&s).cloned()))?;
-        (dir == cwd).then(|| meta["sessionId"].as_str().map(str::to_string)).flatten()
+        (dir == cwd).then(|| meta["sessionId"].as_str().map(str::to_string)).flatten().filter(|id| !taken.contains(id))
     })
 }
 
@@ -202,9 +207,9 @@ mod find_recent_tests {
         std::fs::write(chats.join("session-2.jsonl"), "{\"sessionId\":\"sub\",\"kind\":\"subagent\",\"directories\":[\"/work/app\"]}\n")
             .unwrap();
         let projects = HashMap::new();
-        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), 0).as_deref(), Some("one"));
-        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/other"), 0), None);
-        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), u64::MAX), None);
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), 0, &[]).as_deref(), Some("one"));
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/other"), 0, &[]), None);
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), u64::MAX, &[]), None);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

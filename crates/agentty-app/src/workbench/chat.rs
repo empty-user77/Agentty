@@ -139,8 +139,8 @@ pub struct ChatState {
     /// When Stop last sent its Esc.
     stopped_at: Option<Instant>,
     /// Gemini CLI and Antigravity don't say which session they write: the newest one in the pane's
-    /// folder, looked up now and then (and whether a lookup runs).
-    found_session: Option<(Instant, Option<String>)>,
+    /// folder, looked up now and then for the agent then running (and whether a lookup runs).
+    found_session: Option<(Instant, Agent, Option<String>)>,
     finding_session: bool,
     /// The agent's last tool when the user last wrote: an older turn's, not shown as what it does now.
     earlier_tool: Option<(String, Option<String>)>,
@@ -161,6 +161,9 @@ pub struct ChatState {
     items: Vec<ChatItem>,
     /// Messages sent from the chat that the transcript does not show yet.
     echo: Vec<String>,
+    /// Entries of `items` not shown: messages stopped before an answer and put back in the
+    /// composer (Claude Code takes them back too, but its transcript keeps them).
+    hidden: Vec<usize>,
     /// `items` and then `echo`, as the list shows them.
     shown: Rc<Vec<ChatItem>>,
     list: ListState,
@@ -558,6 +561,12 @@ pub(super) fn is_setup_screen(lines: &[String]) -> bool {
 /// approval, a question, a first-run question such as Codex's "Trust this folder?" in a new
 /// worktree) the hooks have not reported. Text typed in then, with its Enter, would pick whatever
 /// option is highlighted.
+/// [`waits_on_user`] from screen rows already read, leaving out the first-run screen (a chat in
+/// front knows it from its poll): what drawing a chat asks on every frame.
+pub(super) fn waits_on_screen(view: &crate::terminal::TerminalView, screen: &crate::terminal::ScreenState) -> bool {
+    view.status.needs_user() || screen.permission.is_some() || screen.question
+}
+
 fn waits_on_user(view: &crate::terminal::TerminalView) -> bool {
     if view.status.needs_user() {
         return true;
@@ -692,6 +701,7 @@ impl Workbench {
                 reading: cx.focus_handle(),
                 items: Vec::new(),
                 echo: Vec::new(),
+                hidden: Vec::new(),
                 shown: Rc::new(Vec::new()),
                 list,
                 follow,
@@ -766,9 +776,12 @@ impl Workbench {
         let id = pane.entity_id();
         let on = match self.chats.get_mut(&id).filter(|state| state.plain) {
             // A chat: to its terminal and back, keeping everything it holds.
+            // What the button shows is what is on screen: a chat its terminal is forced over (a
+            // menu only the terminal answers) reads as off, and a click keeps asking for the chat.
             Some(state) => {
-                state.show_terminal = !state.show_terminal;
-                !state.show_terminal
+                let shown = !state.show_terminal && !Self::terminal_forced(state, cx);
+                state.show_terminal = shown;
+                !shown
             }
             None if shows_as_chat(&pane, cx) => {
                 self.chat_modes.insert(id, true);
@@ -786,11 +799,11 @@ impl Workbench {
     }
 
     /// Whether the title bar's chat button shows on: the pane in front shows its chat.
-    pub(super) fn chat_view_shown(&self, _cx: &App) -> bool {
+    pub(super) fn chat_view_shown(&self, cx: &App) -> bool {
         self.active_pane()
             .and_then(|pane| self.chats.get(&pane.entity_id()))
             .filter(|state| state.plain)
-            .is_some_and(|state| !state.show_terminal)
+            .is_some_and(|state| !state.show_terminal && !Self::terminal_forced(state, cx))
     }
 
     /// The lead of the chat tab `pane` is in (the pane itself when it is the lead).
@@ -829,7 +842,7 @@ impl Workbench {
         // A menu of the agent's own (Claude Code's rewind, a picker) that is not numbered options
         // the chat can show as buttons: only its terminal can answer it.
         let menu = lines.iter().rev().take(6).any(|line| line.to_lowercase().contains("esc to cancel"));
-        (waits_on_user(view) || menu) && screen_choices(&lines).is_none()
+        (menu || waits_on_screen(view, &crate::terminal::classify_screen(&lines))) && screen_choices(&lines).is_none()
     }
 
     /// The composer to put the keyboard in instead of `pane`, when `pane` is a lead shown as a chat.
@@ -862,7 +875,14 @@ impl Workbench {
         // being one when switched off or when their agent left.
         let modes = &self.chat_modes;
         let wanted = |pane: &Pane, cx: &App| modes.get(&pane.entity_id()).copied().unwrap_or(chat_view) && shows_as_chat(pane, cx);
-        self.chats.retain(|id, state| alive.contains(id) && (!state.plain || wanted(&state.lead, cx)));
+        self.chats.retain(|id, state| {
+            let keep = alive.contains(id) && (!state.plain || wanted(&state.lead, cx));
+            if !keep {
+                selectable::drop_chat(id.as_u64());
+            }
+            keep
+        });
+        self.side_questions.retain(|id, _| alive.contains(id));
         let new: Vec<Pane> = panes.into_iter().filter(|p| !self.chats.contains_key(&p.entity_id()) && wanted(p, cx)).collect();
         for pane in new {
             self.insert_chat(&pane, ChatRoles::default(), true, cx);
@@ -971,6 +991,9 @@ impl Workbench {
         self.refresh_chat_usage(id, cx);
         self.refresh_chat_recent(id, cx);
         self.chat_delivery_tick(id, cx);
+        // Another pane in the same folder running the same agent shows its own session: the newest
+        // one is this pane's only when no other pane has it.
+        let taken = self.chats.get(&id).map(|s| taken_sessions(&self.chats, id, chat_lead_agent(&s.lead, cx))).unwrap_or_default();
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
         // Until the lead has its instructions, its first-run screens may be in the way. A plain
@@ -985,7 +1008,7 @@ impl Workbench {
         // said counts then.
         let named = matches!(agent, Agent::Claude | Agent::Codex);
         let session = if !named {
-            state.found_session.as_ref().and_then(|(_, id)| id.clone())
+            state.found_session.as_ref().filter(|(_, found, _)| *found == agent).and_then(|(_, _, id)| id.clone())
         } else if view.spec.kind.agent().is_none_or(|kind| kind == agent) {
             view.current_session()
         } else {
@@ -994,20 +1017,19 @@ impl Workbench {
         // Looked up again now and then: a new conversation (`/clear`) is a new session.
         let look_up = !named
             && !state.finding_session
-            && state
-                .found_session
-                .as_ref()
-                .is_none_or(|(at, id)| at.elapsed() >= if id.is_some() { SESSION_RECHECK } else { SESSION_RETRY });
+            && state.found_session.as_ref().is_none_or(|(at, found, id)| {
+                *found != agent || at.elapsed() >= if id.is_some() { SESSION_RECHECK } else { SESSION_RETRY }
+            });
         if look_up {
             state.finding_session = true;
             let (cwd, since) = (view.display_cwd(), view.agent_since_ms.unwrap_or(view.launched_at_ms));
-            let find = cx.background_spawn(async move { agentty_bridge::find_recent(agent, &cwd, since) });
+            let find = cx.background_spawn(async move { agentty_bridge::find_recent_except(agent, &cwd, since, &taken) });
             cx.spawn(async move |this, cx| {
                 let found = find.await;
                 let _ = this.update(cx, |this, _| {
                     if let Some(state) = this.chats.get_mut(&id) {
                         state.finding_session = false;
-                        state.found_session = Some((Instant::now(), found));
+                        state.found_session = Some((Instant::now(), agent, found));
                     }
                 });
             })
@@ -1036,9 +1058,11 @@ impl Workbench {
             state.entry_rows.clear();
             state.items.clear();
             state.echo.clear();
+            state.hidden.clear();
             state.seen_len = 0;
             // The start screen's earlier sessions now include the one just left.
             state.recent = None;
+            selectable::drop_chat(id.as_u64());
             Self::show_chat_items(state);
             cx.notify();
         }
@@ -1073,7 +1097,8 @@ impl Workbench {
                 match update {
                     Ok(Some((from, entries))) => Some(Loaded::From(from, entries.into_iter().map(entry_rows).collect(), reader)),
                     Ok(None) => None,
-                    Err(()) => None,
+                    // Not read: tried again on the next poll, as if the file had not been looked at.
+                    Err(()) => return None,
                 }
             } else {
                 let turns = match agent {
@@ -1145,7 +1170,11 @@ impl Workbench {
     }
 
     fn show_chat_items(state: &mut ChatState) {
-        let mut shown = state.items.clone();
+        let mut shown: Vec<ChatItem> = if state.hidden.is_empty() {
+            state.items.clone()
+        } else {
+            state.items.iter().enumerate().filter(|(at, _)| !state.hidden.contains(at)).map(|(_, item)| item.clone()).collect()
+        };
         shown.extend(state.echo.iter().cloned().map(ChatItem::User));
         if state.follow.get() && !state.plain {
             // Measured again from the end, so a reply that keeps growing stays in view.
@@ -2033,7 +2062,7 @@ impl Workbench {
                     state.is_some_and(|s| s.show_terminal),
                     state.map_or(0, |s| s.shown.len()),
                     state.and_then(|s| s.transcript.as_ref().map(|(id, _)| id.clone())),
-                    state.and_then(|s| s.found_session.as_ref().and_then(|(_, id)| id.clone())),
+                    state.and_then(|s| s.found_session.as_ref().and_then(|(_, _, id)| id.clone())),
                 );
             }
             // What ⌘C would copy from the selection in the chat (the driver sends no ⌘ keys).
@@ -2216,6 +2245,15 @@ pub(super) fn pane_chat_agent(view: &crate::terminal::TerminalView) -> Option<Ag
         "agy" => Some(Agent::Agy),
         _ => None,
     })
+}
+
+/// The sessions other chats than `id` found for `agent`.
+fn taken_sessions(chats: &std::collections::HashMap<EntityId, ChatState>, id: EntityId, agent: Agent) -> Vec<String> {
+    chats
+        .iter()
+        .filter(|(other, _)| **other != id)
+        .filter_map(|(_, state)| state.found_session.as_ref().filter(|(_, found, _)| *found == agent).and_then(|(_, _, id)| id.clone()))
+        .collect()
 }
 
 /// Whether chat view draws `pane` as a chat: an agent whose conversation Agentty can read runs in it.

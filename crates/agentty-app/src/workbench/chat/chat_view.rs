@@ -110,22 +110,25 @@ impl Workbench {
         let view = pane.read(cx);
         let agent = chat_lead_agent(pane, cx);
         let lines = view.screen_lines(40);
-        let waits = waits_on_user(view);
+        let screen = crate::terminal::classify_screen(&lines);
+        let waits = waits_on_screen(view, &screen);
         // Antigravity and Gemini CLI draw from the top of a tall screen: their footer can sit above
         // the last rows read for the rest.
-        let footer = matches!(agent, agentty_bridge::model::Agent::Agy | agentty_bridge::model::Agent::Gemini)
-            .then(|| footer_model(&view.screen_lines(200)))
-            .flatten();
+        let tall =
+            matches!(agent, agentty_bridge::model::Agent::Agy | agentty_bridge::model::Agent::Gemini).then(|| view.screen_lines(200));
+        let footer = tall.as_deref().and_then(footer_model);
+        // They have no hooks: a turn runs while their screen offers to cancel it.
+        let cancellable = tall.as_deref().is_some_and(|lines| lines.iter().any(|line| line.contains("esc to cancel")));
         // Claude Code and Codex show a running turn on screen ("esc to interrupt"): a turn stopped
         // without the hook that says it ended is not shown as running (its Stop would do nothing,
         // and a second Esc opens Claude Code's rewind menu). A turn just sent has a moment to show.
         let shows_turn = !matches!(agent, agentty_bridge::model::Agent::Claude | agentty_bridge::model::Agent::Codex)
-            || crate::terminal::classify_screen(&lines).busy
+            || screen.busy
             || view.working_since.is_some_and(|since| since.elapsed() < Duration::from_secs(5));
         Live {
             tool: view.tool_id(),
             agent,
-            working: view.status.in_turn() && shows_turn,
+            working: (view.status.in_turn() && shows_turn) || cancellable,
             interrupted: matches!(view.status, AgentStatus::Interrupted),
             activity: view
                 .last_tool
@@ -146,7 +149,7 @@ impl Workbench {
                 AgentStatus::Permission(Some(what)) | AgentStatus::Question(Some(what)) => Some(what.clone()),
                 _ => None,
             }
-            .or_else(|| crate::terminal::classify_screen(&lines).permission),
+            .or(screen.permission),
             mode: (agent == agentty_bridge::model::Agent::Claude).then(|| Mode::of(&lines)),
             effort: effort_of(&lines).or_else(|| footer.and_then(|(_, effort)| effort)),
             folder: view.display_cwd(),
@@ -802,11 +805,14 @@ impl Workbench {
         if state.stopped_at.is_some_and(|at| at.elapsed() < Duration::from_millis(1500)) {
             return;
         }
-        if !crate::terminal::classify_screen(&state.lead.read(cx).screen_lines(40)).busy {
+        // Claude Code and Codex: only a turn on screen is stopped (a second Esc opens Claude Code's
+        // rewind menu). Gemini CLI and Antigravity say it otherwise; their Esc cancels a turn.
+        let checks = matches!(chat_lead_agent(&state.lead, cx), agentty_bridge::model::Agent::Claude | agentty_bridge::model::Agent::Codex);
+        if checks && !crate::terminal::classify_screen(&state.lead.read(cx).screen_lines(40)).busy {
             return cx.notify();
         }
         state.stopped_at = Some(Instant::now());
-        state.lead.update(cx, |view, _| view.write(b"\x1b".to_vec()));
+        state.lead.update(cx, |view, _| view.interrupt());
         // Stopped before it answered, Claude Code puts the message back in its input: it goes back
         // to the composer instead, or the next message would be sent after it.
         cx.spawn(async move |this, cx| {
@@ -817,7 +823,7 @@ impl Workbench {
     }
 
     fn take_back_stopped_message(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        let Some(state) = self.chats.get(&id) else { return };
+        let Some(state) = self.chats.get_mut(&id) else { return };
         let lines = state.lead.read(cx).screen_lines(12);
         // What was last sent is what comes back (the screen's copy of it may be cut or wrapped).
         let last = state.echo.last().cloned().or_else(|| {
@@ -831,6 +837,15 @@ impl Workbench {
         }
         // Ctrl+E, Ctrl+U: to the end of the input, and all of it out.
         state.lead.update(cx, |view, _| view.write(b"\x05\x15".to_vec()));
+        // Nor is it in the conversation any more: its bubble goes (the transcript keeps it).
+        if let Some(sent) = &last {
+            if let Some(at) = state.echo.iter().rposition(|echo| echo == sent) {
+                state.echo.remove(at);
+            } else if let Some(at) = state.items.iter().rposition(|item| matches!(item, ChatItem::User(text) if text == sent)) {
+                state.hidden.push(at);
+            }
+            Self::show_chat_items(state);
+        }
         if let (Some(text), Some((input, _))) = (last, state.input.as_ref()) {
             if input.read(cx).text().trim().is_empty() {
                 input.update(cx, |input, cx| input.set_text(text, cx));

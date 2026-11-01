@@ -164,12 +164,27 @@ pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64) -> Option
     }
 }
 
+/// [`find_recent`] leaving out the sessions in `taken`: those other panes in the same folder show,
+/// for the agents that don't say which session they write (Gemini CLI, Antigravity, Amp).
+pub fn find_recent_except(agent: Agent, cwd: &std::path::Path, since_ms: u64, taken: &[String]) -> Option<String> {
+    match agent {
+        Agent::Gemini => gemini::find_recent_except(cwd, since_ms, taken),
+        Agent::Agy => recent_in_except(agy::list(50), cwd, since_ms, taken),
+        Agent::Amp => recent_in_except(amp::list(50), cwd, since_ms, taken),
+        _ => find_recent(agent, cwd, since_ms).filter(|id| !taken.contains(id)),
+    }
+}
+
 /// The newest of `sessions` held in `cwd` and written after `since_ms`.
 fn recent_in(sessions: Vec<SessionInfo>, cwd: &std::path::Path, since_ms: u64) -> Option<String> {
+    recent_in_except(sessions, cwd, since_ms, &[])
+}
+
+fn recent_in_except(sessions: Vec<SessionInfo>, cwd: &std::path::Path, since_ms: u64, taken: &[String]) -> Option<String> {
     let cwd = cwd.to_string_lossy();
     sessions
         .into_iter()
-        .filter(|s| s.updated_at + 1_000 >= since_ms && s.cwd.as_deref() == Some(&*cwd))
+        .filter(|s| s.updated_at + 1_000 >= since_ms && s.cwd.as_deref() == Some(&*cwd) && !taken.contains(&s.id))
         .max_by_key(|s| s.updated_at)
         .map(|s| s.id)
 }
@@ -593,6 +608,8 @@ mod tests {
         assert_eq!(recent_in(sessions(), here, 4_000).as_deref(), Some("new"));
         // Written before the pane started: another run's.
         assert_eq!(recent_in(sessions(), here, 7_000), None);
+        // The newest is another pane's: this one's is the one before it.
+        assert_eq!(recent_in_except(sessions(), here, 0, &["new".into()]).as_deref(), Some("old"));
     }
 
     /// A path outside every agent's session folder is refused, whatever the SessionInfo claims.

@@ -77,6 +77,26 @@ pub(in crate::workbench) fn begin_item(chat: u64, item: usize) {
     });
 }
 
+/// `at`, within `text` and moved back to the start of the character it falls in.
+fn char_floor(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+/// Forgets a chat's text (its pane closed, or it went back to its terminal).
+pub(in crate::workbench) fn drop_chat(chat: u64) {
+    BLOCKS.with(|blocks| blocks.borrow_mut().retain(|(id, _, _), _| *id != chat));
+    SELECTION.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.as_ref().is_some_and(|s| s.anchor.place.0 == chat) {
+            *s = None;
+        }
+    });
+}
+
 /// The selected text, the blocks it covers one per line.
 pub(in crate::workbench) fn selected_text() -> Option<String> {
     let (from, to) = SELECTION.with(|s| s.borrow().as_ref().map(|s| ordered(s.anchor, s.head)))?;
@@ -140,7 +160,10 @@ pub(in crate::workbench) fn selectable(text: String, runs: Vec<(Range<usize>, Hi
         }
         let start = if place == from.place { from.at } else { 0 };
         let end = if place == to.place { to.at } else { text.len() };
-        (start < end).then_some(start.min(text.len())..end.min(text.len()))
+        // Offsets kept from an earlier text at this place (a new session's) may fall inside a
+        // character of this one.
+        let (start, end) = (char_floor(&text, start), char_floor(&text, end));
+        (start < end).then_some(start..end)
     });
     if let Some(range) = selected {
         runs = with_background(runs, range, hex_alpha(Chrome::BLUE, 0.35));
