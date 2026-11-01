@@ -1,0 +1,30 @@
+{
+ "about": "Tutorial form: one task, step by step, each step a held framing with a spotlight on the control. 40-90 s.",
+ "slug": "feature-howto",
+ "title": { "en": "How to …", "ko": "… 하는 법", "ja": "… のやり方", "zh": "如何 …" },
+ "tagline": { "en": "In three steps", "ko": "세 단계로", "ja": "3 ステップで", "zh": "三步完成" },
+ "narration": "each",
+ "scenes": [
+  {
+   "layout": "steps",
+   "items": [{ "en": "Open the panel", "ko": "패널 열기" }, { "en": "Pick the option", "ko": "옵션 고르기" }, { "en": "See the result", "ko": "결과 확인" }],
+   "say": [{ "en": "Three steps, about a minute.", "ko": "세 단계, 1분이면 됩니다." }]
+  },
+  {
+   "clip": "footage/step1.mov", "from": "@open-1", "to": "@open+3", "zoom": "auto", "transition": "curve-left",
+   "headline": { "en": "1 · Open the panel", "ko": "1 · 패널 열기" },
+   "spotlight": [{ "rect": [40, 120, 120, 120], "at": [0.6, 2.4], "label": { "en": "this icon", "ko": "이 아이콘" } }],
+   "say": [{ "en": "Click the icon on the left.", "ko": "왼쪽 아이콘을 누르세요." }]
+  },
+  {
+   "clip": "footage/step2.mov", "from": "@pick-1", "to": "@pick+3", "zoom": "auto", "transition": "curve-left",
+   "headline": { "en": "2 · Pick the option", "ko": "2 · 옵션 고르기" },
+   "say": [{ "en": "Choose what you need.", "ko": "필요한 것을 고르세요." }]
+  },
+  {
+   "clip": "footage/step3.mov", "from": "@done-1", "to": "@done+4", "transition": "iris",
+   "headline": { "en": "3 · See the result", "ko": "3 · 결과 확인" },
+   "say": [{ "en": "And it is done.", "ko": "끝났습니다." }]
+  }
+ ]
+}

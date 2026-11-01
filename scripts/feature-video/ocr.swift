@@ -11,7 +11,9 @@ for file in files.filter({ $0.pathExtension == "png" }).sorted(by: { $0.lastPath
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = false
-    request.recognitionLanguages = ["en-US", "ko-KR", "ja-JP", "zh-Hans"]
+    // OCR_LANGS puts the language being checked first (Vision favours the first of the list).
+    let langs = ProcessInfo.processInfo.environment["OCR_LANGS"].map { $0.split(separator: ",").map(String.init) }
+    request.recognitionLanguages = langs ?? ["en-US", "ko-KR", "ja-JP", "zh-Hans"]
     try? VNImageRequestHandler(cgImage: image).perform([request])
     for observation in request.results ?? [] {
         guard let candidate = observation.topCandidates(1).first else { continue }

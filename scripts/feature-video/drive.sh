@@ -8,8 +8,12 @@
 #   drive.sh wait <regex> [secs]    until the active pane's screen matches
 #   drive.sh prompt <text>          type into the active pane, then Enter (sent apart, so it is not a paste)
 #   drive.sh agent claude|codex <folder>   open an agent tab there and wait until it is ready
-#   drive.sh record <name> [secs]   record the window to <dir>/footage/<name>.mov in the background
-#   drive.sh stop                   stop the recording
+#   drive.sh record <name> [secs]   record the window to <dir>/footage/<name>.mov in the background (the pointer
+#                                   is parked outside the window first)
+#   drive.sh mark <label>           a named moment in the recording (storyboard times like "@label+0.5")
+#   drive.sh tap "<x y [mod]>" <label>   a click that names what it lands on (checked by `video.sh verify`)
+#   drive.sh stop                   stop the recording; every click, key and mark sent meanwhile is written to
+#                                   footage/<name>.mov.events.json in footage seconds (the film's cursor and zooms)
 #   drive.sh snap <name>            still of the window (no screen-recording permission needed)
 #   drive.sh demo-project           create the demo project ~/agentty-demo/taskboard (once)
 #   drive.sh quit                   quit the app (also stops a recording)
@@ -31,6 +35,9 @@ socket() {
   done
 }
 send() { printf 'debug\t%s\t%s\n' "$1" "${2:-}" | nc -U -w 1 "$(socket)"; }
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+# While recording, what is sent and when (wall-clock ms), for the events file `stop` writes.
+log_event() { [ -f "$DIR/record.pid" ] && printf '%s\t%s\t%s\t%s\n' "$(now_ms)" "$1" "${2:-}" "${3:-}" >>"$DIR/record.events"; return 0; }
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 lines() { local n; n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${n:-0}"; }
 # The active pane's visible lines, freshly reported.
@@ -111,13 +118,17 @@ case "${1:-}" in
     send activate
     say "running (pid $(pid)), data in $DIR/data"
     ;;
-  cmd) send "$2" "${3:-}" ;;
+  cmd) log_event "$2" "${3:-}"; send "$2" "${3:-}" ;;
+  mark) log_event mark "$2"; say "mark $2" ;;
+  # tap "<x y [double|right]>" "<label>": a click that says what it lands on ("Format", "Hot");
+  # `verify` reads that text under the film's cursor.
+  tap) log_event click "$2" "${3:-}"; send click "$2" ;;
   screen) screen ;;
   wait)
     for _ in $(seq 1 "${3:-60}"); do screen | grep -qE "$2" && exit 0; sleep 1; done
     say "timed out waiting for /$2/"; screen; exit 1
     ;;
-  prompt) send type "$2"; sleep 0.8; send type '\n' ;;
+  prompt) log_event prompt "$2"; send type "$2"; sleep 0.8; send type '\n' ;;
   agent)
     send launch-agent "$2 $3"
     if [ "$2" = claude ]; then ready='shift\+tab to cycle|for shortcuts'; else ready='context left|% left|esc to interrupt'; fi
@@ -133,17 +144,29 @@ case "${1:-}" in
     rect="$(window_rect)"
     out="$DIR/footage/$2.mov"
     rm -f "$out"
+    # The real pointer would sit in the footage wherever it was left (the driver's clicks never move
+    # it): park it just under the window. The film draws its own cursor from the logged clicks.
+    IFS=, read -r rx ry rw rh <<<"$rect"
+    swift "$HERE/park.swift" "$((rx + rw / 2))" "$((ry + rh + 30))" 2>/dev/null || true
+    printf '%s\n%s\n%s\n' "$2" "$rw" "$rh" >"$DIR/record.meta"
+    : >"$DIR/record.events"
     # -V stops by itself after that many seconds; `drive.sh stop` ends it earlier.
     screencapture -x -v ${3:+-V "$3"} -R"$rect" "$out" >/dev/null 2>&1 &
     echo $! >"$DIR/record.pid"
+    now_ms >"$DIR/record.start"
     sleep 1
     say "recording $rect to $out"
     ;;
   stop)
     p="$(cat "$DIR/record.pid" 2>/dev/null)"
+    stopped="$(now_ms)"
     [ -n "$p" ] && kill -INT "$p" 2>/dev/null
     for _ in $(seq 1 20); do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done
     rm -f "$DIR/record.pid"
+    if [ -f "$DIR/record.meta" ]; then
+      python3 "$HERE/events.py" "$DIR" "$stopped"
+      rm -f "$DIR/record.meta" "$DIR/record.events" "$DIR/record.start"
+    fi
     ls -la "$DIR"/footage/*.mov 2>/dev/null | tail -3
     ;;
   snap) send snapshot "$DIR/footage/$2.png"; sleep 1.5; echo "$DIR/footage/$2.png" ;;

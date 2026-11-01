@@ -1,0 +1,263 @@
+{
+ "about": "Showcase form: a kinetic hook, a 3D hero, a mosaic that pushes into one tile, a laptop with a drawn ring, a lower third over footage, a bento payoff and a checklist close, in the aurora theme. Footage names and times are those of the AI-team demo: replace them.",
+ "slug": "feature-showcase",
+ "theme": "aurora",
+ "chapters": true,
+ "title": {
+  "en": "AI team coding",
+  "ko": "AI 팀 코딩",
+  "ja": "AI チームコーディング",
+  "zh": "AI 团队编程"
+ },
+ "tagline": {
+  "en": "Five agents and you, in one editor",
+  "ko": "에이전트 다섯과 당신, 하나의 편집기에서",
+  "ja": "5 つのエージェントとあなた、ひとつのエディタで",
+  "zh": "五个智能体和你，同一个编辑器"
+ },
+ "narration": "en",
+ "scenes": [
+  {
+   "layout": "kinetic",
+   "headline": {
+    "en": "Five agents. *One editor.*",
+    "ko": "에이전트 다섯. *편집기 하나.*",
+    "ja": "5 つのエージェント。*1 つのエディタ。*",
+    "zh": "五个智能体。*一个编辑器。*"
+   },
+   "say": [
+    {
+     "en": "What if five AI agents built your site together, with you in the loop?",
+     "ko": "AI 에이전트 다섯이 당신과 함께 사이트를 만든다면?",
+     "ja": "5 つの AI エージェントが、あなたと一緒にサイトを作ったら?",
+     "zh": "如果五个 AI 智能体和你一起做网站呢?"
+    }
+   ]
+  },
+  {
+   "layout": "hero3d",
+   "clip": "footage/main.mov",
+   "from": 1,
+   "to": 22,
+   "speed": 2,
+   "headline": {
+    "en": "Five agents, *one project*",
+    "ko": "에이전트 다섯, *프로젝트 하나*",
+    "ja": "5 つのエージェント、*1 つのプロジェクト*",
+    "zh": "五个智能体，*一个项目*"
+   },
+   "subline": {
+    "en": "Opus, Sonnet and Haiku, each with a role",
+    "ko": "Opus·Sonnet·Haiku, 각자 맡은 역할",
+    "ja": "Opus・Sonnet・Haiku、それぞれの役割",
+    "zh": "Opus、Sonnet、Haiku，各司其职"
+   },
+   "say": [
+    {
+     "en": "Each one gets a role: lead, backend, frontend, design and tests.",
+     "ko": "각자 역할을 맡습니다. 리드, 백엔드, 프론트엔드, 디자인, 테스트.",
+     "ja": "それぞれに役割があります。リード、バックエンド、フロントエンド、デザイン、テスト。",
+     "zh": "每个都有分工：负责人、后端、前端、设计和测试。"
+    }
+   ]
+  },
+  {
+   "layout": "mosaic",
+   "focus": 1,
+   "focus_at": 3.2,
+   "headline": {
+    "en": "One folder, *four views*",
+    "ko": "폴더 하나, *네 개의 화면*",
+    "ja": "1 つのフォルダ、*4 つの画面*",
+    "zh": "一个文件夹，*四个画面*"
+   },
+   "labels": [
+    {
+     "en": "Team board",
+     "ko": "팀 보드",
+     "ja": "チームボード",
+     "zh": "团队看板"
+    },
+    {
+     "en": "Live edits",
+     "ko": "실시간 편집",
+     "ja": "リアルタイム編集",
+     "zh": "实时编辑"
+    },
+    {
+     "en": "Ask AI",
+     "ko": "Ask AI",
+     "ja": "Ask AI",
+     "zh": "Ask AI"
+    },
+    {
+     "en": "The result",
+     "ko": "결과",
+     "ja": "完成品",
+     "zh": "成果"
+    }
+   ],
+   "clips": [
+    {
+     "clip": "footage/main.mov",
+     "from": 86,
+     "to": 96,
+     "speed": 1
+    },
+    {
+     "clip": "footage/main.mov",
+     "from": 186,
+     "to": 204,
+     "speed": 1.8
+    },
+    {
+     "clip": "footage/main.mov",
+     "from": 805,
+     "to": 824,
+     "speed": 1.9
+    },
+    {
+     "clip": "footage/main.mov",
+     "from": 1199,
+     "to": 1214,
+     "speed": 1.5
+    }
+   ],
+   "say": [
+    {
+     "en": "They plan on a shared board, write code side by side, and every edit shows live.",
+     "ko": "공유 보드에서 계획하고, 나란히 코드를 쓰고, 모든 편집이 실시간으로 보입니다.",
+     "ja": "共有ボードで計画し、並んでコードを書き、すべての編集がリアルタイムで見えます。",
+     "zh": "它们在共享看板上规划，并肩写代码，每处修改都实时可见。"
+    }
+   ]
+  },
+  {
+   "layout": "device",
+   "clip": "footage/ask.mov",
+   "headline": {
+    "en": "Ask AI about *the code*",
+    "ko": "코드를 고르고 *AI에게*",
+    "ja": "コードを選んで *AI に*",
+    "zh": "选中代码，*交给 AI*"
+   },
+   "callouts": [
+    {
+     "rect": [
+      236,
+      1012,
+      1036,
+      368
+     ],
+     "at": [
+      4.9,
+      7.2
+     ],
+     "style": "circle",
+     "expect": ".post-card",
+     "label": {
+      "en": "the selected block",
+      "ko": "선택한 블록",
+      "ja": "選んだブロック",
+      "zh": "选中的代码块"
+     }
+    }
+   ],
+   "say": [
+    {
+     "en": "Select code, press Command K, and the designer restyles it in seconds.",
+     "ko": "코드를 고르고 Command K를 누르면 디자이너가 몇 초 만에 고칩니다.",
+     "ja": "コードを選んで Command K を押すと、デザイナーが数秒で作り直します。",
+     "zh": "选中代码，按下 Command K，设计成员几秒钟就改好了。"
+    }
+   ]
+  },
+  {
+   "layout": "lower3rd",
+   "clip": "footage/main.mov",
+   "from": 233,
+   "to": 243,
+   "speed": 1,
+   "headline": {
+    "en": "The human *joins in*",
+    "ko": "사람도 *함께 씁니다*",
+    "ja": "人間も*参加*",
+    "zh": "人也*一起写*"
+   },
+   "subline": {
+    "en": "Same file, while the agents keep writing",
+    "ko": "에이전트가 쓰는 같은 파일에",
+    "ja": "エージェントが書いている同じファイルに",
+    "zh": "在智能体正在写的同一个文件里"
+   },
+   "say": [
+    {
+     "en": "The human types into the same board while the agents keep going.",
+     "ko": "사람도 에이전트들이 쓰는 그 보드에 직접 씁니다.",
+     "ja": "人間も、エージェントが書き続けるボードに直接書き込みます。",
+     "zh": "人也在同一块看板上直接输入，智能体照常工作。"
+    }
+   ]
+  },
+  {
+   "layout": "bento",
+   "clip": "footage/main.mov",
+   "from": 1214,
+   "to": 1241,
+   "speed": 1.6,
+   "zoom": "auto",
+   "headline": {
+    "en": "Built in *twenty minutes*",
+    "ko": "*20분* 만에 완성",
+    "ja": "*20 分*で完成",
+    "zh": "*二十分钟*完成"
+   },
+   "value": "23",
+   "label": {
+    "en": "tests passing",
+    "ko": "개 테스트 통과",
+    "ja": "件のテストが合格",
+    "zh": "项测试通过"
+   },
+   "say": [
+    {
+     "en": "Twenty minutes later, the site works, and all twenty-three tests pass.",
+     "ko": "20분 뒤 사이트가 동작하고, 테스트 23개가 모두 통과합니다.",
+     "ja": "20 分後、サイトが動き、23 件のテストがすべて合格します。",
+     "zh": "二十分钟后，网站就能用了，23 项测试全部通过。"
+    }
+   ]
+  },
+  {
+   "layout": "steps",
+   "items": [
+    {
+     "en": "Agents in one folder",
+     "ko": "한 폴더의 에이전트들",
+     "ja": "1 つのフォルダにエージェント",
+     "zh": "智能体在同一个文件夹"
+    },
+    {
+     "en": "Live carets and review",
+     "ko": "실시간 커서와 검토",
+     "ja": "リアルタイムのカーソルとレビュー",
+     "zh": "实时光标与审查"
+    },
+    {
+     "en": "You stay in charge",
+     "ko": "결정은 당신이",
+     "ja": "決めるのはあなた",
+     "zh": "由你做主"
+    }
+   ],
+   "say": [
+    {
+     "en": "One editor, five agents and one human, working as a team.",
+     "ko": "편집기 하나, 에이전트 다섯과 사람 하나가 한 팀으로.",
+     "ja": "ひとつのエディタで、5 つのエージェントと 1 人の人間がチームとして。",
+     "zh": "一个编辑器，五个智能体加一个人，组成一个团队。"
+    }
+   ]
+  }
+ ]
+}

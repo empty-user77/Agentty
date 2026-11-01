@@ -1,0 +1,26 @@
+{
+ "about": "Vertical teaser for Shorts / Reels / TikTok: 15-30 s, one claim, one proof. `crop` frames the part of the window that matters in a tall stage.",
+ "slug": "feature-teaser",
+ "aspect": "9:16",
+ "narration": "each",
+ "title": { "en": "Feature name", "ko": "기능 이름", "ja": "機能名", "zh": "功能名称" },
+ "tagline": { "en": "In 20 seconds", "ko": "20초 만에", "ja": "20 秒で", "zh": "20 秒看懂" },
+ "scenes": [
+  {
+   "layout": "title",
+   "headline": { "en": "The claim, in five words", "ko": "주장을 다섯 단어로" },
+   "say": [{ "en": "The claim, said once.", "ko": "주장을 한 번 말합니다." }]
+  },
+  {
+   "clip": "footage/live.mov", "from": "@start", "to": "@result+2", "speed": 1.5, "zoom": "auto",
+   "crop": [900, 0, 1100, 1600], "transition": "curve-left",
+   "headline": { "en": "Proof", "ko": "증거" },
+   "say": [{ "en": "The proof, live.", "ko": "실제로 보여줍니다." }]
+  },
+  {
+   "layout": "stat", "value": "1", "transition": "inverse-zoom",
+   "label": { "en": "click to turn it on", "ko": "번의 클릭으로 켜기" },
+   "say": [{ "en": "One click to try it.", "ko": "클릭 한 번이면 됩니다." }]
+  }
+ ]
+}
