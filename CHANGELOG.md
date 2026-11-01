@@ -5,26 +5,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-11-01
+## [0.3.9] - 2026-11-01
+
+Everything from 0.3.8, which was withdrawn shortly after release, ships in this version.
 
 ### Added
 - Chat view: a Claude Code, Codex, Antigravity or Gemini CLI pane can be shown as a desktop-style chat while the
   CLI keeps running underneath. Switch the pane in front with the title bar's speech bubble, **View → Chat View**
   or ⇧⌘J; the mode new agents open in is a setting (**AI settings → How agents open**), also offered in
-  onboarding.
+  onboarding. Each pane keeps its view, chat or terminal, across a restart.
 - In the chat: formatted replies with syntax-colored code, tool steps folded into cards, to-do lists, approvals
   and numbered questions answered in place, attachments by + or drag and drop, a start screen with the agent's
   earlier sessions in the folder, and text selection across messages with ⌘C, quoted replies and side chats.
 - Stop interrupts the running turn and puts a message the agent handed back into the composer.
+- After updating, a card mentions chat view once, with a button to its setting.
 
 ### Changed
 - The split buttons are one dropdown, mini mode sits by the sidebar button, and the lead-and-workers workspace is
   called a team workspace.
 
 ### Fixed
+- Split panes draw much faster: clicking or dragging in a tab with several panes, chats especially, no longer
+  stutters.
+- In a split pane the chat's message box is as wide as the pane instead of a narrow column, and in very narrow
+  panes it keeps the send button in view.
+- Pane dividers and panel edges can be dragged over a pane shown as a chat, and stop where they are let go.
 - A pane that runs another agent than the one it was launched with (quit, then start another) now shows that
   agent's model, context and conversation instead of the previous one's.
 - An agent started again by hand in a pane no longer stays on "Thinking" after its turn.
+
+## [0.3.8] - 2026-11-01 [WITHDRAWN]
+
+Withdrawn shortly after release; everything in it ships in 0.3.9.
 
 ## [0.3.7] - 2026-10-31
 
