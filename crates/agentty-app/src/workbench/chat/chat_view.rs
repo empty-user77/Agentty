@@ -1707,6 +1707,8 @@ mod tests {
         assert!(!returned_to_input(&screen(&["❯ "]), sent));
     }
 
+    // The CLIs are given paths as macOS / Linux write them (`/…`); a Windows path is not one.
+    #[cfg(unix)]
     #[test]
     fn sent_files_lead_the_message() {
         let dir = std::env::temp_dir().join(format!("agentty-sent-{}", std::process::id()));
