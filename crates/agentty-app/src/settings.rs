@@ -507,6 +507,10 @@ pub struct Settings {
     pub setup_check_shown: bool,
     /// The first-run onboarding was finished or skipped.
     pub onboarding_done: bool,
+    /// Features announced once to people who updated from a version without them (a card at
+    /// start), answered or not: never shown again. A new install's onboarding covers them.
+    #[serde(default)]
+    pub tips_seen: Vec<String>,
     /// "Later" in the update popup: the version it was for and when (Unix seconds) the popup may
     /// come back. Until then the update only shows in the status bar.
     #[serde(default)]
@@ -1086,6 +1090,7 @@ impl Default for Settings {
             prevent_sleep_agents: false,
             setup_check_shown: false,
             onboarding_done: false,
+            tips_seen: Vec::new(),
             update_later_version: String::new(),
             update_later_until: 0,
             default_app_dismissed: Vec::new(),

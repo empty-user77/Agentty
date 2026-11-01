@@ -2085,6 +2085,12 @@ impl Workbench {
         cx.notify();
     }
 
+    /// The same, with the row labelled `label` marked as a search result marks it.
+    pub(super) fn open_settings_row(&mut self, section: SettingsSection, label: String, cx: &mut Context<Self>) {
+        self.open_settings_section(section, cx);
+        self.settings_ui.highlight = Some(label);
+    }
+
     fn settings_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
         if let Some(input) = &self.settings_ui.search {
             return input.clone();

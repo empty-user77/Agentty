@@ -86,6 +86,9 @@ pub struct LaunchSpec {
     /// worktree not made again yet) and the pane started in `cwd` instead. Saved in its place
     /// until the pane moves, so it isn't lost for good.
     pub missing_cwd: Option<PathBuf>,
+    /// A restored pane: whether its agent was shown as a chat or as its terminal when saved. The
+    /// agent that starts in it takes this instead of the setting, once.
+    pub chat_view: Option<bool>,
     /// An agent a plugin started to work on text that is not the user's (posts from the web, say):
     /// it reads and writes files where it was started, and nothing else — no shell, no web, no MCP
     /// tools (so not the in-app browser, which is signed in as the user). A prompt hidden in that
@@ -188,6 +191,7 @@ impl LaunchSpec {
             model: None,
             advisor: None,
             missing_cwd: None,
+            chat_view: None,
             restricted: false,
             read_only: false,
         }
@@ -203,6 +207,7 @@ impl LaunchSpec {
             model: None,
             advisor: None,
             missing_cwd: None,
+            chat_view: None,
             restricted: false,
             read_only: false,
         }
@@ -222,6 +227,7 @@ impl LaunchSpec {
             model: None,
             advisor: None,
             missing_cwd: None,
+            chat_view: None,
             restricted: false,
             read_only: false,
         }

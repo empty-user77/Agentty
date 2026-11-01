@@ -19,6 +19,9 @@ pub struct PaneSnapshot {
     /// what it was started as. Kept so a folded-away workspace shows the logo it had open.
     #[serde(default)]
     pub tool: Option<String>,
+    /// An agent pane shown as a chat (true) or as its terminal (false), so a restart keeps it so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_view: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,6 +533,7 @@ impl PaneSnapshot {
             }
         };
         spec.missing_cwd = missing;
+        spec.chat_view = self.chat_view;
         spec
     }
 }
@@ -643,12 +647,37 @@ mod tests {
     #[test]
     fn a_missing_folder_is_remembered_not_replaced() {
         let gone = PathBuf::from("/nonexistent/agentty-test-folder");
-        let pane = PaneSnapshot { kind: PaneKind::Shell, cwd: gone.clone(), title: "t".into(), session_id: None, tool: None };
+        let pane =
+            PaneSnapshot { kind: PaneKind::Shell, cwd: gone.clone(), title: "t".into(), session_id: None, tool: None, chat_view: None };
         let spec = pane.launch_spec();
         assert_eq!(spec.cwd, home_dir());
         assert_eq!(spec.missing_cwd, Some(gone));
         let here = PaneSnapshot { cwd: std::env::temp_dir(), ..pane };
         assert_eq!(here.launch_spec().missing_cwd, None);
+    }
+
+    #[test]
+    fn a_pane_comes_back_as_a_chat_or_a_terminal_as_saved() {
+        let pane = PaneSnapshot {
+            kind: PaneKind::Claude,
+            cwd: std::env::temp_dir(),
+            title: "t".into(),
+            session_id: None,
+            tool: Some("claude".into()),
+            chat_view: Some(true),
+        };
+        let json = serde_json::to_string(&pane).unwrap();
+        let back: PaneSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.chat_view, Some(true));
+        assert_eq!(back.launch_spec().chat_view, Some(true));
+        let terminal = PaneSnapshot { chat_view: Some(false), ..pane.clone() };
+        assert_eq!(terminal.launch_spec().chat_view, Some(false));
+        // Saved before panes kept it: the setting decides, as it did.
+        let old = r#"{"kind":"claude","cwd":"/tmp","title":"t"}"#;
+        assert_eq!(serde_json::from_str::<PaneSnapshot>(old).unwrap().chat_view, None);
+        // A pane without an agent writes nothing for it.
+        let shell = PaneSnapshot { kind: PaneKind::Shell, chat_view: None, ..pane };
+        assert!(!serde_json::to_string(&shell).unwrap().contains("chat"));
     }
 
     #[test]
@@ -684,6 +713,7 @@ mod tests {
                     title: "t".into(),
                     session_id: None,
                     tool: Some("claude".into()),
+                    chat_view: None,
                 }),
                 active_pane: 0,
                 zoomed_pane: None,
@@ -714,6 +744,7 @@ mod tests {
                 title: title.into(),
                 session_id: None,
                 tool: None,
+                chat_view: None,
             }),
             active_pane: 0,
             zoomed_pane: None,
@@ -752,7 +783,14 @@ mod tests {
 
     #[test]
     fn a_plugin_s_finished_jobs_are_not_brought_back() {
-        let pane = |kind: PaneKind, cwd: &str| PaneSnapshot { kind, cwd: cwd.into(), title: cwd.into(), session_id: None, tool: None };
+        let pane = |kind: PaneKind, cwd: &str| PaneSnapshot {
+            kind,
+            cwd: cwd.into(),
+            title: cwd.into(),
+            session_id: None,
+            tool: None,
+            chat_view: None,
+        };
         let data = Path::new("/data/plugin-data");
         let mut tree = PaneNode::Leaf(pane(PaneKind::Shell, "/data/plugin-data/x-feed"));
         tree.split(
@@ -774,8 +812,14 @@ mod tests {
 
     #[test]
     fn layout_roundtrip() {
-        let pane =
-            |title: &str| PaneSnapshot { kind: PaneKind::Shell, cwd: "/tmp".into(), title: title.into(), session_id: None, tool: None };
+        let pane = |title: &str| PaneSnapshot {
+            kind: PaneKind::Shell,
+            cwd: "/tmp".into(),
+            title: title.into(),
+            session_id: None,
+            tool: None,
+            chat_view: None,
+        };
         let mut tree = PaneNode::Leaf(pane("a"));
         tree.split(&pane("a"), pane("b"), Axis::Vertical);
         let json = serde_json::to_string(&NodeSnapshot::from_tree(&tree)).unwrap();

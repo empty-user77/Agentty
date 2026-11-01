@@ -995,7 +995,10 @@ impl Workbench {
                 Ok(json!({ "width": width, "height": height, "seconds": seconds, "frames": count, "size": size }))
             }
             .await;
-            eprintln!("html-video: {}", result.as_ref().map(Value::to_string).unwrap_or_else(|e| e.clone()));
+            // What was made goes back to the plugin; only a failure is worth the log.
+            if let Err(error) = &result {
+                eprintln!("agentty: html-video failed: {error}");
+            }
             let _ = cx.update(|cx| call.reply(result.map_err(|e| (codes::INVALID_PARAMS, e)), cx));
         })
         .detach();

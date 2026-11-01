@@ -650,7 +650,9 @@ fn main() {
             single_instance::close_strays();
         }
         single_instance::Lock::Held => {
-            eprintln!("agentty: Agentty is already running; bringing it forward");
+            if debug::enabled() {
+                eprintln!("agentty: Agentty is already running; bringing it forward");
+            }
             single_instance::bring_running_forward();
             return;
         }

@@ -304,7 +304,14 @@ mod tests {
     use crate::workbench::persist::{NodeSnapshot, PaneSnapshot, TabSnapshot};
 
     fn pane(title: &str, cwd: &str) -> NodeSnapshot {
-        NodeSnapshot::Pane(PaneSnapshot { kind: PaneKind::Shell, cwd: cwd.into(), title: title.into(), session_id: None, tool: None })
+        NodeSnapshot::Pane(PaneSnapshot {
+            kind: PaneKind::Shell,
+            cwd: cwd.into(),
+            title: title.into(),
+            session_id: None,
+            tool: None,
+            chat_view: None,
+        })
     }
 
     #[test]

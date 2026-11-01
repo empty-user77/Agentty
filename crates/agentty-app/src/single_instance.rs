@@ -135,7 +135,9 @@ pub fn close_strays() -> usize {
         if strays.is_empty() {
             return 0;
         }
-        eprintln!("agentty: closing {} other Agentty process(es) of this installation: {strays:?}", strays.len());
+        if crate::debug::enabled() {
+            eprintln!("agentty: closing {} other Agentty process(es) of this installation: {strays:?}", strays.len());
+        }
         terminate(&strays);
         strays.len()
     }
