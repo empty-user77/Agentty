@@ -2798,13 +2798,13 @@ mod tests {
     fn polling_a_chat_or_the_board_is_not_use_of_the_session() {
         let hub = hub("secret-password");
         let path = chat_pane(&hub, 7, "");
-        hub.publish_board(orchestration_board());
         let cookie = sign_in(&hub, "secret-password");
         let last_seen = || hub.auth.lock().unwrap().sessions.list(SystemTime::now())[0].last_seen;
         let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw()).0;
         let before = last_seen();
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(get("/api/chat?pane=7"), 200);
+        hub.publish_board(orchestration_board());
         assert_eq!(get("/api/board"), 200);
         assert_eq!(last_seen(), before, "a device left open goes idle");
         assert_eq!(get("/api/sessions"), 200);
@@ -2876,6 +2876,7 @@ mod tests {
         assert_eq!(value["threads"][0]["planAwaiting"], false);
         assert_eq!(value["folders"], false);
         let rev = value["rev"].as_str().unwrap().to_string();
+        hub.publish_board(orchestration_board());
         let (status, _, body) = get(&format!("/api/board?rev={rev}"));
         assert_eq!((status, body.as_str()), (304, ""));
         let cross =
@@ -2887,10 +2888,12 @@ mod tests {
     #[test]
     fn orchestrations_take_only_what_their_stage_offers() {
         let hub = hub("secret-password");
-        hub.publish_board(orchestration_board());
         let cookie = sign_in(&hub, "secret-password");
-        let act =
-            |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0;
+        // Copied out again before each: a slow machine must not outlast the copy between requests.
+        let act = |body: serde_json::Value| {
+            hub.publish_board(orchestration_board());
+            send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0
+        };
         assert_eq!(act(json!({ "id": "o10", "action": "approve" })), 200);
         assert_eq!(act(json!({ "id": "o10", "action": "approve" })), 200, "a double tap");
         assert_eq!(act(json!({ "id": "o10", "action": "revise", "text": " fewer agents " })), 200);
@@ -2938,10 +2941,12 @@ mod tests {
     fn orchestrations_start_in_the_remote_folder_only() {
         use crate::settings::OrchestrationProfile;
         let hub = hub("secret-password");
-        hub.publish_board(orchestration_board());
         let cookie = sign_in(&hub, "secret-password");
-        let act =
-            |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0;
+        // Copied out again before each: a slow machine must not outlast the copy between requests.
+        let act = |body: serde_json::Value| {
+            hub.publish_board(orchestration_board());
+            send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0
+        };
         assert_eq!(act(json!({ "action": "start", "goal": "x", "path": "" })), 404, "no remote folder");
 
         let base = std::env::temp_dir().join(format!("agentty-remote-orch-{}-{}", std::process::id(), crate::ui::now_ms()));
@@ -2987,7 +2992,8 @@ mod tests {
         }
         assert_eq!(act(json!({ "action": "start", "goal": "x" })), 429, "a few a minute, not a flood");
         hub.publish_board(Board { enabled: false, ..orchestration_board() });
-        assert_eq!(act(json!({ "action": "start", "goal": "x" })), 409, "orchestration is switched off");
+        let off = Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", json!({ "action": "start", "goal": "x" })) };
+        assert_eq!(send(&hub, &off.raw()).0, 409, "orchestration is switched off");
         hub.shutdown();
         let _ = std::fs::remove_dir_all(base);
     }
