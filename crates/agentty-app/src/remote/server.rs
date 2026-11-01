@@ -19,6 +19,8 @@
 //! takes the page's input out, so the server never touches a terminal itself.
 
 use super::auth::{self, Lockout, Sessions};
+use super::board::Board;
+use super::chat::{self, ChatLive, ChatState, Follow};
 use super::conn::{Conn, Endpoint, Listener};
 use super::http::{self, percent_encode, HttpError, Request, Response};
 use super::snapshot::{screen_update, PluginInfo, Screen, SessionInfo, WorkspaceInfo};
@@ -65,6 +67,22 @@ const MAX_LINGERS: usize = 4;
 static LINGERING: AtomicUsize = AtomicUsize::new(0);
 /// Longest text one input may carry (a prompt pasted from a phone).
 pub const MAX_INPUT_CHARS: usize = 16_000;
+/// Longest goal an orchestration started from the page may have.
+const MAX_GOAL_CHARS: usize = 8_000;
+/// How long a page's interest in a chat or the board lasts after it last asked.
+const INTEREST: Duration = Duration::from_secs(5);
+/// How long a chat's screen state, the board's copy, is good for, and how long a request waits for
+/// the app to send a newer one.
+const LIVE_FRESH: Duration = Duration::from_millis(1500);
+const LIVE_WAIT: Duration = Duration::from_millis(400);
+const BOARD_FRESH: Duration = Duration::from_secs(3);
+const BOARD_WAIT: Duration = Duration::from_millis(1500);
+/// Transcripts being read at once, and panes whose reading is kept for their next poll: each holds
+/// up to a window of the conversation in memory.
+const MAX_CHAT_READS: usize = 4;
+const MAX_FOLLOWS: usize = 6;
+/// Transcripts being read now (see [`MAX_CHAT_READS`]).
+static CHAT_READS: AtomicUsize = AtomicUsize::new(0);
 const LOG_LEN: usize = 50;
 
 const INDEX_HTML: &str = include_str!("../../assets/remote/index.html");
@@ -138,6 +156,54 @@ pub enum Command {
     /// A local dev server a terminal runs (`port`, checked against the overview) shown on the
     /// tailnet through Agentty's proxy (`devproxy`).
     OpenPort { port: u16 },
+    /// What the chat view's Stop does: the running turn ended, once.
+    Stop { pane: u64 },
+    /// An option of the selection on the agent's screen (0 for its first), picked the way the chat
+    /// view's buttons do; nothing when that selection is gone.
+    Choice { pane: u64, option: usize },
+    /// Something done to an orchestration, or a new one.
+    Orchestration(OrchestrationCommand),
+}
+
+/// What the page may ask of the orchestrator. Ids and stages were checked against the board; the
+/// app checks them again when it applies this.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrchestrationCommand {
+    /// A new one in a folder under the remote folder (checked).
+    Start {
+        goal: String,
+        folder: std::path::PathBuf,
+        tool: Option<&'static str>,
+        profile: Option<crate::settings::OrchestrationProfile>,
+    },
+    /// The go its plan waits for.
+    Approve {
+        id: u64,
+    },
+    /// What to change in its plan.
+    Revise {
+        id: u64,
+        text: String,
+    },
+    Stop {
+        id: u64,
+    },
+    Resume {
+        id: u64,
+    },
+}
+
+impl OrchestrationCommand {
+    /// The orchestration it is for; `None` for a new one.
+    pub fn id(&self) -> Option<u64> {
+        match self {
+            OrchestrationCommand::Start { .. } => None,
+            OrchestrationCommand::Approve { id }
+            | OrchestrationCommand::Revise { id, .. }
+            | OrchestrationCommand::Stop { id }
+            | OrchestrationCommand::Resume { id } => Some(*id),
+        }
+    }
 }
 
 impl Command {
@@ -150,8 +216,14 @@ impl Command {
             | Command::Chat { pane, .. }
             | Command::Resize { pane, .. }
             | Command::Scroll { pane, .. }
-            | Command::Release { pane } => Some(*pane),
-            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } | Command::OpenPort { .. } => None,
+            | Command::Release { pane }
+            | Command::Stop { pane }
+            | Command::Choice { pane, .. } => Some(*pane),
+            Command::Wake { .. }
+            | Command::NewTab { .. }
+            | Command::OpenFolder { .. }
+            | Command::OpenPort { .. }
+            | Command::Orchestration(_) => None,
         }
     }
 }
@@ -192,7 +264,14 @@ struct View {
     sessions_version: u64,
     plugins: Vec<PluginInfo>,
     screens: HashMap<u64, (u64, Screen)>,
+    /// What the screens of the chats a page has open say, and when that was read.
+    chat_live: HashMap<u64, (Instant, ChatLive)>,
+    /// The board as last copied out, while a page asks for it.
+    board: Option<(Instant, Arc<Board>)>,
 }
+
+/// Conversations being followed: pane → when last asked for, and its reading.
+type Follows = HashMap<u64, (Instant, Arc<Mutex<Follow>>)>;
 
 pub struct Hub {
     /// Where it listens: what `tailscale serve` is pointed at.
@@ -228,6 +307,12 @@ pub struct Hub {
     voice: RwLock<Option<VoiceConfig>>,
     /// Voice clips being transcribed now, at most `MAX_TRANSCRIPTIONS`.
     transcribing: AtomicUsize,
+    /// The chats a page has open: pane → when it last asked.
+    chat_asked: Mutex<HashMap<u64, Instant>>,
+    /// When a page last asked for the board.
+    board_asked: Mutex<Option<Instant>>,
+    /// At most `MAX_FOLLOWS`.
+    follows: Mutex<Follows>,
 }
 
 /// What `POST /api/voice` transcribes with: a model (already installed) and an optional language
@@ -264,6 +349,28 @@ struct WorkspaceBody {
     /// For `open`: the name the new workspace is shown with, instead of the tool's.
     #[serde(default)]
     title: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrchestrationBody {
+    action: String,
+    /// A thread's id from the board, for everything but `start`.
+    #[serde(default)]
+    id: String,
+    /// For `start`.
+    #[serde(default)]
+    goal: String,
+    /// For `start`: folder names under the remote folder, joined with `/`.
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    /// For `revise`.
+    #[serde(default)]
+    text: String,
 }
 
 const MAX_GROUP_NAME: usize = 40;
@@ -376,6 +483,9 @@ impl Hub {
             new_tabs: Mutex::new(VecDeque::new()),
             voice: RwLock::new(None),
             transcribing: AtomicUsize::new(0),
+            chat_asked: Mutex::new(HashMap::new()),
+            board_asked: Mutex::new(None),
+            follows: Mutex::new(HashMap::new()),
         });
         let accept = hub.clone();
         std::thread::Builder::new().name("agentty-remote".into()).spawn(move || accept.accept_loop(listener))?;
@@ -578,7 +688,10 @@ impl Hub {
             view.sessions_version = view.version;
             let watched: Vec<u64> = view.sessions.iter().map(|s| s.pane).collect();
             view.screens.retain(|pane, _| watched.contains(pane));
+            view.chat_live.retain(|pane, _| watched.contains(pane));
             drop(view);
+            // A pane gone, or left out of remote access: what was read of it goes as well.
+            self.follows.lock().unwrap_or_else(|e| e.into_inner()).retain(|pane, _| watched.contains(pane));
             self.changed.notify_all();
         }
     }
@@ -592,6 +705,33 @@ impl Hub {
         let version = view.version;
         view.screens.insert(pane, (version, screen));
         drop(view);
+        self.changed.notify_all();
+    }
+
+    /// The chats a page asked for just now: their screens are read for it each round.
+    pub fn chats_asked(&self) -> Vec<u64> {
+        let mut asked = self.chat_asked.lock().unwrap_or_else(|e| e.into_inner());
+        asked.retain(|_, at| at.elapsed() < INTEREST);
+        asked.keys().copied().collect()
+    }
+
+    pub fn publish_chat_live(&self, pane: u64, live: ChatLive) {
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        let new = view.chat_live.insert(pane, (Instant::now(), live)).is_none();
+        drop(view);
+        // Only a request waiting for its first read wants to hear: this is not news for the streams.
+        if new {
+            self.changed.notify_all();
+        }
+    }
+
+    /// Whether a page asked for the board just now: then it is copied out about once a second.
+    pub fn board_asked(&self) -> bool {
+        self.board_asked.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|at| at.elapsed() < INTEREST)
+    }
+
+    pub fn publish_board(&self, board: Board) {
+        self.view.lock().unwrap_or_else(|e| e.into_inner()).board = Some((Instant::now(), Arc::new(board)));
         self.changed.notify_all();
     }
 
@@ -817,8 +957,13 @@ impl Hub {
             ("POST", "/api/login") => return Routed::Response(self.login(request, &login, &config, now)),
             _ => {}
         }
-        // 3. Everything past here needs a session of this login.
-        if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(&token, &login, now) {
+        // 3. Everything past here needs a session of this login. An app polling a chat or the board
+        // does so by itself: that doesn't count as use, or a device left open would never go idle.
+        let polling = method == "GET" && matches!(path, "/api/chat" | "/api/board");
+        let mut auth = self.auth.lock().unwrap_or_else(|e| e.into_inner());
+        let signed_in = if polling { auth.sessions.check_idle(&token, &login, now) } else { auth.sessions.check(&token, &login, now) };
+        drop(auth);
+        if !signed_in {
             return Routed::Response(Response::json(401, &json!({ "error": "signed out" })));
         }
         // A file is answered to HEAD as to GET (its body left out when sent): the viewer asks it of
@@ -831,6 +976,8 @@ impl Hub {
             }
             ("GET", "/api/folders") => Routed::Response(self.folders(request, &config)),
             ("GET", "/api/file") => Routed::Response(self.file(request)),
+            ("GET", "/api/chat") => Routed::Response(self.chat(request)),
+            ("GET", "/api/board") => Routed::Response(self.board(request, &config)),
             ("GET", "/api/sessions") => {
                 let voice = self.voice_available();
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -847,6 +994,7 @@ impl Hub {
                 Routed::Events { token, login, pane }
             }
             ("POST", "/api/input") => Routed::Response(self.input(request)),
+            ("POST", "/api/orchestration") => Routed::Response(self.orchestration(request, &config)),
             ("POST", "/api/voice") => Routed::Response(self.voice(request)),
             ("POST", "/api/attach") => Routed::Response(self.attach(request)),
             ("POST", "/api/workspace/file") => Routed::Response(self.workspace_file(request)),
@@ -932,6 +1080,187 @@ impl Hub {
 
     fn is_session(&self, pane: u64) -> bool {
         self.view.lock().unwrap_or_else(|e| e.into_inner()).sessions.iter().any(|s| s.pane == pane)
+    }
+
+    /// `GET /api/chat`: a pane's conversation. Only a pane on the list (`remote_panes`), and only
+    /// the transcript the app says is its own: the request names nothing else. Read here, off the
+    /// UI thread, at most a few at a time; a pane being read answers its second caller "busy".
+    fn chat(&self, request: &Request) -> Response {
+        let Some(pane) = request.query_param("pane").and_then(|p| p.parse::<u64>().ok()) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let found = {
+            let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+            view.sessions.iter().find(|s| s.pane == pane).cloned()
+        };
+        let Some(session) = found else { return Response::json(404, &json!({ "error": "no such session" })) };
+        let Some(source) = session.chat_source.as_ref().filter(|_| session.chat_capable) else {
+            return Response::json(409, &json!({ "error": "no chat" }));
+        };
+        let Some(_slot) = Slot::take(&CHAT_READS, MAX_CHAT_READS) else {
+            return Response::json(429, &json!({ "error": "busy" }));
+        };
+        let live = self.chat_live(pane);
+        let follow = self.follow_of(pane);
+        let mut follow = match follow.try_lock() {
+            Ok(follow) => follow,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Response::json(429, &json!({ "error": "busy" })),
+        };
+        let state = ChatState {
+            pane,
+            status: &session.status,
+            working: session.working,
+            needs_user: session.needs_user,
+            elapsed: session.elapsed,
+            live: live.as_ref(),
+        };
+        let (rev, body) = follow.answer(source, &state, &chat::home_text());
+        if request.query_param("rev").as_deref() == Some(rev.as_str()) {
+            return Response::new(304, "application/json; charset=utf-8", Vec::new());
+        }
+        Response::new(200, "application/json; charset=utf-8", body)
+    }
+
+    /// What the screen of a chat says: as last read, or a moment's wait for the app when that is
+    /// old (the first poll). It goes without when the app does not answer in time.
+    fn chat_live(&self, pane: u64) -> Option<ChatLive> {
+        self.chat_asked.lock().unwrap_or_else(|e| e.into_inner()).insert(pane, Instant::now());
+        let deadline = Instant::now() + LIVE_WAIT;
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            let last = view.chat_live.get(&pane);
+            if let Some((_, live)) = last.filter(|(at, _)| at.elapsed() < LIVE_FRESH) {
+                return Some(live.clone());
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return last.map(|(_, live)| live.clone());
+            };
+            self.wake();
+            view = self.changed.wait_timeout(view, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// The reading of `pane`'s conversation, made or kept; the one asked for longest ago goes when
+    /// too many are kept.
+    fn follow_of(&self, pane: u64) -> Arc<Mutex<Follow>> {
+        let mut follows = self.follows.lock().unwrap_or_else(|e| e.into_inner());
+        if !follows.contains_key(&pane) && follows.len() >= MAX_FOLLOWS {
+            if let Some(oldest) = follows.iter().min_by_key(|(_, (at, _))| *at).map(|(pane, _)| *pane) {
+                follows.remove(&oldest);
+            }
+        }
+        let entry = follows.entry(pane).or_insert_with(|| (Instant::now(), Arc::new(Mutex::new(Follow::new()))));
+        entry.0 = Instant::now();
+        entry.1.clone()
+    }
+
+    /// The board as the app last copied it out, recent enough to act on, asking for it when not.
+    /// `None` when the app does not answer in time.
+    fn fresh_board(&self) -> Option<Arc<Board>> {
+        *self.board_asked.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        let deadline = Instant::now() + BOARD_WAIT;
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some((_, board)) = view.board.as_ref().filter(|(at, _)| at.elapsed() < BOARD_FRESH) {
+                return Some(board.clone());
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            self.wake();
+            view = self.changed.wait_timeout(view, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// `GET /api/board`: what the Orchestrator page shows, of what the page may see.
+    fn board(&self, request: &Request, config: &Config) -> Response {
+        let Some(board) = self.fresh_board() else { return Response::json(503, &json!({ "error": "busy" })) };
+        let (rev, body) = board.answer(config.folders.is_some(), &chat::home_text());
+        if request.query_param("rev").as_deref() == Some(rev.as_str()) {
+            return Response::new(304, "application/json; charset=utf-8", Vec::new());
+        }
+        Response::new(200, "application/json; charset=utf-8", body)
+    }
+
+    /// `POST /api/orchestration`. A new one is held to the same rules as a workspace opened from the
+    /// page, and to the goal's limit; for one that exists, its thread must be on the board the page
+    /// is shown, and the action one its stage offers. The app looks at both again when it applies it.
+    fn orchestration(&self, request: &Request, config: &Config) -> Response {
+        use crate::settings::OrchestrationProfile as Profile;
+        let bad = || Response::json(400, &json!({ "error": "bad request" }));
+        let not_now = || Response::json(409, &json!({ "error": "not now" }));
+        let Ok(body) = serde_json::from_slice::<OrchestrationBody>(&request.body) else { return bad() };
+        let command = if body.action == "start" {
+            if !(body.id.is_empty() && body.text.is_empty()) {
+                return bad();
+            }
+            let Some(root) = &config.folders else { return Response::json(404, &json!({ "error": "not found" })) };
+            let goal = body.goal.trim();
+            if goal.chars().count() > MAX_GOAL_CHARS {
+                return Response::json(413, &json!({ "error": "too long" }));
+            }
+            // Lines and tabs only: the goal goes into an agent's first message.
+            if goal.is_empty() || goal.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t')) {
+                return bad();
+            }
+            let tool = match body.tool.as_deref() {
+                None => None,
+                Some("claude") => Some("claude"),
+                Some("codex") => Some("codex"),
+                Some(_) => return bad(),
+            };
+            let profile = match body.profile.as_deref() {
+                None => None,
+                Some("balanced") => Some(Profile::Balanced),
+                Some("quality") => Some(Profile::Quality),
+                Some("economy") => Some(Profile::Economy),
+                Some(_) => return bad(),
+            };
+            let folder = match super::folders::resolve(root, &body.path) {
+                Ok(folder) => folder,
+                Err(err) if matches!(err.kind(), std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound) => {
+                    return Response::json(400, &json!({ "error": "bad folder" }));
+                }
+                Err(_) => return Response::json(500, &json!({ "error": "couldn't read the folder" })),
+            };
+            let Some(board) = self.fresh_board() else { return Response::json(503, &json!({ "error": "busy" })) };
+            let lead_here = tool.map_or(!board.leads.is_empty(), |tool| board.leads.contains(&tool));
+            if !board.enabled || !lead_here {
+                return not_now();
+            }
+            if !self.take_new_tab() {
+                return Response::json(429, &json!({ "error": "busy" }));
+            }
+            OrchestrationCommand::Start { goal: goal.to_string(), folder, tool, profile }
+        } else {
+            if !(body.goal.is_empty() && body.path.is_empty() && body.tool.is_none() && body.profile.is_none()) {
+                return bad();
+            }
+            let known = ["approve", "revise", "stop", "resume"].into_iter().find(|action| *action == body.action);
+            let Some(action) = known else { return bad() };
+            if (action == "revise") == body.text.trim().is_empty() {
+                return bad();
+            }
+            if body.text.chars().count() > MAX_INPUT_CHARS {
+                return Response::json(413, &json!({ "error": "too long" }));
+            }
+            let Some(id) = body.id.strip_prefix('o').and_then(|id| id.parse::<u64>().ok()) else {
+                return Response::json(404, &json!({ "error": "no such orchestration" }));
+            };
+            let Some(board) = self.fresh_board() else { return Response::json(503, &json!({ "error": "busy" })) };
+            let Some(thread) = board.thread(&body.id) else {
+                return Response::json(404, &json!({ "error": "no such orchestration" }));
+            };
+            if !thread.actions.contains(&action) {
+                return not_now();
+            }
+            match action {
+                "approve" => OrchestrationCommand::Approve { id },
+                "revise" => OrchestrationCommand::Revise { id, text: body.text.trim().to_string() },
+                "stop" => OrchestrationCommand::Stop { id },
+                _ => OrchestrationCommand::Resume { id },
+            }
+        };
+        self.queue(Command::Orchestration(command))
     }
 
     fn login(&self, request: &Request, login: &str, config: &Config, now: SystemTime) -> Response {
@@ -1021,6 +1350,12 @@ impl Hub {
             "scroll" if body.lines != 0 && body.lines.unsigned_abs() <= SCROLL_LINES as u32 => {
                 Command::Scroll { pane: body.pane, lines: body.lines }
             }
+            "stop" if !has_images => Command::Stop { pane: body.pane },
+            // The option's key from `/api/chat`: `1` is the first one.
+            "choice" if !has_images => match body.key.parse::<usize>() {
+                Ok(key @ 1..=99) => Command::Choice { pane: body.pane, option: key - 1 },
+                _ => return Response::json(400, &json!({ "error": "bad request" })),
+            },
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
         // Held while queueing: a size is only taken while a page shows that terminal, and the
@@ -1292,7 +1627,7 @@ impl Hub {
             return Response::json(429, &json!({ "error": "busy" }));
         }
         // Asked twice before the app's round (a double tap): once is enough.
-        if matches!(command, Command::Wake { .. } | Command::OpenPort { .. }) && inbox.contains(&command) {
+        if matches!(command, Command::Wake { .. } | Command::OpenPort { .. } | Command::Orchestration(_)) && inbox.contains(&command) {
             return Response::json(200, &json!({ "ok": true }));
         }
         inbox.push(command);
@@ -1775,6 +2110,9 @@ mod tests {
             elapsed: Some(3),
             last_activity_ms: 0,
             asks: None,
+            chat_capable: false,
+            chat_view: false,
+            chat_source: None,
             dir: std::path::PathBuf::new(),
             roots: Vec::new(),
         }
@@ -2072,12 +2410,19 @@ mod tests {
     fn everything_needs_a_session() {
         let hub = hub("secret-password");
         hub.publish(Vec::new(), vec![session(7)], Vec::new());
-        for path in ["/api/sessions", "/api/events", "/api/events?pane=7"] {
+        for path in ["/api/sessions", "/api/events", "/api/events?pane=7", "/api/chat?pane=7", "/api/board"] {
             assert_eq!(send(&hub, &Req::get(path).raw()).0, 401, "{path}");
         }
         assert_eq!(send(&hub, &Req::post("/api/input", json!({ "pane": 7, "kind": "text", "text": "ls" })).raw()).0, 401);
+        assert_eq!(send(&hub, &Req::post("/api/input", json!({ "pane": 7, "kind": "stop" })).raw()).0, 401);
+        assert_eq!(send(&hub, &Req::post("/api/orchestration", json!({ "action": "start", "goal": "x" })).raw()).0, 401);
+        assert_eq!(send(&hub, &Req::post("/api/orchestration", json!({ "id": "o1", "action": "stop" })).raw()).0, 401);
         let forged = format!("__Host-agentty={}", auth::new_token());
-        assert_eq!(send(&hub, &Req { cookie: Some(forged), ..Req::get("/api/sessions") }.raw()).0, 401, "a made-up token");
+        for path in ["/api/sessions", "/api/chat?pane=7", "/api/board"] {
+            assert_eq!(send(&hub, &Req { cookie: Some(forged.clone()), ..Req::get(path) }.raw()).0, 401, "a made-up token: {path}");
+        }
+        let forged_post = Req { cookie: Some(forged), ..Req::post("/api/orchestration", json!({ "id": "o1", "action": "stop" })) };
+        assert_eq!(send(&hub, &forged_post.raw()).0, 401, "a made-up token");
         assert!(hub.take_commands().is_empty());
         hub.shutdown();
     }
@@ -2390,6 +2735,261 @@ mod tests {
         assert_eq!(send(&hub, &Req { method: "PUT", ..base() }.raw()).0, 400);
         assert!(hub.take_commands().is_empty(), "nothing got through");
         hub.shutdown();
+    }
+
+    /// A chat's pane and a transcript for it, as the app would publish them; the log's file is read
+    /// through the pane's reading, since a test has no agent's folder to look it up in.
+    fn chat_pane(hub: &Hub, pane: u64, log: &str) -> std::path::PathBuf {
+        let source = chat::ChatSource { agent: agentty_bridge::model::Agent::Claude, session: Some("session".into()) };
+        let path = std::env::temp_dir().join(format!("agentty-api-chat-{}-{pane}-{}.jsonl", std::process::id(), crate::ui::now_ms()));
+        std::fs::write(&path, log).unwrap();
+        let chatty = SessionInfo { chat_capable: true, chat_source: Some(source.clone()), ..session(pane) };
+        hub.publish(Vec::new(), vec![chatty, session(pane + 1)], Vec::new());
+        let follow = Arc::new(Mutex::new(Follow::at_path(source, path.clone())));
+        hub.follows.lock().unwrap().insert(pane, (Instant::now(), follow));
+        path
+    }
+
+    #[test]
+    fn a_chat_is_a_listed_panes_own_and_polling_it_is_cheap() {
+        let hub = hub("secret-password");
+        let path = chat_pane(&hub, 7, "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n");
+        let cookie = sign_in(&hub, "secret-password");
+        let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw());
+        assert_eq!(get("/api/chat").0, 400, "which pane?");
+        assert_eq!(get("/api/chat?pane=x").0, 400);
+        assert_eq!(
+            get("/api/chat?pane=99").0,
+            404,
+            "a pane the page is not shown: plugin workspaces and left-out ones are not on the list"
+        );
+        assert_eq!(get("/api/chat?pane=8").0, 409, "a shell has no chat");
+
+        let (_, _, sessions) = get("/api/sessions");
+        assert!(sessions.contains("\"chatCapable\":true") && sessions.contains("\"chatView\":false"), "{sessions}");
+        assert!(!sessions.contains("chat_source") && !sessions.contains("session\":"), "where the transcript is stays here: {sessions}");
+
+        let (status, head, body) = get("/api/chat?pane=7");
+        assert_eq!(status, 200, "{body}");
+        assert!(head.contains("Cache-Control: no-store"));
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["entries"], json!([{ "role": "user", "text": "hello" }]));
+        let rev = value["rev"].as_str().unwrap().to_string();
+        let (status, _, body) = get(&format!("/api/chat?pane=7&rev={rev}"));
+        assert_eq!((status, body.as_str()), (304, ""), "nothing new");
+        assert_eq!(get("/api/chat?pane=7&rev=old").0, 200);
+
+        // Asked for just now: its screen is read for it. What the screen says shows in the answer.
+        assert_eq!(hub.chats_asked(), vec![7]);
+        hub.publish_chat_live(7, ChatLive { busy: false, needs_terminal: true, ..Default::default() });
+        let (status, _, body) = get(&format!("/api/chat?pane=7&rev={rev}"));
+        assert_eq!(status, 200, "the screen changed");
+        assert!(body.contains("\"needsTerminal\":true") && body.contains("\"busy\":false"), "{body}");
+
+        // Left out of remote access: gone at the next publish, and what was read of it too.
+        hub.publish(Vec::new(), Vec::new(), Vec::new());
+        assert_eq!(get("/api/chat?pane=7").0, 404);
+        assert!(hub.follows.lock().unwrap().is_empty());
+        hub.shutdown();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn polling_a_chat_or_the_board_is_not_use_of_the_session() {
+        let hub = hub("secret-password");
+        let path = chat_pane(&hub, 7, "");
+        hub.publish_board(orchestration_board());
+        let cookie = sign_in(&hub, "secret-password");
+        let last_seen = || hub.auth.lock().unwrap().sessions.list(SystemTime::now())[0].last_seen;
+        let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw()).0;
+        let before = last_seen();
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(get("/api/chat?pane=7"), 200);
+        assert_eq!(get("/api/board"), 200);
+        assert_eq!(last_seen(), before, "a device left open goes idle");
+        assert_eq!(get("/api/sessions"), 200);
+        assert!(last_seen() > before);
+        hub.shutdown();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn only_so_many_conversations_are_kept_in_memory() {
+        let hub = hub("secret-password");
+        for pane in 0..MAX_FOLLOWS as u64 + 3 {
+            hub.follow_of(pane);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let follows = hub.follows.lock().unwrap();
+        assert_eq!(follows.len(), MAX_FOLLOWS);
+        assert!(follows.contains_key(&(MAX_FOLLOWS as u64 + 2)) && !follows.contains_key(&0), "the longest unused goes");
+        drop(follows);
+        hub.shutdown();
+    }
+
+    #[test]
+    fn stop_and_choice_are_for_listed_panes() {
+        let hub = hub("secret-password");
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
+        let cookie = sign_in(&hub, "secret-password");
+        let input = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/input", body) }.raw()).0;
+        assert_eq!(input(json!({ "pane": 7, "kind": "stop" })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "choice", "key": "2" })), 200);
+        assert_eq!(input(json!({ "pane": 99, "kind": "stop" })), 404);
+        assert_eq!(input(json!({ "pane": 99, "kind": "choice", "key": "1" })), 404);
+        for key in ["", "0", "100", "-1", "x", "1 "] {
+            assert_eq!(input(json!({ "pane": 7, "kind": "choice", "key": key })), 400, "{key:?}");
+        }
+        assert_eq!(hub.take_commands(), vec![Command::Stop { pane: 7 }, Command::Choice { pane: 7, option: 1 }]);
+        hub.shutdown();
+    }
+
+    fn orchestration_board() -> Board {
+        use crate::remote::board::Thread;
+        let thread = |id: &str, kind, actions: Vec<&'static str>| Thread { id: id.into(), kind, actions, ..Default::default() };
+        Board {
+            enabled: true,
+            leads: vec!["claude"],
+            profile: "balanced",
+            threads: vec![
+                thread("o10", "orchestration", vec!["approve", "revise"]),
+                thread("o11", "orchestration", vec!["stop"]),
+                thread("o12", "orchestration", vec!["resume"]),
+                thread("s5", "session", Vec::new()),
+            ],
+        }
+    }
+
+    #[test]
+    fn the_board_answers_what_was_copied_out_and_polling_it_is_cheap() {
+        let hub = hub("secret-password");
+        let cookie = sign_in(&hub, "secret-password");
+        let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw());
+        assert!(!hub.board_asked());
+        assert_eq!(get("/api/board").0, 503, "the app did not answer");
+        assert!(hub.board_asked(), "it is asked to");
+        hub.publish_board(orchestration_board());
+        let (status, _, body) = get("/api/board");
+        assert_eq!(status, 200, "{body}");
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["threads"][0]["id"], "o10");
+        assert_eq!(value["threads"][0]["planAwaiting"], false);
+        assert_eq!(value["folders"], false);
+        let rev = value["rev"].as_str().unwrap().to_string();
+        let (status, _, body) = get(&format!("/api/board?rev={rev}"));
+        assert_eq!((status, body.as_str()), (304, ""));
+        let cross =
+            Req { cookie: Some(cookie.clone()), ..Req::get("/api/board") }.raw().replace("Host:", "Sec-Fetch-Site: cross-site\r\nHost:");
+        assert_eq!(send(&hub, &cross).0, 403, "a page elsewhere can't read it");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn orchestrations_take_only_what_their_stage_offers() {
+        let hub = hub("secret-password");
+        hub.publish_board(orchestration_board());
+        let cookie = sign_in(&hub, "secret-password");
+        let act =
+            |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0;
+        assert_eq!(act(json!({ "id": "o10", "action": "approve" })), 200);
+        assert_eq!(act(json!({ "id": "o10", "action": "approve" })), 200, "a double tap");
+        assert_eq!(act(json!({ "id": "o10", "action": "revise", "text": " fewer agents " })), 200);
+        assert_eq!(act(json!({ "id": "o11", "action": "stop" })), 200);
+        assert_eq!(act(json!({ "id": "o12", "action": "resume" })), 200);
+        assert_eq!(
+            hub.take_commands(),
+            vec![
+                Command::Orchestration(OrchestrationCommand::Approve { id: 10 }),
+                Command::Orchestration(OrchestrationCommand::Revise { id: 10, text: "fewer agents".into() }),
+                Command::Orchestration(OrchestrationCommand::Stop { id: 11 }),
+                Command::Orchestration(OrchestrationCommand::Resume { id: 12 }),
+            ],
+            "the second approve was not queued again"
+        );
+        // Not on the board the page is shown (a left-out workspace's, say), or not an orchestration.
+        for id in ["o99", "s5", "5", "", "o", "o-1", "../o10"] {
+            assert_eq!(act(json!({ "id": id, "action": "stop" })), 404, "{id}");
+        }
+        assert_eq!(act(json!({ "id": "o10", "action": "stop" })), 409, "its stage does not offer that");
+        assert_eq!(act(json!({ "id": "o11", "action": "approve" })), 409);
+        assert_eq!(act(json!({ "id": "o12", "action": "stop" })), 409);
+        assert_eq!(act(json!({ "id": "o10", "action": "delete" })), 400, "not something the page may ask");
+        assert_eq!(act(json!({ "id": "o10", "action": "revise" })), 400, "what to change?");
+        assert_eq!(act(json!({ "id": "o10", "action": "revise", "text": "  " })), 400);
+        assert_eq!(act(json!({ "id": "o10", "action": "approve", "text": "x" })), 400);
+        assert_eq!(act(json!({ "id": "o10", "action": "approve", "goal": "x" })), 400);
+        assert_eq!(act(json!({ "id": "o10", "action": "approve", "cwd": "/" })), 400, "unknown fields refused");
+        assert_eq!(act(json!({ "id": "o10", "action": "revise", "text": "x".repeat(MAX_INPUT_CHARS + 1) })), 413);
+        assert!(hub.take_commands().is_empty());
+        let base = |origin| Req {
+            origin,
+            cookie: Some(cookie.clone()),
+            ..Req::post("/api/orchestration", json!({ "id": "o11", "action": "stop" }))
+        };
+        assert_eq!(send(&hub, &base(None).raw()).0, 403, "no Origin");
+        assert_eq!(send(&hub, &base(Some("https://evil.example")).raw()).0, 403, "another site");
+        assert_eq!(send(&hub, &Req { marker: false, ..base(Some("https://mac.example.ts.net:8743")) }.raw()).0, 403, "no page header");
+        assert_eq!(send(&hub, &Req { json: false, ..base(Some("https://mac.example.ts.net:8743")) }.raw()).0, 415);
+        assert!(hub.take_commands().is_empty(), "nothing got through");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn orchestrations_start_in_the_remote_folder_only() {
+        use crate::settings::OrchestrationProfile;
+        let hub = hub("secret-password");
+        hub.publish_board(orchestration_board());
+        let cookie = sign_in(&hub, "secret-password");
+        let act =
+            |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/orchestration", body) }.raw()).0;
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "path": "" })), 404, "no remote folder");
+
+        let base = std::env::temp_dir().join(format!("agentty-remote-orch-{}-{}", std::process::id(), crate::ui::now_ms()));
+        let root = base.join("AgenttyRemote");
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        let config = hub.config.read().unwrap().clone();
+        hub.set_config(Config { folders: Some(root.clone()), ..config });
+        assert_eq!(act(json!({ "action": "start", "goal": " build it\nwell ", "path": "app" })), 200);
+        assert_eq!(act(json!({ "action": "start", "goal": "two", "path": "", "tool": "claude", "profile": "economy" })), 200);
+        let made = root.canonicalize().unwrap();
+        assert_eq!(
+            hub.take_commands(),
+            vec![
+                Command::Orchestration(OrchestrationCommand::Start {
+                    goal: "build it\nwell".into(),
+                    folder: made.join("app"),
+                    tool: None,
+                    profile: None
+                }),
+                Command::Orchestration(OrchestrationCommand::Start {
+                    goal: "two".into(),
+                    folder: made.clone(),
+                    tool: Some("claude"),
+                    profile: Some(OrchestrationProfile::Economy)
+                }),
+            ]
+        );
+        for path in ["..", "../..", "/etc", "app/..", ".ssh", "missing", "app/../.."] {
+            assert_eq!(act(json!({ "action": "start", "goal": "x", "path": path })), 400, "{path}");
+        }
+        assert_eq!(act(json!({ "action": "start", "goal": "", "path": "" })), 400, "a goal is needed");
+        assert_eq!(act(json!({ "action": "start", "goal": "  \n ", "path": "" })), 400);
+        assert_eq!(act(json!({ "action": "start", "goal": "a\u{1b}[2Jb", "path": "" })), 400, "no terminal escapes");
+        assert_eq!(act(json!({ "action": "start", "goal": "x".repeat(MAX_GOAL_CHARS + 1), "path": "" })), 413);
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "tool": "bash -c x" })), 400, "only the known leads");
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "profile": "reckless" })), 400);
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "id": "o10" })), 400);
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "cwd": "/" })), 400, "unknown fields refused");
+        assert_eq!(act(json!({ "action": "start", "goal": "x", "tool": "codex" })), 409, "that lead is not installed");
+        assert!(hub.take_commands().is_empty());
+        for _ in 2..MAX_NEW_TABS {
+            assert_eq!(act(json!({ "action": "start", "goal": "x" })), 200);
+        }
+        assert_eq!(act(json!({ "action": "start", "goal": "x" })), 429, "a few a minute, not a flood");
+        hub.publish_board(Board { enabled: false, ..orchestration_board() });
+        assert_eq!(act(json!({ "action": "start", "goal": "x" })), 409, "orchestration is switched off");
+        hub.shutdown();
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

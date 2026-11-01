@@ -551,6 +551,46 @@ impl Workbench {
         cx.notify();
     }
 
+    /// An orchestration started from the remote page (the server checked goal and folder): the
+    /// dialog's start without its dialog, in a workspace of its own that leaves the desktop on the
+    /// workspace it shows. Links and files in the goal are not read first as the dialog reads them:
+    /// that uses the Jira token and reaches out, on what a phone typed; the agent just gets the goal.
+    pub(super) fn remote_start_orchestration(
+        &mut self,
+        goal: &str,
+        folder: PathBuf,
+        tool: Option<&str>,
+        profile: Option<Profile>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !crate::settings::settings(cx).orchestration {
+            return false;
+        }
+        let Some(pick) = self.pick_agent(tool, true, cx) else { return false };
+        let Some(lead) = pick.first_class() else { return false };
+        let prefs = crate::settings::settings(cx);
+        let profile = profile.unwrap_or(prefs.orchestration_profile);
+        let confirm = prefs.orchestration_confirm_plan;
+        let language = agentty_bridge::idea::language_name(prefs.language.code());
+        let helpers = self.default_helpers(lead, cx);
+        let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
+        let text = prompt(goal, lead, profile, &helpers, confirm, None, language);
+        let model = profile.lead_model().filter(|_| lead == Agent::Claude);
+        let pane = match self.spawn_with_prompt(pick, &text, Some(&title), folder.clone(), model, cx) {
+            Ok(pane) => pane,
+            Err(err) => {
+                self.show_toast(err, cx);
+                return false;
+            }
+        };
+        let pane_id = pane.read(cx).pane_id;
+        let group = self.orchestration_group(cx);
+        self.remote_add_workspace(pane, folder.clone(), Some(title), Some(group), cx);
+        self.add_orchestration(pane_id, goal.to_string(), folder, cx);
+        self.show_toast_for(t(cx, "orch.started"), 6000, cx);
+        true
+    }
+
     /// The group orchestrators' workspaces go in, made on first use (found by name in any language,
     /// like the board's: a group the user renamed is theirs, and the next orchestrator makes a new one).
     pub(super) fn orchestration_group(&mut self, cx: &gpui::App) -> u64 {

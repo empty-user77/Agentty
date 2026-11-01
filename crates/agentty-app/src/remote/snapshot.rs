@@ -111,6 +111,15 @@ pub struct SessionInfo {
     pub last_activity_ms: u64,
     /// What a permission request or a question asks, when the agent said.
     pub asks: Option<String>,
+    /// It runs an agent the chat view supports, and its conversation can be read (`/api/chat`).
+    #[serde(rename = "chatCapable")]
+    pub chat_capable: bool,
+    /// The desktop draws it as a chat, so a page can open it the same way.
+    #[serde(rename = "chatView")]
+    pub chat_view: bool,
+    /// Which conversation that is. Never sent to the page.
+    #[serde(skip)]
+    pub chat_source: Option<super::chat::ChatSource>,
     /// Where the terminal works now: a path its output names is read from here. Never sent to the
     /// page.
     #[serde(skip)]

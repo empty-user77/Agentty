@@ -311,6 +311,27 @@ fn entry_rows(entry: agentty_bridge::chat_log::Entry) -> Vec<ChatItem> {
     }
 }
 
+/// What the user wrote in a transcript's entry as the remote apps show it, cleaned as the chat is:
+/// (role, text), `user` for their words and `report` for a worker's report in them.
+pub(crate) fn user_parts(text: &str) -> Vec<(&'static str, String)> {
+    let unwrapped = without_paste_tags(text);
+    let mut text = unwrapped.trim();
+    if let Some((_, rest)) = text.split_once(BRIEF_END) {
+        text = rest.trim();
+    } else if text.contains(BRIEF_START) {
+        return Vec::new();
+    }
+    let cleaned = strip_harness_blocks(text);
+    user_entries(cleaned.trim())
+        .into_iter()
+        .filter_map(|item| match item {
+            ChatItem::User(text) => Some(("user", text)),
+            ChatItem::Report(text) => Some(("report", text)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What a poll read from a chat's transcript.
 enum Loaded {
     /// The whole conversation (a chat workspace's lead), and whether its briefing is in it.
@@ -855,11 +876,7 @@ impl Workbench {
         if !state.plain {
             return view.status.needs_user();
         }
-        let lines = view.screen_lines(40);
-        // A menu of the agent's own (Claude Code's rewind, a picker) that is not numbered options
-        // the chat can show as buttons: only its terminal can answer it.
-        let menu = lines.iter().rev().take(6).any(|line| line.to_lowercase().contains("esc to cancel"));
-        (menu || waits_on_screen(view, &crate::terminal::classify_screen(&lines))) && screen_choices(&lines).is_none()
+        chat_view::only_the_terminal_answers(view)
     }
 
     /// The composer to put the keyboard in instead of `pane`, when `pane` is a lead shown as a chat.
@@ -1100,9 +1117,9 @@ impl Workbench {
         let task = cx.background_spawn(async move {
             let path = match known {
                 Some(path) => path,
-                None => chat_transcript_path(agent, &session)?,
+                None => agentty_bridge::chat_log::transcript_file(agent, &session)?,
             };
-            let len = transcript_len(&path)?;
+            let len = agentty_bridge::chat_log::transcript_size(&path)?;
             if len == seen {
                 return Some((session, path, len, None));
             }
@@ -2289,24 +2306,6 @@ fn taken_sessions(chats: &std::collections::HashMap<EntityId, ChatState>, id: En
 /// Whether chat view draws `pane` as a chat: an agent whose conversation Agentty can read runs in it.
 fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
     pane_chat_agent(pane.read(cx)).is_some()
-}
-
-/// Where an agent keeps session `id`.
-fn chat_transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
-    match agent {
-        Agent::Gemini => agentty_bridge::gemini::find(id).ok(),
-        Agent::Agy => agentty_bridge::agy::find(id).ok(),
-        _ => agentty_bridge::transcript_path(agent, id),
-    }
-}
-
-/// How much a transcript holds, to tell when it grew. Antigravity's is an SQLite database whose
-/// new rows wait in its write-ahead log first.
-fn transcript_len(path: &std::path::Path) -> Option<u64> {
-    let len = std::fs::metadata(path).ok()?.len();
-    let mut wal = path.as_os_str().to_owned();
-    wal.push("-wal");
-    Some(len + std::fs::metadata(std::path::Path::new(&wal)).map_or(0, |m| m.len()))
 }
 
 /// The rows of a conversation read as what each side said (Gemini CLI, Antigravity): the user's

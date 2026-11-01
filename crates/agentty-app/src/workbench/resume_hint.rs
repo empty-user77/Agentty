@@ -30,6 +30,14 @@ impl Workbench {
 
     /// Starts `spec` in place of `pane` (same spot in the layout); the old shell shuts down.
     pub(super) fn replace_pane(&mut self, pane: &Pane, spec: LaunchSpec, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
+        let started = self.swap_pane(pane, spec, cx)?;
+        self.focus_pane(&started, window, cx);
+        cx.notify();
+        Some(started)
+    }
+
+    /// [`Self::replace_pane`] leaving the keyboard where it is.
+    pub(super) fn swap_pane(&mut self, pane: &Pane, spec: LaunchSpec, cx: &mut Context<Self>) -> Option<Pane> {
         let (w, t) = self.locate(pane)?;
         let started = self.spawn_pane(spec, cx);
         let tab = &mut self.workspaces[w].tabs[t];
@@ -40,7 +48,6 @@ impl Workbench {
         // Dropping the old view shuts its shell down.
         self.pane_subscriptions.remove(&pane.entity_id());
         self.persist(cx);
-        self.focus_pane(&started, window, cx);
         cx.notify();
         Some(started)
     }

@@ -6,6 +6,7 @@
 
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
+use crate::remote::server::OrchestrationCommand;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
 use gpui::{div, prelude::*, AnyElement, ClickEvent, Context, SharedString, Window};
@@ -28,6 +29,54 @@ and finish with the report. Do not redo finished work.";
 /// What the orchestrator is told when the user stops the whole team.
 const STOP: &str = "Stop this orchestration now: stop every agent of it that is still running (TaskStop for each \
 background agent), start nothing new, and reply with one short line saying what was stopped.";
+
+/// The stage's word for the remote apps.
+pub fn stage_id(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Planning => "planning",
+        Stage::Ready => "ready",
+        Stage::Running => "running",
+        Stage::Done => "done",
+        Stage::Interrupted => "interrupted",
+        Stage::Stopped => "stopped",
+    }
+}
+
+/// What the remote page may ask of an orchestration at `stage`: the buttons the desktop shows for
+/// it. `lead_waits`: whether its terminal is open, and waits on the user; going on from a plan
+/// needs it open, and changing a plan needs it not waiting, or the words would be taken as the answer.
+pub fn remote_actions(stage: Stage, lead_waits: Option<bool>) -> Vec<&'static str> {
+    match stage {
+        Stage::Ready => {
+            let mut actions = Vec::new();
+            if lead_waits.is_some() {
+                actions.push("approve");
+            }
+            if lead_waits == Some(false) {
+                actions.push("revise");
+            }
+            actions
+        }
+        Stage::Planning | Stage::Running => vec!["stop"],
+        Stage::Interrupted | Stage::Stopped => vec!["resume"],
+        Stage::Done => Vec::new(),
+    }
+}
+
+fn action_of(asked: &OrchestrationCommand) -> &'static str {
+    match asked {
+        OrchestrationCommand::Start { .. } => "start",
+        OrchestrationCommand::Approve { .. } => "approve",
+        OrchestrationCommand::Revise { .. } => "revise",
+        OrchestrationCommand::Stop { .. } => "stop",
+        OrchestrationCommand::Resume { .. } => "resume",
+    }
+}
+
+/// Whether `folder` is one of `folders`, or inside one.
+fn folder_within(folder: &std::path::Path, folders: &[&std::path::Path]) -> bool {
+    folders.iter().any(|within| folder.starts_with(within))
+}
 
 /// How far an orchestration got, as last seen. Kept on disk, so a restart knows what was cut off.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -648,6 +697,98 @@ impl Workbench {
         .detach();
     }
 
+    /// Whether the remote page may know of and act on `record`: its terminal, or the sleeping
+    /// workspace holding it, is in a workspace the page may use. One with neither goes by its folder,
+    /// which must not be in a workspace left out of remote access (or a plugin's).
+    pub(super) fn remote_record_allowed(&self, record: &Record, cx: &gpui::App) -> bool {
+        if !crate::settings::settings(cx).orchestration {
+            return false;
+        }
+        if let Some(pane) = self.pane_of_record(record, cx) {
+            return self.locate(&pane).is_some_and(|(w, _)| self.remote_workspace(self.workspaces[w].id).is_some());
+        }
+        if !record.session.is_empty() {
+            if let Some(index) = self.sleeping_workspace_of(record) {
+                return self.remote_workspace(self.workspaces[index].id).is_some();
+            }
+        }
+        let closed: Vec<&std::path::Path> =
+            self.workspaces.iter().filter(|ws| ws.plugin.is_some() || ws.remote_hidden).map(|ws| ws.cwd.as_path()).collect();
+        !folder_within(&record.folder, &closed)
+    }
+
+    /// Whether this window has the terminal of orchestration `id`, open or asleep.
+    pub fn remote_holds_orchestration(&self, id: u64, cx: &gpui::App) -> bool {
+        self.session_board.records.iter().find(|r| r.id == id).is_some_and(|record| {
+            self.pane_of_record(record, cx).is_some() || (!record.session.is_empty() && self.sleeping_workspace_of(record).is_some())
+        })
+    }
+
+    /// What the page's `POST /api/orchestration` asks. The stage and the record are looked at again
+    /// here, now the app applies it: the server decided on a copy up to seconds old.
+    pub(super) fn remote_orchestration(&mut self, asked: &OrchestrationCommand, cx: &mut Context<Self>) -> bool {
+        let id = match asked {
+            OrchestrationCommand::Start { goal, folder, tool, profile } => {
+                return self.remote_start_orchestration(goal, folder.clone(), *tool, *profile, cx);
+            }
+            OrchestrationCommand::Approve { id }
+            | OrchestrationCommand::Revise { id, .. }
+            | OrchestrationCommand::Stop { id }
+            | OrchestrationCommand::Resume { id } => *id,
+        };
+        let Some(record) = self.orchestrations().iter().find(|r| r.id == id).cloned() else { return false };
+        if !self.remote_record_allowed(&record, cx) {
+            return false;
+        }
+        let pane = self.pane_of_record(&record, cx);
+        if !remote_actions(record.stage, pane.as_ref().map(|p| p.read(cx).status.needs_user())).contains(&action_of(asked)) {
+            return true;
+        }
+        match asked {
+            OrchestrationCommand::Approve { .. } => self.start_orchestration(id, cx),
+            OrchestrationCommand::Revise { text, .. } => {
+                let Some(pane) = pane else { return false };
+                self.send_session_message(&pane, text.clone(), cx);
+            }
+            OrchestrationCommand::Stop { .. } => self.stop_orchestration(id, cx),
+            OrchestrationCommand::Resume { .. } => self.remote_resume_orchestration(&record, cx),
+            OrchestrationCommand::Start { .. } => {}
+        }
+        cx.notify();
+        true
+    }
+
+    /// [`Self::resume_orchestration`] for the page: the session opens again where needed, but the
+    /// desktop stays on the workspace it shows, the keyboard where it is.
+    fn remote_resume_orchestration(&mut self, record: &Record, cx: &mut Context<Self>) {
+        let title: String = record.goal.lines().next().unwrap_or("").chars().take(40).collect();
+        let folder = if record.folder.is_dir() { record.folder.clone() } else { crate::launch::home_dir() };
+        let spec = crate::launch::LaunchSpec::resume(record.lead, record.session.clone(), title.clone(), folder.clone());
+        let pane = match self.pane_of_record(record, cx) {
+            Some(pane) if pane.read(cx).agent_quit() => self.swap_pane(&pane, spec, cx),
+            Some(pane) => Some(pane),
+            None => match self.sleeping_workspace_of(record) {
+                Some(index) => {
+                    if let Some(snapshot) = self.workspaces[index].dormant.take() {
+                        self.revive(index, snapshot, cx);
+                        self.persist(cx);
+                    }
+                    self.pane_of_record(record, cx)
+                }
+                None => {
+                    let pane = self.spawn_pane(spec, cx);
+                    let group = self.orchestration_group(cx);
+                    self.remote_add_workspace(pane.clone(), folder, Some(title), Some(group), cx);
+                    Some(pane)
+                }
+            },
+        };
+        let Some(pane) = pane else { return };
+        self.submit_when_ready(pane, RESUME.to_string(), cx);
+        self.set_stage(record.id, Stage::Running);
+        self.show_toast(t(cx, "orch.resumed"), cx);
+    }
+
     pub(super) fn confirm_stop_orchestration(&mut self, id: u64, cx: &mut Context<Self>) {
         self.ask(
             super::ask::Ask {
@@ -830,6 +971,27 @@ mod tests {
     fn seen(in_turn: bool, turn_over: bool, team: (usize, usize, usize, usize)) -> Seen {
         let (running, done, cut_off, all) = team;
         Seen { alive: true, since: Some(100), in_turn, turn_over, team: Team { running, done, cut_off, all, pending: 0 }, settling: false }
+    }
+
+    #[test]
+    fn the_page_may_ask_what_the_stage_offers() {
+        assert_eq!(remote_actions(Stage::Ready, Some(false)), ["approve", "revise"]);
+        assert_eq!(remote_actions(Stage::Ready, Some(true)), ["approve"], "words now would be taken as the answer it waits for");
+        assert!(remote_actions(Stage::Ready, None).is_empty(), "its terminal is closed");
+        assert_eq!(remote_actions(Stage::Planning, Some(false)), ["stop"]);
+        assert_eq!(remote_actions(Stage::Running, None), ["stop"]);
+        assert_eq!(remote_actions(Stage::Interrupted, None), ["resume"]);
+        assert_eq!(remote_actions(Stage::Stopped, Some(false)), ["resume"]);
+        assert!(remote_actions(Stage::Done, Some(false)).is_empty());
+    }
+
+    #[test]
+    fn a_closed_orchestration_in_a_left_out_folder_stays_out() {
+        let left_out = [std::path::Path::new("/w/secret")];
+        assert!(folder_within(std::path::Path::new("/w/secret"), &left_out));
+        assert!(folder_within(std::path::Path::new("/w/secret/app"), &left_out));
+        assert!(!folder_within(std::path::Path::new("/w/secret2"), &left_out));
+        assert!(!folder_within(std::path::Path::new("/w"), &left_out));
     }
 
     #[test]
