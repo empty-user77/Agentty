@@ -16,6 +16,8 @@ Chat view draws a Claude Code, Codex, Antigravity or Gemini CLI pane as a chat, 
 - Tool steps fold into cards that open downwards; to-do lists show as checklist rows.
 - Approvals and questions with numbered options can be answered from the chat. When the agent shows its own menu or a setup screen, its terminal comes up until that is done.
 - Select text across paragraphs and code and copy it with **⌘C**. The bar over a selection (or a right-click) quotes it in a reply or starts a side chat with a question about it.
+- Messages from other sessions show as a card saying who sent them. One waiting for your approval shows what it says, and you deliver or deny it from the chat; what you send meanwhile goes in afterwards.
+- Tables are drawn as tables. Links open: a web address in your browser, a file in the editor at its line.
 - Attach files with **+** or by dragging them in; they show as thumbnails and chips.
 - **Stop** interrupts the running turn. A message the agent puts back after a stop returns to the composer.
 

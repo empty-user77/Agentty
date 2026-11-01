@@ -5,9 +5,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-11-02
+
 ### Added
 - Remote access: the phone apps can read a pane's conversation as a chat and follow, start, approve, stop and
   resume orchestrations (`/api/chat`, `/api/board`, `/api/orchestration`).
+- Chat view: messages from other sessions show as a card saying who sent them. One Claude Code holds for your
+  approval is a card in the chat with what it says, to deliver or deny.
+- Chat view: tables are drawn as tables, and links to files open in the editor at their line.
+
+### Fixed
+- Chat view stopped updating when a session entered a worktree, so everything after that point was missing from
+  the chat. The phone apps had the same problem.
+- A prompt sent during a reply with a picture attached did not show in the chat.
+- Text sent from the chat while a message from another session waited for approval was lost, and that message was
+  declined without you doing so. What you send now waits until you have answered.
+- The loading row and the stop button went away and came back every two seconds during a turn, moving the
+  conversation with them.
+- Named links showed as raw markdown, and a link ran on through a closing bracket or a Korean particle right after
+  it. A Korean word in an address stays in the link.
+- Wide characters such as Korean showed with gaps in approval cards, and a prompt near the top of a tall pane was
+  cut off in the chat.
+- A command run with `!` showed with its tags.
 
 ## [0.3.9] - 2026-11-01
 
