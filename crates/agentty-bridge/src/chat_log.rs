@@ -247,7 +247,14 @@ fn claude_entries(lines: impl Iterator<Item = String>) -> Vec<Entry> {
 
 fn claude_line(b: &mut Builder, line: &str) {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
-    if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
+    if v["isSidechain"].as_bool() == Some(true) {
+        return;
+    }
+    if v["isMeta"].as_bool() == Some(true) {
+        // The harness's own lines, except a message from another session reaching an idle one.
+        if let Some(text) = crate::claude::peer_text(&v) {
+            b.user(text);
+        }
         return;
     }
     match v["type"].as_str() {
@@ -514,6 +521,45 @@ mod tests {
         let stopped = r#"{"type":"user","message":{"content":"go"}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"No response requested."}]}}"#;
         assert_eq!(claude_entries(lines(stopped)).len(), 1, "the stand-in reply is left out");
+    }
+
+    #[test]
+    fn a_message_from_another_session_is_kept_without_the_harness_words_around_it() {
+        let tag = r#"<cross-session-message from=\"x\" from-name=\"ios\">hi</cross-session-message>"#;
+        let log = format!(
+            r#"{{"type":"user","isMeta":true,"message":{{"content":"Another session wrote: {tag} Answer it."}}}}
+{{"type":"user","isMeta":true,"message":{{"content":"harness note"}}}}"#
+        );
+        let entries = claude_entries(lines(&log));
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].text, r#"<cross-session-message from="x" from-name="ios">hi</cross-session-message>"#);
+    }
+
+    #[test]
+    fn a_message_typed_mid_turn_is_kept_with_or_without_pictures() {
+        let log = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"plain"}}
+{"type":"attachment","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"look at this"},{"type":"image","source":{"type":"base64","data":"x"}}]}}
+{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>"}}"#;
+        let said: Vec<String> = claude_entries(lines(log)).into_iter().map(|e| e.text).collect();
+        assert_eq!(said, ["plain", "look at this\n[image]"]);
+    }
+
+    #[test]
+    fn a_moved_transcript_goes_on_where_it_was_read_to() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("agentty-reader-moved-{}", std::process::id()));
+        let (old, new) = (dir.join("repo"), dir.join("repo-worktree"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let say = |text: &str| format!(r#"{{"type":"user","message":{{"role":"user","content":"{text}"}}}}"#);
+        std::fs::write(old.join("s.jsonl"), format!("{}\n", say("before"))).unwrap();
+        let mut reader = Reader::new(Agent::Claude);
+        assert_eq!(reader.update(&old.join("s.jsonl")).unwrap().unwrap().0, 0);
+        std::fs::rename(old.join("s.jsonl"), new.join("s.jsonl")).unwrap();
+        writeln!(std::fs::OpenOptions::new().append(true).open(new.join("s.jsonl")).unwrap(), "{}", say("after")).unwrap();
+        let (from, entries) = reader.update(&new.join("s.jsonl")).unwrap().unwrap();
+        assert_eq!((from, entries[0].text.as_str()), (1, "after"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

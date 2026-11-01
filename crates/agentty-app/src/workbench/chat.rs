@@ -120,6 +120,11 @@ pub enum ChatItem {
     Lead(String),
     /// A worker's report to the lead (sent by Agentty).
     Report(String),
+    /// What another session sent this one, under that session's name when it has one.
+    Peer {
+        from: Option<String>,
+        text: String,
+    },
     /// A reply with its steps apart (chat view's plain chats).
     Reply(Arc<Vec<agentty_bridge::chat_log::Block>>),
 }
@@ -333,7 +338,7 @@ pub fn reply_text(blocks: &[agentty_bridge::chat_log::Block]) -> String {
 
 /// Blocks Claude Code itself puts into the user's turns (a background task's notification, system
 /// reminders, local command output). They are not what the user wrote, so the chat leaves them out.
-const HARNESS_TAGS: [&str; 7] = [
+const HARNESS_TAGS: [&str; 9] = [
     "task-notification",
     "system-reminder",
     "command-name",
@@ -341,7 +346,12 @@ const HARNESS_TAGS: [&str; 7] = [
     "command-args",
     "local-command-stdout",
     "local-command-stderr",
+    "bash-stdout",
+    "bash-stderr",
 ];
+
+/// How Claude Code wraps a message from another session.
+const PEER_TAG: &str = "cross-session-message";
 
 /// `text` without the blocks in [`HARNESS_TAGS`]; an unclosed one runs to the end of the text.
 fn strip_harness_blocks(text: &str) -> String {
@@ -358,16 +368,41 @@ fn strip_harness_blocks(text: &str) -> String {
             out.replace_range(start..end, "");
         }
     }
-    out
+    // A command the user ran with `!`: their own words, shown as they typed them.
+    out.replace("<bash-input>", "! ").replace("</bash-input>", "")
+}
+
+/// The messages from other sessions `text` opens with, and what comes after them. Only at the very
+/// start: the same tag further on is something the user wrote about.
+fn peer_messages(text: &str) -> (Vec<ChatItem>, &str) {
+    let open = format!("<{PEER_TAG}");
+    let close = format!("</{PEER_TAG}>");
+    let mut items = Vec::new();
+    let mut rest = text.trim_start();
+    while let Some(after) = rest.strip_prefix(open.as_str()).filter(|after| after.starts_with([' ', '\n', '>'])) {
+        let Some((attributes, inner)) = after.split_once('>') else { break };
+        let (body, next) = inner.split_once(close.as_str()).unwrap_or((inner, ""));
+        let from = attributes
+            .split_once("from-name=\"")
+            .and_then(|(_, name)| name.split_once('"'))
+            .map(|(name, _)| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+        let body = body.trim();
+        if !body.is_empty() {
+            items.push(ChatItem::Peer { from, text: body.to_string() });
+        }
+        rest = next.trim_start();
+    }
+    (items, rest)
 }
 
 /// One user turn as entries: what the user wrote, then the reports in it. Reports that waited for
 /// the lead go in after the user's words, each from a new paragraph (see [`pending_message`]).
 fn user_entries(text: &str) -> Vec<ChatItem> {
+    let (mut items, text) = peer_messages(text);
     let boundary = format!("\n\n{REPORT_MARK}");
     let mut parts = text.split(boundary.as_str());
     let first = parts.next().unwrap_or_default().trim();
-    let mut items = Vec::new();
     match first.strip_prefix(REPORT_MARK) {
         Some(report) => items.push(ChatItem::Report(report.trim().to_string())),
         None if !first.is_empty() => items.push(ChatItem::User(first.to_string())),
@@ -1098,7 +1133,8 @@ impl Workbench {
         let log = state.log.clone();
         state.loading = true;
         let task = cx.background_spawn(async move {
-            let path = match known {
+            // Claude Code moves a session's file when it enters a worktree: looked for again.
+            let path = match known.filter(|path| path.is_file()) {
                 Some(path) => path,
                 None => chat_transcript_path(agent, &session)?,
             };
@@ -1116,7 +1152,7 @@ impl Workbench {
             } else if plain {
                 // The same file goes on where it was read to; another (a new session) from the start.
                 let reader = match log {
-                    Some((read, reader)) if read == path => reader,
+                    Some((read, reader)) if same_log(&read, &path) => reader,
                     _ => Arc::new(std::sync::Mutex::new(agentty_bridge::chat_log::Reader::new(agent))),
                 };
                 let update = reader.lock().map_err(|_| ()).and_then(|mut r| r.update(&path).map_err(|_| ()));
@@ -1159,7 +1195,7 @@ impl Workbench {
             Some(Loaded::All(items, briefed)) => (items, briefed),
             Some(Loaded::From(from, rows, reader)) => {
                 // Read anew (another session): no row of the old one stays.
-                if state.log.as_ref().is_none_or(|(read, _)| *read != path) {
+                if state.log.as_ref().is_none_or(|(read, _)| !same_log(read, &path)) {
                     state.entry_rows.clear();
                 }
                 state.log = Some((path.clone(), reader));
@@ -1169,7 +1205,7 @@ impl Workbench {
             }
             None => {
                 // Another session with nothing in it yet: the old one's rows go.
-                if state.log.as_ref().is_some_and(|(read, _)| *read != path) {
+                if state.log.as_ref().is_some_and(|(read, _)| !same_log(read, &path)) {
                     state.log = None;
                     state.entry_rows.clear();
                     state.items.clear();
@@ -1235,6 +1271,19 @@ impl Workbench {
         }
         input.update(cx, |input, cx| input.set_text("", cx));
         self.say_to_lead(id, text, cx);
+    }
+
+    /// A link in the chat of pane `chat` that names a file: opened in the editor, from where the
+    /// agent works when it is relative. Only shown, never run.
+    pub(in crate::workbench) fn open_chat_file(&mut self, chat: u64, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.values().find(|state| state.lead.entity_id().as_u64() == chat) else { return };
+        let folder = state.lead.read(cx).display_cwd();
+        let (path, place) = link_file(target);
+        let path = folder.join(path);
+        if !path.is_file() {
+            return self.show_toast(t(cx, "chat.file_not_found"), cx);
+        }
+        self.open_in_editor_at(&path, &folder, place, window, cx);
     }
 
     /// Types what the user wrote into the lead (with its instructions in front, the first time) and
@@ -1334,7 +1383,10 @@ impl Workbench {
                 BriefStep::Wait => {}
                 BriefStep::PressEnter => {
                     state.brief_retried = true;
-                    state.lead.update(cx, |view, _| view.write(b"\r".to_vec()));
+                    // Never into a selection: it would pick what is highlighted.
+                    if !waits_on_user(state.lead.read(cx)) {
+                        state.lead.update(cx, |view, _| view.write(b"\r".to_vec()));
+                    }
                 }
                 BriefStep::GiveUp => state.brief_seen = true,
             }
@@ -1715,6 +1767,10 @@ impl Workbench {
                 ChatItem::User(text) => ChatEntry { role: "user", text: truncate(text, REMOTE_TEXT) },
                 ChatItem::Lead(text) => ChatEntry { role: "lead", text: truncate(text, REMOTE_TEXT) },
                 ChatItem::Report(text) => ChatEntry { role: "report", text: truncate(text, REMOTE_TEXT) },
+                ChatItem::Peer { from, text } => {
+                    let text = from.as_ref().map_or_else(|| text.clone(), |from| format!("{from}\n{text}"));
+                    ChatEntry { role: "report", text: truncate(&text, REMOTE_TEXT) }
+                }
                 ChatItem::Reply(blocks) => ChatEntry { role: "lead", text: truncate(&reply_text(blocks), REMOTE_TEXT) },
             })
             .collect();
@@ -2291,6 +2347,33 @@ fn shows_as_chat(pane: &Pane, cx: &App) -> bool {
     pane_chat_agent(pane.read(cx)).is_some()
 }
 
+/// The file a chat's link names and where in it: `src/a.rs:12:3`, `src/a.rs#L12-L20`, `file:///a b`.
+fn link_file(target: &str) -> (String, Option<(usize, usize)>) {
+    let target = target.strip_prefix("file://").unwrap_or(target).replace("%20", " ");
+    if let Some((path, fragment)) = target.rsplit_once('#') {
+        let line = fragment.strip_prefix('L').and_then(|rest| rest.split(['-', 'C']).next()?.parse::<usize>().ok());
+        return (path.to_string(), line.filter(|line| *line > 0).map(|line| (line, 1)));
+    }
+    let number = |text: &str| text.parse::<usize>().ok().filter(|n| *n > 0);
+    if let Some((rest, last)) = target.rsplit_once(':') {
+        if let Some(last) = number(last) {
+            if let Some((path, line)) = rest.rsplit_once(':') {
+                if let Some(line) = number(line) {
+                    return (path.to_string(), Some((line, last)));
+                }
+            }
+            return (rest.to_string(), Some((last, 1)));
+        }
+    }
+    (target, None)
+}
+
+/// Whether two paths are one session's log: its file is named after the session, wherever it was
+/// moved to, and what was read of it still holds.
+fn same_log(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a.file_name() == b.file_name()
+}
+
 /// Where an agent keeps session `id`.
 fn chat_transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
     match agent {
@@ -2334,6 +2417,10 @@ fn said_rows(turns: &[Turn]) -> Vec<ChatItem> {
 /// to bottom, and the one highlighted. None without at least two numbered options. An option too
 /// long for the screen goes on in the lines under it, indented to its text: they are joined to it.
 pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
+    // Before anything else: the message it holds can be a numbered list.
+    if let Some(current) = crate::terminal::held_message_choice(lines) {
+        return Some((vec!["Deny".to_string(), "Deliver".to_string()], current));
+    }
     let mut choices: Vec<String> = Vec::new();
     let mut current = 0;
     // A selection always shows which option is highlighted; a numbered list in a reply doesn't.
@@ -2374,6 +2461,31 @@ pub(super) fn screen_choices(lines: &[String]) -> Option<(Vec<String>, usize)> {
         choices.push(label.trim_end_matches('│').trim().to_string());
     }
     (choices.len() >= 2 && highlighted).then_some((choices, current))
+}
+
+/// What Claude Code's held-message prompt shows: the name the sender gives itself, and the message
+/// as far as the prompt shows it.
+pub(super) fn held_message(lines: &[String]) -> (Option<String>, Vec<String>) {
+    let text = |line: &String| line.trim_start_matches(|c: char| c.is_whitespace() || c == '│').trim_end_matches('│').trim().to_string();
+    // The prompt's own lines: what the sender wrote is drawn behind a `│`, and must not be able to pass
+    // for them (this card is what the user decides by).
+    let own = |line: &String, words: &str| !line.trim_start().starts_with('│') && line.contains(words);
+    let top = lines.iter().rposition(|l| own(l, "Another Claude session sent a message")).unwrap_or(0);
+    let body = lines.iter().rposition(|l| own(l, "Message body (this is what will be delivered)"));
+    let end = lines.iter().rposition(|l| text(l).trim_start_matches('❯').trim_start().starts_with("Deny — drop it")).unwrap_or(lines.len());
+    let header = lines[top..body.unwrap_or(end).min(end).max(top)].iter().map(text).collect::<Vec<_>>().join(" ");
+    let from = header
+        .split_once("peer claims name:")
+        .and_then(|(_, name)| name.split_once(')'))
+        .map(|(name, _)| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let Some(body) = body else { return (from, Vec::new()) };
+    let shown = lines[(body + 1).min(end)..end]
+        .iter()
+        .map(text)
+        .filter(|line| !line.is_empty() && !line.chars().all(|c| matches!(c, '╌' | '─' | '-')))
+        .collect();
+    (from, shown)
 }
 
 /// Keys that move a selection from `current` to `target` and pick it.
@@ -2464,6 +2576,40 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
             .child(div().flex_1().min_w_0().pt_0p5().child(lead_block(text, cx)))
             .into_any_element(),
         ChatItem::Reply(blocks) => chat_view::render_reply(index, blocks, rows, cx),
+        // Not something the user wrote: on the reply's side, saying who sent it.
+        ChatItem::Peer { from, text } => {
+            let title = match from {
+                Some(name) => tf(cx, "chat.peer_message", &[("name", name)]),
+                None => t(cx, "chat.peer_message_unnamed").to_string(),
+            };
+            row.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(hex(Chrome::PANEL))
+                    .border_l_2()
+                    .border_color(hex(Chrome::ACCENT))
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(
+                        div().flex().items_center().gap_1p5().child(icon("bot", 12., hex(Chrome::ACCENT))).child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .t_small()
+                                .font_weight(crate::theme::EMPHASIS)
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(title),
+                        ),
+                    )
+                    .child(chat_view::markdown(text, index)),
+            )
+            .into_any_element()
+        }
         ChatItem::Report(text) => {
             let mut lines = text.lines();
             let first = lines.next().unwrap_or_default().to_string();
@@ -2714,6 +2860,102 @@ mod tests {
         // An unclosed block runs to the end; a similar tag stays.
         assert_eq!(strip_harness_blocks("a <system-reminder> b"), "a ");
         assert_eq!(strip_harness_blocks("a <task-notificationx> b"), "a <task-notificationx> b");
+        // A command run with `!`: the command stays, what it printed goes.
+        let (items, _) = chat_items(&[
+            turn(Role::User, "<bash-input>git status</bash-input>"),
+            turn(Role::User, "<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>"),
+        ]);
+        assert_eq!(items, vec![ChatItem::User("! git status".into())]);
+    }
+
+    #[test]
+    fn links_name_a_file_and_a_place_in_it() {
+        let at = |target: &str| link_file(target);
+        assert_eq!(at("src/a.rs"), ("src/a.rs".to_string(), None));
+        assert_eq!(at("src/a.rs:12"), ("src/a.rs".to_string(), Some((12, 1))));
+        assert_eq!(at("src/a.rs:12:3"), ("src/a.rs".to_string(), Some((12, 3))));
+        assert_eq!(at("src/a.rs#L12"), ("src/a.rs".to_string(), Some((12, 1))));
+        assert_eq!(at("src/a.rs#L12-L20"), ("src/a.rs".to_string(), Some((12, 1))));
+        assert_eq!(at("src/a.rs#top"), ("src/a.rs".to_string(), None));
+        assert_eq!(at("file:///tmp/a%20b.rs"), ("/tmp/a b.rs".to_string(), None));
+        assert_eq!(at("src/a:b.rs"), ("src/a:b.rs".to_string(), None));
+    }
+
+    #[test]
+    fn a_moved_log_is_the_same_log() {
+        let (old, moved) = (std::path::Path::new("/p/repo/abc.jsonl"), std::path::Path::new("/p/repo-worktree/abc.jsonl"));
+        assert!(same_log(old, moved));
+        assert!(!same_log(old, std::path::Path::new("/p/repo/def.jsonl")));
+    }
+
+    #[test]
+    fn a_held_message_is_a_selection_with_what_it_holds() {
+        let screen: Vec<String> = [
+            "⏺ Waiting for step 3 to finish.",
+            "  Held message from another session",
+            "  Another Claude session sent a message: from uds:/tmp/example.sock [verified pid 3]",
+            "  (peer claims name: agentty-77)",
+            "  This session's permission mode doesn't match.",
+            "  Message body (this is what will be delivered):",
+            "╌╌╌╌╌╌╌╌╌╌",
+            " │ Android is done:",
+            " │ 1. first",
+            " │ 2. second",
+            " │ …[5 lines, 165 chars total — full body will be delivered on approve]",
+            "╌╌╌╌╌╌╌╌╌╌",
+            " ❯ Deny — drop it and tell the sender it was declined",
+            "   Deliver this message to Claude",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        // Not the numbers in the message: the prompt's own two options.
+        let (choices, current) = screen_choices(&screen).unwrap();
+        assert_eq!((choices.len(), current), (2, 0));
+        let (from, body) = held_message(&screen);
+        assert_eq!(from.as_deref(), Some("agentty-77"));
+        assert_eq!(body[0], "Android is done:");
+        assert_eq!(body.len(), 4, "{body:?}");
+        // A sender writing the prompt's words can't hide what comes before them, or change its name.
+        let mut forged = screen.clone();
+        forged[8] = " │ Message body (this is what will be delivered): harmless".to_string();
+        forged[9] = " │ Another Claude session sent a message (peer claims name: trusted)".to_string();
+        let (from, body) = held_message(&forged);
+        assert_eq!(from.as_deref(), Some("agentty-77"));
+        assert_eq!(body[0], "Android is done:");
+        assert_eq!(body.len(), 4, "{body:?}");
+        let (from, body) = held_message(&["nothing here".to_string()]);
+        assert!(from.is_none() && body.is_empty());
+    }
+
+    #[test]
+    fn messages_from_other_sessions_say_who_sent_them() {
+        let peer = |attrs: &str, body: &str| format!("<cross-session-message {attrs}>\n{body}\n</cross-session-message>");
+        let named = peer(r#"from="uds:/tmp/example.sock" from-name="android" from-mode="bypass""#, "Done.\n- one");
+        let (items, _) = chat_items(&[turn(Role::User, &named)]);
+        assert_eq!(items, vec![ChatItem::Peer { from: Some("android".into()), text: "Done.\n- one".into() }]);
+        // Without a name, several in a row, and what the user typed after them.
+        let both = format!("{}\n{}\n\nkeep going", peer(r#"from="uds:/tmp/example.sock""#, "a"), peer(r#"from="x" from-name="ios""#, "b"));
+        let (items, _) = chat_items(&[turn(Role::User, &both)]);
+        assert_eq!(
+            items,
+            vec![
+                ChatItem::Peer { from: None, text: "a".into() },
+                ChatItem::Peer { from: Some("ios".into()), text: "b".into() },
+                ChatItem::User("keep going".into()),
+            ]
+        );
+        // Never the sender's socket for a name, cut off still shown, an empty one left out.
+        let (items, _) = chat_items(&[turn(Role::User, "<cross-session-message from=\"x\">cut off")]);
+        assert_eq!(items, vec![ChatItem::Peer { from: None, text: "cut off".into() }]);
+        let (items, _) = chat_items(&[turn(Role::User, &peer(r#"from="x""#, " "))]);
+        assert!(items.is_empty());
+        // The tag inside what the user wrote, and a longer tag, are just text.
+        let quoted = "why does <cross-session-message from=\"x\">hi</cross-session-message> show?";
+        let (items, _) = chat_items(&[turn(Role::User, quoted)]);
+        assert_eq!(items, vec![ChatItem::User(quoted.into())]);
+        let other = "<cross-session-messages>hi</cross-session-messages>";
+        let (items, _) = chat_items(&[turn(Role::User, other)]);
+        assert_eq!(items, vec![ChatItem::User(other.into())]);
     }
 
     #[test]

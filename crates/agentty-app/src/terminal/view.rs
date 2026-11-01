@@ -34,6 +34,9 @@ actions!(terminal, [Copy, Paste, Clear, SelectAll]);
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const SPAWN_FALLBACK_DELAY: Duration = Duration::from_millis(400);
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a turn seen on screen still counts as shown: a read can land mid-repaint, and what
+/// follows from it (a row, the stop button) must not blink with it.
+const SCREEN_BUSY_HOLD: Duration = Duration::from_secs(3);
 /// Shortest gap between repaints caused by program output. A TUI that redraws itself hundreds of
 /// times a second (Codex) would otherwise redraw the whole window that often — burning CPU and
 /// making the mouse pointer flicker, because every frame re-applies the platform cursor.
@@ -199,6 +202,36 @@ pub struct ScreenState {
     pub question: bool,
     /// The turn was interrupted ("Interrupted · What should Claude do instead?").
     pub interrupted: bool,
+    /// Claude Code holds a message from another session until the user decides (also a `question`).
+    pub held_message: bool,
+}
+
+/// A screen row as text. A wide character (Korean, say) takes two cells, the second one blank: that
+/// one is not a space in the text.
+fn row_text(cells: impl Iterator<Item = (char, Flags)>) -> String {
+    let wide = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+    cells.filter(|(_, flags)| !flags.intersects(wide)).map(|(c, _)| c).collect::<String>().trim_end().to_string()
+}
+
+/// Which option of Claude Code's held-message prompt is highlighted (0: deny, 1: deliver), when the
+/// prompt is on screen. Its options have no numbers, and text in a reply can quote them: they count
+/// as the two lines of a selection, one of them marked. The message it holds is drawn behind a `│`,
+/// so what the sender wrote is never taken for them.
+pub fn held_message_choice(lines: &[String]) -> Option<usize> {
+    let rows: Vec<&str> = lines.iter().map(String::as_str).filter(|l| !l.trim().is_empty()).collect();
+    let option = |line: &str| -> (bool, String) {
+        let trimmed = line.trim_start();
+        let marked = trimmed.starts_with('❯');
+        (marked, trimmed.trim_start_matches('❯').trim_start().to_string())
+    };
+    let deliver = rows.iter().rposition(|l| option(l).1.starts_with("Deliver this message to Claude"))?;
+    // A narrow pane wraps the longer option: its first line can be a row or two above.
+    let deny = (deliver.saturating_sub(3)..deliver).rev().find(|at| option(rows[*at]).1.starts_with("Deny — drop it"))?;
+    match (option(rows[deny]).0, option(rows[deliver]).0) {
+        (true, false) => Some(0),
+        (false, true) => Some(1),
+        _ => None,
+    }
 }
 
 /// Classifies the visible bottom lines of Claude Code / Codex.
@@ -221,7 +254,10 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
         }
         // "✻ Cultivating… (1m 36s · ↓ 5.6k tokens · still thinking)": a running turn even though
         // newer Claude Code leaves the interrupt hint out of that line.
-        let spinner = line.trim_start().starts_with(['✻', '✳', '✢', '✽', '✶']);
+        // Its glyph turns through `·` and `*` as well; those also start ordinary text, so they count
+        // only with the `…` of a spinner's verb.
+        let glyph = line.trim_start();
+        let spinner = glyph.starts_with(['✻', '✳', '✢', '✽', '✶']) || (glyph.starts_with(['·', '*']) && glyph.contains('…'));
         let hint = lower.trim_end().rsplit_once('(').is_some_and(|(_, tail)| {
             tail.ends_with(')') && (tail.contains("tokens") || tail.contains("thinking") || tail.contains("esc to interrupt"))
         });
@@ -250,6 +286,10 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
     }
     if state.permission.is_some() {
         state.question = false;
+    }
+    if held_message_choice(&tail.iter().map(|l| l.to_string()).collect::<Vec<_>>()).is_some() {
+        state.held_message = true;
+        state.question = true;
     }
     state
 }
@@ -322,6 +362,8 @@ pub struct TerminalView {
     esc_at: Option<Instant>,
     /// Consecutive probes without the busy hint while marked as working.
     quiet_ticks: u8,
+    /// When a status check last saw a running turn on screen.
+    screen_busy_at: Option<Instant>,
     /// Whether the request the agent waits on was already announced (one notice per request).
     ask_gate: AskGate,
     /// Number of the request the agent waits on, new for each one announced: an answer from a
@@ -506,6 +548,7 @@ impl TerminalView {
             live_tool_pid: None,
             esc_at: None,
             quiet_ticks: 0,
+            screen_busy_at: None,
             ask_gate: AskGate::default(),
             ask_serial: 0,
             ask_request: None,
@@ -819,19 +862,21 @@ impl TerminalView {
     }
 
     /// The cursor's cell as the painter sees it: (column, row from the top of the viewport).
-    /// The last `rows` lines of the live screen (ignores scrollback position).
+    /// The last `rows` lines with text on the live screen, and the empty ones between them (ignores
+    /// scrollback position). A tall pane with little in it has its text up at the top, and the rows
+    /// under it say nothing: a prompt up there must not fall out of what is read.
     pub fn screen_lines(&self, rows: usize) -> Vec<String> {
         let Some(backend) = &self.backend else { return Vec::new() };
         let term = backend.term.lock();
         let grid = term.grid();
         let lines = grid.screen_lines();
         let columns = grid.columns();
-        (lines.saturating_sub(rows)..lines)
-            .map(|row| {
-                let line = &grid[Line(row as i32)];
-                (0..columns).map(|c| line[Column(c)].c).collect::<String>().trim_end().to_string()
-            })
-            .collect()
+        let text = |row: usize| {
+            let line = &grid[Line(row as i32)];
+            row_text((0..columns).map(|c| (line[Column(c)].c, line[Column(c)].flags)))
+        };
+        let end = (0..lines).rev().find(|row| !text(*row).trim().is_empty()).map_or(lines, |row| row + 1);
+        (end.saturating_sub(rows)..end).map(text).collect()
     }
 
     /// The live screen for the remote page (`crate::remote`): rows of styled runs in the colors
@@ -1001,6 +1046,11 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Whether a status check saw a running turn on screen just now.
+    pub fn screen_busy_recently(&self) -> bool {
+        self.screen_busy_at.is_some_and(|at| at.elapsed() < SCREEN_BUSY_HOLD)
+    }
+
     /// Corrects the hook-reported status with what the agent's screen shows. Hooks don't fire
     /// for Esc interrupts, Codex approvals or missed events; the screen always tells.
     fn update_from_screen(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1016,6 +1066,7 @@ impl TerminalView {
                 self.enter_waiting(AgentStatus::Permission(label.clone()), NoticeKind::Permission, label, cx);
             }
         } else if screen.busy {
+            self.screen_busy_at = Some(Instant::now());
             self.quiet_ticks = 0;
             self.ask_gate.resume();
             if self.status != AgentStatus::Working {
@@ -1179,7 +1230,8 @@ impl TerminalView {
         let known = self.transcript_file.as_ref().filter(|(session, _)| *session == id).map(|(_, path)| path.clone());
         let spell = self.quiet_spell;
         let task = cx.background_spawn(async move {
-            let path = known.or_else(|| agentty_bridge::transcript_path(agent, &id))?;
+            // Claude Code moves a session's file when it enters a worktree.
+            let path = known.filter(|path| path.is_file()).or_else(|| agentty_bridge::transcript_path(agent, &id))?;
             let interrupted = agentty_bridge::transcript_turn_interrupted(agent, &path);
             Some((id, path, interrupted))
         });
@@ -1869,6 +1921,16 @@ impl TerminalView {
         // Give the TUI a moment to process the paste before pressing Enter.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(200)).await;
+            // A message from another session can be held meanwhile: this Enter would answer that
+            // prompt. The text stays in the input until the user has.
+            loop {
+                let held = this.update(cx, |view, _| held_message_choice(&view.screen_lines(40)).is_some());
+                match held {
+                    Ok(true) => cx.background_executor().timer(Duration::from_millis(300)).await,
+                    Ok(false) => break,
+                    Err(_) => return,
+                }
+            }
             let _ = this.update(cx, |view, cx| {
                 view.write(b"\r".to_vec());
                 view.submit_busy = false;
@@ -3319,6 +3381,22 @@ mod screen_tests {
     }
 
     #[test]
+    fn a_wide_character_is_one_character_in_the_text() {
+        use alacritty_terminal::term::cell::Flags;
+        let none = Flags::empty();
+        let cells = [
+            ('한', Flags::WIDE_CHAR),
+            (' ', Flags::WIDE_CHAR_SPACER),
+            ('글', Flags::WIDE_CHAR),
+            (' ', Flags::WIDE_CHAR_SPACER),
+            (' ', none),
+            ('a', none),
+            (' ', none),
+        ];
+        assert_eq!(super::row_text(cells.into_iter()), "한글 a");
+    }
+
+    #[test]
     fn detects_busy_and_prompts() {
         let claude = lines("> fix the bug\n\n✽ Pondering… (12s · ↑ 1.2k tokens · esc to interrupt)\n\n─────\n>");
         assert!(classify_screen(&claude).busy);
@@ -3327,9 +3405,27 @@ mod screen_tests {
         // Newer Claude Code leaves the interrupt hint out while it thinks.
         let thinking = lines("> fix the bug\n\n✻ Cultivating… (1m 36s · ↓ 5.6k tokens · still thinking)\n\n─────\n>");
         assert!(classify_screen(&thinking).busy);
+        // Every frame of the spinner's cycle, not just the star-shaped ones.
+        for glyph in ['·', '✢', '✳', '*', '✶', '✻', '✽'] {
+            let frame = lines(&format!("> fix it\n\n{glyph} Cultivating… (33m 17s · ↓ 5.6k tokens)\n\n─────\n>"));
+            assert!(classify_screen(&frame).busy, "{glyph}");
+        }
         // A finished spinner line is not a running turn, and neither is ordinary prose.
         assert!(!classify_screen(&lines("✻ Baked for 3s · done 9:19 AM\n>")).busy);
         assert!(!classify_screen(&lines("* the reply used 5k tokens (roughly · half)\n>")).busy);
+        assert!(!classify_screen(&lines("* the reply used (5k tokens · half)\n>")).busy);
+        assert!(!classify_screen(&lines("· the reply used (5k tokens · half)\n>")).busy);
+        // A message from another session held for the user, and a reply that merely quotes it.
+        let held = lines("  Message body (this is what will be delivered):\n │ hi\n ❯ Deny — drop it and tell the sender it was declined\n   Deliver this message to Claude");
+        let state = classify_screen(&held);
+        assert!(state.held_message && state.question && !state.busy);
+        assert_eq!(super::held_message_choice(&held), Some(0));
+        let moved = lines("   Deny — drop it and tell the sender it\n   was declined\n ❯ Deliver this message to Claude");
+        assert_eq!(super::held_message_choice(&moved), Some(1));
+        let inside = lines(" │ ❯ Deny — drop it and tell the sender\n │ Deliver this message to Claude\n>");
+        assert_eq!(super::held_message_choice(&inside), None);
+        let quoted = lines("Its options are:\n- Deny — drop it and tell the sender\n- Deliver this message to Claude\n>");
+        assert!(!classify_screen(&quoted).held_message);
         let permission = lines(
             " Bash command\n   rm -rf target\n Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do differently (esc)",
         );

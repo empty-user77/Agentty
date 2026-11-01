@@ -192,11 +192,19 @@ pub fn prefers_fullscreen() -> bool {
 }
 
 pub fn find(id: &str) -> Result<PathBuf> {
+    find_in(&projects_dir(), id)
+}
+
+/// The session's file under `projects`. Entering a worktree can leave one in two project folders:
+/// the one written last is the live one.
+fn find_in(projects: &Path, id: &str) -> Result<PathBuf> {
     let file = format!("{id}.jsonl");
-    std::fs::read_dir(projects_dir())?
+    std::fs::read_dir(projects)?
         .flatten()
         .map(|e| e.path().join(&file))
-        .find(|p| p.is_file())
+        .filter_map(|p| Some((std::fs::metadata(&p).ok().filter(|m| m.is_file())?.modified().ok()?, p)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, p)| p)
         .with_context(|| format!("Claude session {id} not found"))
 }
 
@@ -237,21 +245,26 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
 
 /// Text the human typed. Tool results and harness-injected wrappers are excluded.
 pub(crate) fn user_text(v: &Value) -> Option<String> {
-    let content = &v["message"]["content"];
-    let text = match content {
-        Value::String(s) => s.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .filter_map(|b| match b["type"].as_str() {
-                Some("text") => b["text"].as_str().map(str::to_string),
-                Some("image") => Some("[image]".to_string()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => return None,
-    };
-    human_text(&text)
+    human_text(&content_text(&v["message"]["content"])?)
+}
+
+/// What a message says: its text, or its blocks' with pictures marked.
+fn content_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(s) => Some(s.clone()),
+        Value::Array(blocks) => Some(
+            blocks
+                .iter()
+                .filter_map(|b| match b["type"].as_str() {
+                    Some("text") => b["text"].as_str().map(str::to_string),
+                    Some("image") => Some("[image]".to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ => None,
+    }
 }
 
 /// What the user typed mid-turn: a `queued_command` attachment's prompt (the harness queues its own
@@ -261,7 +274,18 @@ pub(crate) fn queued_text(v: &Value) -> Option<String> {
     if attachment["type"].as_str() != Some("queued_command") {
         return None;
     }
-    human_text(attachment["prompt"].as_str()?)
+    // Text alone, or blocks when pictures came with it.
+    human_text(&content_text(&attachment["prompt"])?)
+}
+
+/// A message from another session on a harness line: the message, without the harness's words
+/// around it.
+pub(crate) fn peer_text(v: &Value) -> Option<String> {
+    let text = content_text(&v["message"]["content"])?;
+    const CLOSE: &str = "</cross-session-message>";
+    let start = text.find("<cross-session-message")?;
+    let end = text[start..].find(CLOSE).map_or(text.len(), |at| start + at + CLOSE.len());
+    Some(text[start..end].to_string())
 }
 
 fn human_text(text: &str) -> Option<String> {
@@ -511,6 +535,21 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_session_in_two_project_folders_is_the_one_written_last() {
+        let dir = std::env::temp_dir().join(format!("agentty-find-{}", std::process::id()));
+        let (old, new) = (dir.join("repo"), dir.join("repo-worktree"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("s.jsonl"), "").unwrap();
+        std::fs::write(old.join("s.jsonl"), "").unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(old.join("s.jsonl")).unwrap().set_modified(past).unwrap();
+        assert_eq!(super::find_in(&dir, "s").unwrap(), new.join("s.jsonl"));
+        assert!(super::find_in(&dir, "other").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn messages_typed_mid_turn_are_user_turns() {
         let dir = std::env::temp_dir().join(format!("agentty-queued-{}", std::process::id()));
