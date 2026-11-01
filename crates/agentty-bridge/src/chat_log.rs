@@ -90,8 +90,42 @@ pub fn read(agent: Agent, path: &Path) -> Result<Vec<Entry>> {
     })
 }
 
+/// Where `agent` keeps session `id`, whichever kind of log it writes. `None` for an id that could
+/// name anything else than a session: ids are looked up as file names.
+pub fn transcript_file(agent: Agent, id: &str) -> Option<std::path::PathBuf> {
+    let plain = !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if !plain || id.contains("..") {
+        return None;
+    }
+    match agent {
+        Agent::Gemini => crate::gemini::find(id).ok(),
+        Agent::Agy => crate::agy::find(id).ok(),
+        _ => crate::transcript_path(agent, id),
+    }
+}
+
+/// How much a transcript holds, to tell when it grew. Antigravity's is an SQLite database whose
+/// new rows wait in its write-ahead log first.
+pub fn transcript_size(path: &Path) -> Option<u64> {
+    let len = std::fs::metadata(path).ok()?.len();
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    Some(len + std::fs::metadata(Path::new(&wal)).map_or(0, |m| m.len()))
+}
+
 /// How much of a transcript [`Reader::update`] reads at a time.
 const READ_CHUNK: usize = 1 << 20;
+
+/// A line longer than this is left out by a [`Reader::windowed`] reader, which promises its memory
+/// stays bounded: only a pasted picture comes near it.
+const WINDOW_MAX_LINE: usize = 32 << 20;
+
+/// What a [`Reader::windowed`] reader keeps of a conversation.
+#[derive(Clone, Copy)]
+struct Window {
+    entries: usize,
+    blocks: usize,
+}
 
 /// A transcript read as it grows: each [`Reader::update`] parses only what was written since the
 /// last one, so a long session is not read again from the start on every new line.
@@ -102,11 +136,65 @@ pub struct Reader {
     offset: u64,
     /// The end of the file when it stops mid-line: the rest of that line comes later.
     partial: Vec<u8>,
+    window: Option<Window>,
+    /// Older entries or blocks went out of the window.
+    cut: bool,
+    /// In a line too long to keep: everything up to its end is left out.
+    skipping: bool,
 }
 
 impl Reader {
     pub fn new(agent: Agent) -> Self {
-        Reader { agent, builder: Builder::default(), offset: 0, partial: Vec::new() }
+        Reader { agent, builder: Builder::default(), offset: 0, partial: Vec::new(), window: None, cut: false, skipping: false }
+    }
+
+    /// A reader that holds only the newest `entries` entries, and the newest `blocks` blocks of
+    /// each, however long the session: for readers that don't need all of it.
+    pub fn windowed(agent: Agent, entries: usize, blocks: usize) -> Self {
+        Reader { window: Some(Window { entries, blocks }), ..Reader::new(agent) }
+    }
+
+    /// The entries held now, oldest first.
+    pub fn entries(&self) -> &[Entry] {
+        &self.builder.entries
+    }
+
+    /// Whether a windowed reader has let older entries or blocks go.
+    pub fn cut(&self) -> bool {
+        self.cut
+    }
+
+    /// Lets go of what is outside the window; a result arriving for a step let go is dropped.
+    fn trim(&mut self) {
+        let Some(window) = self.window else { return };
+        let b = &mut self.builder;
+        let extra = b.entries.len().saturating_sub(window.entries);
+        if extra > 0 {
+            b.entries.drain(..extra);
+            b.steps.retain(|_, (entry, _)| {
+                let kept = *entry >= extra;
+                *entry = entry.saturating_sub(extra);
+                kept
+            });
+            b.changed_from = b.changed_from.map(|from| from.saturating_sub(extra));
+            self.cut = true;
+        }
+        for (index, entry) in b.entries.iter_mut().enumerate() {
+            let extra = entry.blocks.len().saturating_sub(window.blocks);
+            if extra == 0 {
+                continue;
+            }
+            entry.blocks.drain(..extra);
+            b.steps.retain(|_, (at, block)| {
+                if *at != index {
+                    return true;
+                }
+                let kept = *block >= extra;
+                *block = block.saturating_sub(extra);
+                kept
+            });
+            self.cut = true;
+        }
     }
 
     /// Reads what was appended to `path`. When something changed: the first entry that did, and
@@ -117,7 +205,7 @@ impl Reader {
         let mut file = File::open(path)?;
         let len = file.metadata()?.len();
         if len < self.offset {
-            *self = Reader::new(self.agent);
+            *self = Reader { window: self.window, ..Reader::new(self.agent) };
             self.builder.changed_from = Some(0);
         }
         if len > self.offset {
@@ -132,10 +220,22 @@ impl Reader {
                     break;
                 }
                 self.offset += read as u64;
+                let mut new = &chunk[..read];
+                if self.skipping {
+                    let Some(end) = new.iter().position(|b| *b == b'\n') else { continue };
+                    new = &new[end + 1..];
+                    self.skipping = false;
+                }
                 let start = self.partial.len();
-                self.partial.extend_from_slice(&chunk[..read]);
+                self.partial.extend_from_slice(new);
                 // Only the new bytes can hold the end of a line.
-                let Some(end) = self.partial[start..].iter().rposition(|b| *b == b'\n') else { continue };
+                let Some(end) = self.partial[start..].iter().rposition(|b| *b == b'\n') else {
+                    if self.window.is_some() && self.partial.len() > WINDOW_MAX_LINE {
+                        self.partial = Vec::new();
+                        self.skipping = true;
+                    }
+                    continue;
+                };
                 let complete = start + end + 1;
                 for line in self.partial[..complete].split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
                     let line = String::from_utf8_lossy(line);
@@ -145,6 +245,7 @@ impl Reader {
                     }
                 }
                 self.partial.drain(..complete);
+                self.trim();
             }
         }
         Ok(self.builder.changed_from.take().map(|from| {
@@ -494,6 +595,83 @@ mod tests {
 
     fn lines(text: &str) -> impl Iterator<Item = String> + '_ {
         text.lines().map(str::to_string)
+    }
+
+    fn temp_log(name: &str, text: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("agentty-chat-log-{name}-{}.jsonl", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_windowed_reader_keeps_the_newest_and_still_places_results() {
+        let turn = |n: usize| {
+            format!(
+                "{{\"type\":\"user\",\"message\":{{\"content\":\"ask {n}\"}}}}\n{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t{n}\",\"name\":\"Bash\",\"input\":{{\"command\":\"c{n}\"}}}}]}}}}\n"
+            )
+        };
+        let path = temp_log("window", &(0..50).map(turn).collect::<String>());
+        let mut reader = Reader::windowed(Agent::Claude, 4, 10);
+        reader.update(&path).unwrap();
+        assert!(reader.cut());
+        let entries = reader.entries();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[2].text, "ask 49");
+        // A result for a step still held lands on it; one for a step let go is ignored.
+        let more = "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t49\",\"content\":\"ok\"},{\"type\":\"tool_result\",\"tool_use_id\":\"t3\",\"content\":\"late\"}]}}\n";
+        std::fs::write(&path, format!("{}{more}", (0..50).map(turn).collect::<String>())).unwrap();
+        assert!(reader.update(&path).unwrap().is_some());
+        let Block::Tool(step) = &reader.entries()[3].blocks[0] else { panic!("no step") };
+        assert_eq!(step.output.as_deref(), Some("ok"));
+        // A new file in its place keeps the window.
+        std::fs::write(&path, turn(1)).unwrap();
+        reader.update(&path).unwrap();
+        assert_eq!(reader.entries().len(), 2);
+        assert!(!reader.cut());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_windowed_reader_keeps_the_newest_blocks_of_a_long_reply() {
+        let step = |n: usize| {
+            format!(
+                "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t{n}\",\"name\":\"Bash\",\"input\":{{\"command\":\"c{n}\"}}}}]}}}}\n"
+            )
+        };
+        let path = temp_log("blocks", &(0..30).map(step).collect::<String>());
+        let mut reader = Reader::windowed(Agent::Claude, 4, 5);
+        reader.update(&path).unwrap();
+        let more =
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t29\",\"content\":\"ok\"}]}}\n";
+        std::fs::write(&path, format!("{}{more}", (0..30).map(step).collect::<String>())).unwrap();
+        reader.update(&path).unwrap();
+        let blocks = &reader.entries()[0].blocks;
+        assert_eq!(blocks.len(), 5);
+        let Block::Tool(last) = &blocks[4] else { panic!("no step") };
+        assert_eq!((last.detail.as_deref(), last.output.as_deref()), (Some("c29"), Some("ok")));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_windowed_reader_leaves_out_a_line_too_long_to_hold() {
+        let long = "x".repeat(WINDOW_MAX_LINE + READ_CHUNK * 2);
+        let good = "{\"type\":\"user\",\"message\":{\"content\":\"after\"}}\n";
+        let path = temp_log("long", &format!("{long}\n{good}"));
+        let mut reader = Reader::windowed(Agent::Claude, 4, 5);
+        reader.update(&path).unwrap();
+        assert_eq!(reader.entries().len(), 1);
+        assert_eq!(reader.entries()[0].text, "after");
+        assert!(reader.partial.capacity() <= READ_CHUNK * 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn only_plain_ids_are_looked_up() {
+        for id in ["", "../../etc/passwd", "a/b", "..", "a..b", "a\\b", "x y"] {
+            assert_eq!(transcript_file(Agent::Agy, id), None, "{id}");
+            assert_eq!(transcript_file(Agent::Claude, id), None, "{id}");
+        }
+        assert_eq!(transcript_file(Agent::Agy, &"a".repeat(129)), None);
     }
 
     #[test]

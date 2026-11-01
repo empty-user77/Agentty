@@ -41,12 +41,26 @@ pub(super) struct RemotePageState {
     voice_dl: Option<VoiceDl>,
     /// The last voice-setup error to show (a failed or corrupt download).
     voice_error: Option<String>,
+    /// When the page last stopped a turn of a pane not drawn as a chat, by pane.
+    stops: std::collections::HashMap<u64, std::time::Instant>,
 }
 
 impl RemotePageState {
     /// Whether the password popup is open (drawn over the rest of the window).
     pub(super) fn dialog_open(&self) -> bool {
         self.dialog_open
+    }
+
+    /// Whether `pane`'s turn may be stopped now: a second Stop right after the first (a double tap)
+    /// would be a second Esc, which opens Claude Code's rewind menu.
+    pub(super) fn stop_due(&mut self, pane: u64) -> bool {
+        const AGAIN_AFTER: Duration = Duration::from_millis(1500);
+        self.stops.retain(|_, at| at.elapsed() < AGAIN_AFTER);
+        if self.stops.contains_key(&pane) {
+            return false;
+        }
+        self.stops.insert(pane, std::time::Instant::now());
+        true
     }
 }
 
@@ -62,7 +76,7 @@ struct VoiceDl {
 impl Workbench {
     /// Terminals the remote page may use: everything except plugins' own workspaces, whose
     /// automations are not the user's to type into.
-    fn remote_panes(&self) -> impl Iterator<Item = (&super::Workspace, super::Pane)> + '_ {
+    pub(super) fn remote_panes(&self) -> impl Iterator<Item = (&super::Workspace, super::Pane)> + '_ {
         self.workspaces
             .iter()
             .filter(|ws| ws.plugin.is_none() && !ws.remote_hidden)
@@ -119,6 +133,7 @@ impl Workbench {
                         .collect();
                     roots.sort();
                     roots.dedup();
+                    let chat_source = self.remote_chat_source(&pane, cx);
                     sessions.push(SessionInfo {
                         pane: view.pane_id,
                         workspace: name.clone(),
@@ -134,6 +149,9 @@ impl Workbench {
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
                         last_activity_ms: view.last_activity_ms,
                         asks,
+                        chat_capable: chat_source.is_some(),
+                        chat_view: self.remote_chat_shown(&pane),
+                        chat_source,
                         dir,
                         roots,
                     });
@@ -183,6 +201,17 @@ impl Workbench {
                 }
                 return self.remote_chat_message(*pane, text.clone(), cx);
             }
+            Command::Orchestration(asked) => return self.remote_orchestration(asked, cx),
+            Command::Stop { pane } => {
+                let Some((_, found)) = self.remote_panes().find(|(_, p)| p.read(cx).pane_id == *pane) else { return false };
+                self.remote_stop_turn(&found, cx);
+                return true;
+            }
+            Command::Choice { pane, option } => {
+                let Some((_, found)) = self.remote_panes().find(|(_, p)| p.read(cx).pane_id == *pane) else { return false };
+                self.remote_answer_choice(&found, *option, cx);
+                return true;
+            }
             _ => {}
         }
         let Some((_, pane)) = self.remote_panes().find(|(_, p)| Some(p.read(cx).pane_id) == command.pane()) else { return false };
@@ -211,13 +240,16 @@ impl Workbench {
             | Command::NewTab { .. }
             | Command::OpenFolder { .. }
             | Command::Chat { .. }
-            | Command::OpenPort { .. } => {}
+            | Command::OpenPort { .. }
+            | Command::Stop { .. }
+            | Command::Choice { .. }
+            | Command::Orchestration(_) => {}
         });
         true
     }
 
     /// The index of a workspace the remote page may act on: the user's own, not left out.
-    fn remote_workspace(&self, id: u64) -> Option<usize> {
+    pub(super) fn remote_workspace(&self, id: u64) -> Option<usize> {
         self.workspaces.iter().position(|ws| ws.id == id && ws.plugin.is_none() && !ws.remote_hidden)
     }
 
@@ -297,6 +329,20 @@ impl Workbench {
             }
         });
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, folder.clone()), cx);
+        self.remote_add_workspace(pane, folder, title, group, cx);
+        true
+    }
+
+    /// A new workspace around `pane`, at the end of the list. It leaves the desktop on the workspace
+    /// it shows, unless nothing was open before.
+    pub(super) fn remote_add_workspace(
+        &mut self,
+        pane: super::Pane,
+        folder: std::path::PathBuf,
+        title: Option<String>,
+        group: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.next_id();
         self.workspaces.push(super::Workspace {
             id,
@@ -321,7 +367,6 @@ impl Workbench {
         }
         self.persist(cx);
         cx.notify();
-        true
     }
 
     /// The tabs of plugins' workspaces (their automations), for the page's plugin list:

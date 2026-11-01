@@ -17,6 +17,25 @@ const NARROW_COMPOSER: f32 = 240.;
 /// Below this one it keeps the send button alone (files still come in by dropping them).
 const TINY_COMPOSER: f32 = 160.;
 
+/// Picks option `target` of the selection on the screen rows `lines` of `pane`.
+fn pick_choice(pane: &Pane, target: usize, lines: &[String], cx: &mut Context<Workbench>) {
+    let Some((choices, current)) = screen_choices(lines) else { return };
+    if target >= choices.len() {
+        return;
+    }
+    pane.update(cx, |view, _| view.write(choice_keys(current, target)));
+    cx.notify();
+}
+
+/// Whether the agent's screen shows what only its terminal can answer: a menu of its own, or a
+/// wait, without numbered options a chat could show as buttons.
+pub(super) fn only_the_terminal_answers(view: &crate::terminal::TerminalView) -> bool {
+    let lines = view.screen_lines(40);
+    // A menu of the agent's own (Claude Code's rewind, a picker).
+    let menu = lines.iter().rev().take(6).any(|line| line.to_lowercase().contains("esc to cancel"));
+    (menu || waits_on_screen(view, &crate::terminal::classify_screen(&lines))) && screen_choices(&lines).is_none()
+}
+
 /// The permission mode Claude Code shows under its input box (Shift+Tab moves to the next one).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mode {
@@ -40,6 +59,17 @@ impl Mode {
             Mode::Auto
         } else {
             Mode::Ask
+        }
+    }
+
+    /// What the remote apps are told.
+    fn id(self) -> &'static str {
+        match self {
+            Mode::Ask => "ask",
+            Mode::Edits => "edits",
+            Mode::Plan => "plan",
+            Mode::Auto => "auto",
+            Mode::Bypass => "bypass",
         }
     }
 
@@ -112,7 +142,12 @@ impl Workbench {
     }
 
     fn live(&self, state: &ChatState, cx: &App) -> Live {
-        let pane = &state.lead;
+        self.live_of(&state.lead, state.earlier_tool.as_ref(), cx)
+    }
+
+    /// What the screen and the pane say about the agent in `pane`, a chat or not. `earlier_tool`: an
+    /// older turn's tool, not to be shown as what it does now.
+    fn live_of(&self, pane: &Pane, earlier_tool: Option<&(String, Option<String>)>, cx: &App) -> Live {
         let view = pane.read(cx);
         let agent = chat_lead_agent(pane, cx);
         let lines = view.screen_lines(40);
@@ -141,7 +176,7 @@ impl Workbench {
             activity: view
                 .last_tool
                 .as_ref()
-                .filter(|tool| Some(*tool) != state.earlier_tool.as_ref())
+                .filter(|tool| Some(*tool) != earlier_tool)
                 .map(|(tool, target)| tool_text(tool, target.as_deref(), cx)),
             elapsed: view.working_since.map(|since| crate::workbench::layout::format_elapsed(since.elapsed().as_secs())),
             // Antigravity and Gemini CLI: what their screen shows (the pane's own model settings are
@@ -173,6 +208,106 @@ impl Workbench {
             branch: view.git_branch.clone(),
             worktree: view.worktree.is_some(),
             width: self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX),
+        }
+    }
+
+    /// Which conversation `pane` shows, for the remote apps: `None` without an agent the chat view
+    /// reads. Claude Code and Codex say which session they write, and until they do it is an empty
+    /// one; Gemini CLI and Antigravity don't, so only the session the pane's chat found counts.
+    pub(in crate::workbench) fn remote_chat_source(&self, pane: &Pane, cx: &App) -> Option<crate::remote::chat::ChatSource> {
+        let view = pane.read(cx);
+        let agent = pane_chat_agent(view)?;
+        let session = if matches!(agent, Agent::Claude | Agent::Codex) {
+            // Started as one of them and running the other since: only what the running one said counts.
+            if view.spec.kind.agent().is_none_or(|kind| kind == agent) {
+                view.current_session()
+            } else {
+                view.running_session()
+            }
+        } else {
+            let found = self.chats.get(&pane.entity_id())?.found_session.as_ref().filter(|(_, found, _)| *found == agent);
+            Some(found.and_then(|(_, _, id)| id.clone())?)
+        };
+        Some(crate::remote::chat::ChatSource { agent, session })
+    }
+
+    /// Whether the desktop draws `pane` as a chat, leaving out the moments only its terminal can
+    /// answer something: an app opening the pane does not follow those.
+    pub(in crate::workbench) fn remote_chat_shown(&self, pane: &Pane) -> bool {
+        self.chats.get(&pane.entity_id()).is_some_and(|state| !state.show_terminal)
+    }
+
+    /// What `pane_id`'s screen says, for an app that has its chat open. Only a pane the page may use.
+    pub fn remote_chat_live(&self, pane_id: u64, cx: &App) -> Option<crate::remote::chat::ChatLive> {
+        let (_, pane) = self.remote_panes().find(|(_, pane)| pane.read(cx).pane_id == pane_id)?;
+        pane_chat_agent(pane.read(cx))?;
+        let live = self.live_of(&pane, None, cx);
+        let view = pane.read(cx);
+        let needs_terminal = only_the_terminal_answers(view) || is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
+        // A held message is decided on what it says: the app's question carries it.
+        let detail = live.question_detail;
+        let question = live.choices.map(|(options, current)| crate::remote::chat::ChatQuestion {
+            text: std::iter::once(live.question.unwrap_or_else(|| t(cx, "chat.agent_asks").to_string()))
+                .chain(detail)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            options,
+            current,
+        });
+        Some(crate::remote::chat::ChatLive {
+            busy: live.working,
+            needs_terminal,
+            model: live.model,
+            mode: live.mode.map(Mode::id),
+            effort: live.effort.map(|key| key.trim_start_matches("chat.effort_")),
+            question,
+        })
+    }
+
+    /// The page's Stop. A pane drawn as a chat stops as its button does; any other agent the same
+    /// way, its choice of view being the phone's own.
+    pub(in crate::workbench) fn remote_stop_turn(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        let id = pane.entity_id();
+        if self.chats.contains_key(&id) {
+            return self.interrupt_chat(id, cx);
+        }
+        let view = pane.read(cx);
+        let Some(agent) = pane_chat_agent(view) else { return };
+        let screen = crate::terminal::classify_screen(&view.screen_lines(40));
+        // Over a held message, Esc would turn it down.
+        if matches!(agent, Agent::Claude | Agent::Codex) && (!screen.busy || screen.held_message) {
+            return;
+        }
+        let pane_id = view.pane_id;
+        let last = view.last_prompt.clone();
+        if !self.remote_page.stop_due(pane_id) {
+            return;
+        }
+        pane.update(cx, |view, _| view.interrupt());
+        // A message handed back to the agent's input would go out in front of the next one sent.
+        let pane = pane.clone();
+        cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(Duration::from_millis(900)).await;
+            let _ = pane.update(cx, |view, _| {
+                if last.as_deref().is_some_and(|sent| returned_to_input(&view.screen_lines(12), sent)) {
+                    // Ctrl+E, Ctrl+U: to the end of the input, and all of it out.
+                    view.write(b"\x05\x15".to_vec());
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// An option of the selection on `pane`'s screen, picked as the chat's button picks it, if one
+    /// is there now: an answer that came too late types nothing.
+    pub(in crate::workbench) fn remote_answer_choice(&mut self, pane: &Pane, target: usize, cx: &mut Context<Self>) {
+        let view = pane.read(cx);
+        if pane_chat_agent(view).is_none() {
+            return;
+        }
+        let lines = view.screen_lines(40);
+        if waits_on_screen(view, &crate::terminal::classify_screen(&lines)) {
+            pick_choice(pane, target, &lines, cx);
         }
     }
 
@@ -844,12 +979,8 @@ impl Workbench {
     fn answer_chat_choice(&mut self, id: EntityId, target: usize, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get(&id) else { return };
         let lead = state.lead.clone();
-        let Some((choices, current)) = screen_choices(&lead.read(cx).screen_lines(40)) else { return };
-        if target >= choices.len() {
-            return;
-        }
-        lead.update(cx, |view, _| view.write(choice_keys(current, target)));
-        cx.notify();
+        let lines = lead.read(cx).screen_lines(40);
+        pick_choice(&lead, target, &lines, cx);
     }
 
     /// Stops the agent's turn, as Esc in its terminal does.

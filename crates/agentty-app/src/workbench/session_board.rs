@@ -142,6 +142,8 @@ pub struct SessionBoard {
     /// it is (`None`: the newest, following new lines), and the wheel's movement not yet a whole line.
     feed_anchor: Option<(u64, usize)>,
     feed_wheel: f32,
+    /// A remote page asks for the board until then: closed orchestrations are read for it too.
+    remote_until: u64,
 }
 
 impl SessionBoard {
@@ -391,6 +393,27 @@ fn stage_node(stage: super::orchestration::Stage) -> NodeState {
         Stage::Planning | Stage::Running => NodeState::Running,
         Stage::Interrupted | Stage::Stopped => NodeState::Stopped,
         Stage::Ready | Stage::Done => NodeState::Done,
+    }
+}
+
+/// How long a remote page's request keeps the board's transcripts being read.
+const REMOTE_INTEREST_MS: u64 = 5_000;
+/// Orchestrations a remote page is told of, and of those with their terminal closed, how many have
+/// their transcripts read for it (each is a folder listed about once a second).
+const REMOTE_RECORDS: usize = 50;
+const REMOTE_CLOSED_READ: usize = 8;
+/// Sessions with subagents, and feed lines a thread, a remote page is told of.
+const REMOTE_SESSIONS: usize = 16;
+const REMOTE_FEED: usize = 30;
+const REMOTE_GOAL: usize = 2_000;
+
+/// A node's state for the remote apps.
+fn state_word(state: NodeState) -> &'static str {
+    match state {
+        NodeState::Done => "done",
+        NodeState::Running => "running",
+        NodeState::Pending => "waiting",
+        NodeState::Stopped => "cut",
     }
 }
 
@@ -726,17 +749,7 @@ impl Workbench {
         let team = self.team_of(&record.session, None, cx);
         let (said, color) = self.stage_words(record.stage, team, cx);
         let (nodes, feed) = self.team_nodes(Some(&record.session), None, crate::ui::now_ms(), cx);
-        let last = nodes.iter().map(|(at, n)| at + n.seconds * 1000).max().unwrap_or(record.started_ms);
-        let orchestrator = Node {
-            name: "orchestrator".into(),
-            state: stage_node(record.stage),
-            seconds: last.saturating_sub(record.started_ms) / 1000,
-            role: record.lead.display_name().into(),
-            model: None,
-            line: Some(t(cx, super::orchestration::stage_key(record.stage)).to_string()),
-            open: Open::Nothing,
-            from: None,
-        };
+        let orchestrator = self.closed_lead_node(record, &nodes, cx);
         let waves = self.waves_after(orchestrator, nodes, &record.plan, record.lead.id(), cx);
         let buttons = if matches!(record.stage, Stage::Interrupted | Stage::Stopped) {
             self.stage_buttons(id, record.stage, "closed", cx)
@@ -955,28 +968,25 @@ impl Workbench {
         waves
     }
 
-    /// A session: what was asked, the orchestrator's state, its subagents as waves, the feed.
-    fn render_session_workflow(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+    /// The orchestrator's node of a session with its terminal open.
+    fn lead_node(
+        &self,
+        pane: &Pane,
+        record: Option<&super::orchestration::Record>,
+        nodes: &[(u64, Node)],
+        now_ms: u64,
+        cx: &gpui::App,
+    ) -> Node {
         use crate::terminal::AgentStatus;
         let view = pane.read(cx);
-        let pane_id = view.pane_id;
-        let now_ms = crate::ui::now_ms();
-        let record = self.record_of_pane(pane, cx).cloned();
-        let session = view.current_session();
-        let (nodes, feed) = self.team_nodes(session.as_deref(), Some(pane), now_ms, cx);
-
-        // The orchestrator first, then the waves.
-        use super::orchestration::Stage;
-        let (state_label, state_color_main) = super::status_label_sized(view, true, cx);
-        let main_running = view.status.in_turn();
-        let waiting_on_user = view.status.needs_user();
+        let (state_label, _) = super::status_label_sized(view, true, cx);
         // Resting while its agents work is still running the team.
         let team_running = nodes.iter().any(|(_, n)| n.state == NodeState::Running);
-        let orchestrator = Node {
+        Node {
             name: "orchestrator".into(),
-            state: match record.as_ref() {
+            state: match record {
                 Some(r) => stage_node(r.stage),
-                None if main_running || team_running => NodeState::Running,
+                None if view.status.in_turn() || team_running => NodeState::Running,
                 None => NodeState::Done,
             },
             seconds: view.agent_since_ms.map_or(0, |since| now_ms.saturating_sub(since) / 1000),
@@ -989,13 +999,233 @@ impl Workbench {
                 AgentStatus::Working | AgentStatus::Thinking => {
                     view.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()))
                 }
-                _ => Some(
-                    record.as_ref().map_or_else(|| state_label.clone(), |r| t(cx, super::orchestration::stage_key(r.stage)).to_string()),
-                ),
+                _ => Some(record.map_or_else(|| state_label.clone(), |r| t(cx, super::orchestration::stage_key(r.stage)).to_string())),
             },
             open: Open::Pane(pane.clone()),
             from: None,
+        }
+    }
+
+    /// The orchestrator's node of an orchestration whose terminal is closed.
+    fn closed_lead_node(&self, record: &super::orchestration::Record, nodes: &[(u64, Node)], cx: &gpui::App) -> Node {
+        let last = nodes.iter().map(|(at, n)| at + n.seconds * 1000).max().unwrap_or(record.started_ms);
+        Node {
+            name: "orchestrator".into(),
+            state: stage_node(record.stage),
+            seconds: last.saturating_sub(record.started_ms) / 1000,
+            role: record.lead.display_name().into(),
+            model: None,
+            line: Some(t(cx, super::orchestration::stage_key(record.stage)).to_string()),
+            open: Open::Nothing,
+            from: None,
+        }
+    }
+
+    /// What the Orchestrator page shows, for a remote page: the orchestrations and the sessions with
+    /// subagents it may know of, built by what draws the page. Starts reading their transcripts
+    /// (off this thread) when nothing else has yet.
+    pub fn remote_board(&mut self, cx: &mut Context<Self>) -> crate::remote::board::Board {
+        self.orchestrations();
+        let now_ms = crate::ui::now_ms();
+        self.session_board.remote_until = now_ms + REMOTE_INTEREST_MS;
+        self.follow_session_board(cx);
+        let prefs = crate::settings::settings(cx);
+        let on = prefs.orchestration;
+        let profile = match prefs.orchestration_profile {
+            crate::settings::OrchestrationProfile::Balanced => "balanced",
+            crate::settings::OrchestrationProfile::Quality => "quality",
+            crate::settings::OrchestrationProfile::Economy => "economy",
         };
+        let leads = [agentty_bridge::model::Agent::Claude, agentty_bridge::model::Agent::Codex]
+            .into_iter()
+            .map(agentty_bridge::model::Agent::id)
+            .filter(|id| self.is_installed(id) && prefs.agent_enabled(id))
+            .collect();
+        let records: Vec<_> = self
+            .session_board
+            .shown(on)
+            .iter()
+            .rev()
+            .filter(|record| self.remote_record_allowed(record, cx))
+            .take(REMOTE_RECORDS)
+            .cloned()
+            .collect();
+        let mut threads = Vec::new();
+        for record in &records {
+            threads.push(self.board_thread(self.pane_of_record(record, cx).as_ref(), Some(record), now_ms, cx));
+        }
+        let sessions: Vec<Pane> = self
+            .remote_panes()
+            .map(|(_, pane)| pane)
+            .filter(|pane| {
+                let view = pane.read(cx);
+                view.is_agent()
+                    && view.is_running()
+                    && (!view.subagents.is_empty() || view.subagent_files.0 > 0)
+                    && self.record_of_pane(pane, cx).is_none()
+            })
+            .take(REMOTE_SESSIONS)
+            .collect();
+        for pane in &sessions {
+            threads.push(self.board_thread(Some(pane), None, now_ms, cx));
+        }
+        crate::remote::board::Board { enabled: on, leads, profile, threads }
+    }
+
+    /// One thread of the board: an orchestration (`record`, its terminal open or not) or a session.
+    fn board_thread(
+        &self,
+        pane: Option<&Pane>,
+        record: Option<&super::orchestration::Record>,
+        now_ms: u64,
+        cx: &gpui::App,
+    ) -> crate::remote::board::Thread {
+        use super::orchestration::{remote_actions, stage_id, Stage};
+        use crate::remote::board::{AgentNode, FeedItem, Lead, PlanItem, Thread, Wave as BoardWave};
+        let session = pane.and_then(|p| p.read(cx).current_session()).or_else(|| record.map(|r| r.session.clone()));
+        let (nodes, feed) = self.team_nodes(session.as_deref(), pane, now_ms, cx);
+        let orchestrator = match (pane, record) {
+            (Some(pane), _) => self.lead_node(pane, record, &nodes, now_ms, cx),
+            (None, Some(record)) => self.closed_lead_node(record, &nodes, cx),
+            (None, None) => Node {
+                name: String::new(),
+                state: NodeState::Pending,
+                seconds: 0,
+                role: String::new(),
+                model: None,
+                line: None,
+                open: Open::Nothing,
+                from: None,
+            },
+        };
+        let plan = record.map(|r| r.plan.as_slice()).unwrap_or_default();
+        let lead_id = record.map_or_else(|| "claude".to_string(), |r| r.lead.id().to_string());
+        let waves = self.waves_after(orchestrator, nodes, plan, &lead_id, cx);
+        let mut waves = waves.into_iter();
+        let lead_node = waves.next();
+        let waves: Vec<BoardWave> = waves
+            .enumerate()
+            .map(|(index, wave)| BoardWave {
+                wave: index + 1,
+                done: wave.nodes.iter().filter(|n| n.state == NodeState::Done).count(),
+                total: wave.nodes.len(),
+                agents: wave
+                    .nodes
+                    .into_iter()
+                    .map(|node| {
+                        let planned = plan.iter().find(|a| a.name == node.name);
+                        let some = |text: String| Some(text).filter(|t| !t.is_empty());
+                        AgentNode {
+                            // `role` is who works for one of the plan, and the kind of subagent otherwise.
+                            agent: planned.and_then(|_| some(node.role.clone())),
+                            role: planned
+                                .and_then(|a| a.role.clone())
+                                .or_else(|| planned.is_none().then(|| some(node.role.clone())).flatten()),
+                            // One yet to start has its task where its last word will be.
+                            last: node.line.filter(|_| node.state != NodeState::Pending),
+                            state: state_word(node.state),
+                            model: node.model,
+                            elapsed: node.seconds,
+                            needs: planned.map(|a| a.depends_on.clone()).unwrap_or_default(),
+                            name: node.name,
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        let view = pane.map(|p| p.read(cx));
+        let stage = record.map(|r| r.stage);
+        let stage_text = match (record, view) {
+            (Some(record), _) => {
+                let team = self.team_of(&record.session, pane, cx);
+                self.stage_words(record.stage, team, cx).0
+            }
+            (None, Some(view)) => super::status_label_sized(view, true, cx).0,
+            (None, None) => String::new(),
+        };
+        let lead_node = lead_node.and_then(|mut wave| wave.nodes.pop());
+        let goal = record.map(|r| r.goal.clone()).or_else(|| {
+            view.and_then(|view| view.last_prompt.as_ref()).map(|prompt| prompt.strip_prefix("Goal: ").unwrap_or(prompt).to_string())
+        });
+        let title = match (record, view) {
+            (Some(record), _) => first_line(&record.goal, 120),
+            (None, Some(view)) => view.display_title(),
+            (None, None) => String::new(),
+        };
+        let (id, kind) = match (record, view) {
+            (Some(record), _) => (format!("o{}", record.id), "orchestration"),
+            (None, view) => (format!("s{}", view.map_or(0, |view| view.pane_id)), "session"),
+        };
+        let folder = match (record, view) {
+            (Some(record), _) => crate::ui::tilde(&record.folder),
+            (None, Some(view)) => crate::ui::tilde(&view.display_cwd()),
+            _ => String::new(),
+        };
+        let workspace_id = pane.and_then(|p| self.locate(p)).map(|(w, _)| self.workspaces[w].id);
+        let done = waves.iter().map(|w| w.done).sum();
+        let total = waves.iter().map(|w| w.total).sum();
+        Thread {
+            id,
+            kind,
+            title,
+            goal: agentty_bridge::fsutil::truncate_chars(goal.as_deref().unwrap_or_default(), REMOTE_GOAL),
+            folder,
+            stage: stage.map(stage_id),
+            stage_text,
+            lead: Lead {
+                pane: view.map(|view| view.pane_id),
+                workspace_id,
+                state: lead_node.as_ref().map_or("waiting", |node| state_word(node.state)),
+                elapsed: lead_node.as_ref().map_or(0, |node| node.seconds),
+                tool: view.map_or(lead_id, |view| view.tool_id().to_string()),
+                model: lead_node.as_ref().and_then(|node| node.model.clone()),
+                last: lead_node.and_then(|node| node.line),
+            },
+            plan_awaiting: stage == Some(Stage::Ready),
+            plan: plan
+                .iter()
+                .map(|agent| PlanItem {
+                    name: agent.name.clone(),
+                    wave: agent.wave,
+                    role: agent.role.clone(),
+                    agent: agent.agent.clone(),
+                    model: agent.model.clone(),
+                    needs: agent.depends_on.clone(),
+                })
+                .collect(),
+            actions: stage.map_or_else(Vec::new, |stage| remote_actions(stage, view.map(|view| view.status.needs_user()))),
+            done,
+            total,
+            waves,
+            feed: feed[feed.len().saturating_sub(REMOTE_FEED)..]
+                .iter()
+                .map(|(at, agent, model, text, state)| FeedItem {
+                    at: *at,
+                    agent: agent.clone(),
+                    model: model.clone(),
+                    text: text.clone(),
+                    state: state_word(*state),
+                })
+                .collect(),
+            started_ms: record.map_or(0, |r| r.started_ms),
+        }
+    }
+
+    /// A session: what was asked, the orchestrator's state, its subagents as waves, the feed.
+    fn render_session_workflow(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+        let view = pane.read(cx);
+        let pane_id = view.pane_id;
+        let now_ms = crate::ui::now_ms();
+        let record = self.record_of_pane(pane, cx).cloned();
+        let session = view.current_session();
+        let (nodes, feed) = self.team_nodes(session.as_deref(), Some(pane), now_ms, cx);
+
+        // The orchestrator first, then the waves.
+        use super::orchestration::Stage;
+        let (state_label, state_color_main) = super::status_label_sized(view, true, cx);
+        let main_running = view.status.in_turn();
+        let waiting_on_user = view.status.needs_user();
+        let orchestrator = self.lead_node(pane, record.as_ref(), &nodes, now_ms, cx);
         let plan = record.as_ref().map(|r| r.plan.as_slice()).unwrap_or_default();
         let lead = record.as_ref().map_or("claude", |r| r.lead.id());
         let waves = self.waves_after(orchestrator, nodes, plan, lead, cx);
@@ -2007,11 +2237,17 @@ impl Workbench {
                 wanted.push((session, since_of(&pane)));
             }
         }
-        for record in self.session_board.shown(on) {
+        // A remote page shows closed ones too: the newest few.
+        let remote_page = crate::ui::now_ms() < self.session_board.remote_until;
+        let mut closed_for_page = 0;
+        for record in self.session_board.shown(on).iter().rev() {
             let pane = self.pane_of_record(record, cx);
             // One whose terminal is closed is read while it is shown.
             if pane.is_none() && !(on_page && selected == Some(Thread::Orchestration(record.id))) {
-                continue;
+                if !remote_page || closed_for_page >= REMOTE_CLOSED_READ || record.session.is_empty() {
+                    continue;
+                }
+                closed_for_page += 1;
             }
             if !wanted.iter().any(|(s, _)| *s == record.session) {
                 wanted.push((record.session.clone(), pane.as_ref().and_then(since_of)));
@@ -2036,12 +2272,9 @@ impl Workbench {
                 if text.is_empty() {
                     return;
                 }
-                if target.read(cx).status.needs_user() {
-                    return this.show_toast(t(cx, "sessions.message_waiting"), cx);
+                if this.send_session_message(&target, text, cx) {
+                    this.session_board.message = None;
                 }
-                target.update(cx, |view, cx| view.submit_prompt(text, cx));
-                this.session_board.message = None;
-                this.show_toast(t(cx, "sessions.message_sent"), cx);
             }
             TextInputEvent::Cancelled => {
                 this.session_board.message = None;
@@ -2052,6 +2285,18 @@ impl Workbench {
         input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
         self.session_board.message = Some((pane_id, input, subscription));
         cx.notify();
+    }
+
+    /// Sends `text` to a session as if typed there; a session waiting for an answer would take it as
+    /// that answer, so it is not sent then. Whether it was sent.
+    pub(super) fn send_session_message(&mut self, target: &Pane, text: String, cx: &mut Context<Self>) -> bool {
+        if target.read(cx).status.needs_user() {
+            self.show_toast(t(cx, "sessions.message_waiting"), cx);
+            return false;
+        }
+        target.update(cx, |view, cx| view.submit_prompt(text, cx));
+        self.show_toast(t(cx, "sessions.message_sent"), cx);
+        true
     }
 
     /// A parallel run was let start: kept for the workflow view, its tasks added as each opens.

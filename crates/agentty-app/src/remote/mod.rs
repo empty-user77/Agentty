@@ -19,6 +19,8 @@
 //! testing; a release build has no such mode (`dev_mode`).
 
 pub mod auth;
+pub mod board;
+pub mod chat;
 pub mod conn;
 pub mod devproxy;
 pub mod files;
@@ -40,6 +42,8 @@ const KEYCHAIN_ACCOUNT: &str = "password";
 const TICK: Duration = Duration::from_millis(200);
 const FAST_TICK: Duration = Duration::from_millis(30);
 const FAST_FOR: Duration = Duration::from_millis(1500);
+/// How often the board is copied out while a page asks for it.
+const BOARD_EVERY: Duration = Duration::from_secs(1);
 /// How often Tailscale is asked whether it still runs (and, while off for that, whether it is
 /// back).
 const TAILSCALE_CHECK: Duration = Duration::from_secs(3);
@@ -130,6 +134,8 @@ pub struct Remote {
     last_dashboard: Option<std::time::Instant>,
     /// When the workspace list was last built: at most every TICK, even in fast rounds.
     last_overview: Option<std::time::Instant>,
+    /// When the board was last copied out, while a page asks for it.
+    last_board: Option<std::time::Instant>,
     /// When the page was last checked through Tailscale, whether an answer is awaited, and how
     /// many checks in a row failed.
     last_health: Option<std::time::Instant>,
@@ -1025,7 +1031,15 @@ fn tick(cx: &mut App) {
                 continue;
             }
         }
-        for window in &windows {
+        // Each window keeps the list of orchestrations: the one holding its terminal goes first.
+        let mut order = windows.clone();
+        if let Some(id) = match &command {
+            server::Command::Orchestration(asked) => asked.id(),
+            _ => None,
+        } {
+            order.sort_by_key(|window| !window.update(cx, |wb, _, cx| wb.remote_holds_orchestration(id, cx)).unwrap_or(false));
+        }
+        for window in &order {
             let handled = window.update(cx, |wb, _, cx| wb.remote_apply(&command, cx)).unwrap_or(false);
             if handled {
                 break;
@@ -1039,7 +1053,13 @@ fn tick(cx: &mut App) {
     if overview {
         remote.last_overview = Some(std::time::Instant::now());
     }
+    let board_due = hub.board_asked() && remote.last_board.is_none_or(|at| at.elapsed() >= BOARD_EVERY);
+    if board_due {
+        remote.last_board = Some(std::time::Instant::now());
+    }
     let watched = hub.watched();
+    let chats = if overview { hub.chats_asked() } else { Vec::new() };
+    let mut board = board_due.then(board::Board::default);
     let (mut workspaces, mut sessions, mut automations) = (Vec::new(), Vec::new(), Vec::new());
     for window in &windows {
         let _ = window.update(cx, |wb, _, cx| {
@@ -1048,6 +1068,14 @@ fn tick(cx: &mut App) {
                 workspaces.extend(w);
                 sessions.extend(s);
                 automations.extend(wb.remote_automations(cx));
+            }
+            for pane in &chats {
+                if let Some(live) = wb.remote_chat_live(*pane, cx) {
+                    hub.publish_chat_live(*pane, live);
+                }
+            }
+            if let Some(board) = &mut board {
+                board.merge(wb.remote_board(cx));
             }
             for pane in &watched {
                 if let Some(screen) = wb.remote_screen(*pane, cx) {
@@ -1059,6 +1087,9 @@ fn tick(cx: &mut App) {
     if overview {
         fill_dev_servers(&mut workspaces, cx);
         hub.publish(workspaces, sessions, plugin_overview(&automations, cx));
+    }
+    if let Some(board) = board {
+        hub.publish_board(board);
     }
     // The dashboard's counters and log follow along, about once a second, while it is open.
     let remote = cx.global_mut::<Remote>();
