@@ -754,6 +754,7 @@ impl Workbench {
             .children(mic)
             .child(action);
         let field = div()
+            .relative()
             .pl_1p5()
             .pr_1p5()
             .py_1p5()
@@ -767,6 +768,7 @@ impl Workbench {
             .min_h(px(46.))
             .children(self.render_quote(state, cx))
             .children(self.render_attachments(state, cx))
+            .children(self.render_slash_list(state, cx))
             .child(row);
         let chip = |key: &'static str| {
             div()
@@ -834,7 +836,9 @@ impl Workbench {
                 .px_4()
                 .pt_1()
                 .pb_3()
-                .child(column(div().flex().flex_col().gap_1p5().child(field).child(footer)))
+                .child(column(
+                    div().flex().flex_col().gap_1p5().children(self.render_chat_background(state, cx)).child(field).child(footer),
+                ))
                 .into_any_element(),
         )
     }

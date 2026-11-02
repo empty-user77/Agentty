@@ -1984,6 +1984,7 @@ impl Workbench {
             .h_full()
             .px_1()
             .overflow_x_scroll()
+            .track_scroll(&self.tab_strip_scroll)
             .when(in_title_bar, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()));
         // The start page is always the first tab, whatever else is open: it is how everything else
         // is reached, and hunting for it depended on which screen you happened to be on.
@@ -2188,6 +2189,37 @@ impl Workbench {
                             ))
                         })
                         .child(label.to_string())
+                        // In a narrow window the page in front may be past the strip's end: brought
+                        // into view once, so the strip can still be scrolled away from it.
+                        .when(active, |d| {
+                            let (strip, revealed, key) = (self.tab_strip_scroll.clone(), self.tab_revealed.clone(), label.to_string());
+                            d.child(
+                                gpui::canvas(
+                                    move |_, _, _| {},
+                                    move |bounds, _, window, _| {
+                                        let width = f32::from(window.bounds().size.width) as i32;
+                                        if revealed.borrow().as_ref() == Some(&(key.clone(), width)) {
+                                            return;
+                                        }
+                                        *revealed.borrow_mut() = Some((key.clone(), width));
+                                        let shown = strip.bounds();
+                                        let past = bounds.origin.x + px(40.) - (shown.origin.x + shown.size.width);
+                                        // The tab's start, before the strip's start (its close button
+                                        // and words are after the point this is drawn at).
+                                        let before = shown.origin.x + px(160.) - bounds.origin.x;
+                                        let offset = strip.offset();
+                                        if past > px(0.) {
+                                            strip.set_offset(gpui::point(offset.x - past, offset.y));
+                                            window.refresh();
+                                        } else if before > px(0.) && offset.x < px(0.) {
+                                            strip.set_offset(gpui::point((offset.x + before).min(px(0.)), offset.y));
+                                            window.refresh();
+                                        }
+                                    },
+                                )
+                                .size_0(),
+                            )
+                        })
                         .when(active, |d| {
                             d.child(icon_only(
                                 "page-close",

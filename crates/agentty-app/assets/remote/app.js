@@ -34,7 +34,7 @@ const STRINGS = {
     fileError: { 403: "This file can't be opened from here.", 404: "Not found in this terminal's folder.", 413: "Too large to show here.", 415: "This kind of file can't be shown.", 0: "Couldn't open this file." },
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
-    chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
+    backgroundRunning: "{name}: running in the background…", backgroundMore: "+{n} more", chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
     devServers: "Dev servers", portOpen: "Open the server on port {port}", portOpening: "Opening…", portSlow: "The server didn't open in time. Try again.", portGone: "This server isn't running any more.", portFailed: "Couldn't open this server. Try again.",
     portErrors: { taken: "Tailscale already serves port {port} for something else.", funnel: "Port {port} is shared publicly with Tailscale Funnel, so Agentty won't open it.", enable: "Turn on HTTPS for your tailnet in the Tailscale admin console first.", failed: "Couldn't open this server. Try again." },
   },
@@ -60,7 +60,7 @@ const STRINGS = {
     fileError: { 403: "여기서는 열 수 없는 파일입니다.", 404: "이 터미널의 폴더에서 찾을 수 없습니다.", 413: "너무 커서 여기서 보여 줄 수 없습니다.", 415: "보여 줄 수 없는 종류의 파일입니다.", 0: "파일을 열지 못했습니다." },
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
-    chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
+    backgroundRunning: "{name} 백그라운드 작업 처리 중…", backgroundMore: "외 {n}개", chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
     devServers: "개발 서버", portOpen: "{port} 포트 서버 열기", portOpening: "여는 중…", portSlow: "서버가 제때 열리지 않았습니다. 다시 시도해 주세요.", portGone: "이 서버는 더 이상 실행 중이 아닙니다.", portFailed: "이 서버를 열지 못했습니다. 다시 시도해 주세요.",
     portErrors: { taken: "Tailscale이 {port} 포트를 이미 다른 용도로 쓰고 있습니다.", funnel: "{port} 포트가 Tailscale Funnel로 공개되어 있어 Agentty가 열지 않습니다.", enable: "먼저 Tailscale 관리 콘솔에서 tailnet의 HTTPS를 켜 주세요.", failed: "이 서버를 열지 못했습니다. 다시 시도해 주세요." },
   },
@@ -86,7 +86,7 @@ const STRINGS = {
     fileError: { 403: "ここからは開けないファイルです。", 404: "このターミナルのフォルダに見つかりません。", 413: "大きすぎて表示できません。", 415: "表示できない種類のファイルです。", 0: "ファイルを開けませんでした。" },
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
-    chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
+    backgroundRunning: "{name}: バックグラウンドで処理中…", backgroundMore: "他 {n} 件", chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
     devServers: "開発サーバー", portOpen: "ポート {port} のサーバーを開く", portOpening: "開いています…", portSlow: "サーバーが時間内に開きませんでした。もう一度お試しください。", portGone: "このサーバーはもう動いていません。", portFailed: "このサーバーを開けませんでした。もう一度お試しください。",
     portErrors: { taken: "Tailscale はポート {port} を既に別の用途で使っています。", funnel: "ポート {port} は Tailscale Funnel で公開されているため、Agentty は開きません。", enable: "先に Tailscale の管理コンソールで tailnet の HTTPS をオンにしてください。", failed: "このサーバーを開けませんでした。もう一度お試しください。" },
   },
@@ -112,7 +112,7 @@ const STRINGS = {
     fileError: { 403: "无法从这里打开此文件。", 404: "在此终端的文件夹中找不到。", 413: "文件太大，无法在此显示。", 415: "无法显示此类文件。", 0: "无法打开此文件。" },
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
-    chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
+    backgroundRunning: "{name}：后台处理中…", backgroundMore: "另外 {n} 个", chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
     devServers: "开发服务器", portOpen: "打开端口 {port} 上的服务器", portOpening: "正在打开…", portSlow: "服务器未能及时打开，请重试。", portGone: "这个服务器已不再运行。", portFailed: "无法打开这个服务器，请重试。",
     portErrors: { taken: "Tailscale 已将端口 {port} 用于其他用途。", funnel: "端口 {port} 已通过 Tailscale Funnel 公开，Agentty 不会打开它。", enable: "请先在 Tailscale 管理控制台中为 tailnet 开启 HTTPS。", failed: "无法打开这个服务器，请重试。" },
   },
@@ -138,7 +138,7 @@ const STRINGS = {
     fileError: { 403: "Diese Datei kann von hier aus nicht geöffnet werden.", 404: "Im Ordner dieses Terminals nicht gefunden.", 413: "Zu groß, um hier angezeigt zu werden.", 415: "Diese Art von Datei kann nicht angezeigt werden.", 0: "Diese Datei konnte nicht geöffnet werden." },
     pstate: { running: "Läuft", starting: "Startet", stopped: "Gestoppt", failed: "Mit Fehler gestoppt", consent: "Wartet auf dein OK", off: "Aus" },
     astate: { working: "Arbeitet", idle: "Bereit", error: "Fehler" },
-    chat: "Chat", chatHint: "Nachricht an den leitenden Agenten …", chatEmpty: "Schreib dem leitenden Agenten. Er plant die Arbeit und startet Helfer auf dem Mac; ihre Terminals stehen in der Liste der Bereiche.", leadWaits: "Der leitende Agent wartet in seinem Terminal auf dich.",
+    backgroundRunning: "{name}: läuft im Hintergrund …", backgroundMore: "+{n} weitere", chat: "Chat", chatHint: "Nachricht an den leitenden Agenten …", chatEmpty: "Schreib dem leitenden Agenten. Er plant die Arbeit und startet Helfer auf dem Mac; ihre Terminals stehen in der Liste der Bereiche.", leadWaits: "Der leitende Agent wartet in seinem Terminal auf dich.",
     devServers: "Entwicklungsserver", portOpen: "Server auf Port {port} öffnen", portOpening: "Wird geöffnet …", portSlow: "Der Server hat sich nicht rechtzeitig geöffnet. Versuche es erneut.", portGone: "Dieser Server läuft nicht mehr.", portFailed: "Dieser Server konnte nicht geöffnet werden. Versuche es erneut.",
     portErrors: { taken: "Tailscale stellt Port {port} schon für etwas anderes bereit.", funnel: "Port {port} wird mit Tailscale Funnel öffentlich geteilt, deshalb öffnet Agentty ihn nicht.", enable: "Schalte zuerst HTTPS für dein Tailnet in der Tailscale-Verwaltungskonsole ein.", failed: "Dieser Server konnte nicht geöffnet werden. Versuche es erneut." },
   },
@@ -889,6 +889,119 @@ function renderBody() {
 }
 
 /// The lead of a chat tab, as the chat: what the team runs on, then the conversation.
+// ---- A chat's `/` list and its background work ----
+//
+// The same data the desktop's chat shows: `/api/skills` and the `background` of `/api/chat`. The list
+// orders and matches as `agentty_bridge::extensions::slash_find` does.
+
+const slash = { pane: null, items: null, readAt: 0, rows: [], pick: 0, closedFor: null };
+
+function slashRows(text) {
+  const match = /^([/$])(\S*)$/.exec(text);
+  if (!match || !slash.items || slash.closedFor === text) return [];
+  const query = match[2].toLowerCase();
+  const word = (item) => item.invocation.replace(/^[/$]+/, "").toLowerCase();
+  const usable = slash.items.filter((item) => match[1] === "/" || item.invocation.startsWith("$"));
+  return [
+    ...usable.filter((item) => word(item).startsWith(query)),
+    ...usable.filter((item) => !word(item).startsWith(query) && word(item).includes(query)),
+  ].slice(0, 50);
+}
+
+async function updateSlashList() {
+  const text = $("prompt").value;
+  if (slash.closedFor !== text) slash.closedFor = null;
+  slash.pick = 0;
+  const asked = inChat() && /^[/$]\S*$/.test(text);
+  if (asked && (slash.pane !== state.pane || Date.now() - slash.readAt > 15000)) {
+    slash.pane = state.pane;
+    slash.readAt = Date.now();
+    try {
+      const res = await fetch(`/api/skills?pane=${state.pane}`, { credentials: "same-origin" });
+      slash.items = res.ok ? (await res.json()).items : [];
+    } catch {
+      slash.items = [];
+      slash.readAt = 0;
+    }
+  }
+  renderSlashList();
+}
+
+function renderSlashList() {
+  const list = $("slash-list");
+  slash.rows = inChat() ? slashRows($("prompt").value) : [];
+  list.hidden = !slash.rows.length;
+  list.replaceChildren(
+    ...slash.rows.map((item, index) => {
+      const row = el("button", index === slash.pick ? "picked" : "");
+      row.type = "button";
+      row.append(el("span", "name", item.invocation), el("span", "desc", item.description || ""));
+      row.addEventListener("click", () => pickSlash(item));
+      return row;
+    }),
+  );
+  const picked = list.querySelector(".picked");
+  if (picked) picked.scrollIntoView({ block: "nearest" });
+}
+
+// Into the box with a space after it: the rest of the prompt goes there. Nothing is sent.
+function pickSlash(item) {
+  const prompt = $("prompt");
+  prompt.value = item.invocation + " ";
+  prompt.dispatchEvent(new Event("input"));
+  prompt.focus();
+}
+
+function slashKey(e) {
+  if ($("slash-list").hidden || e.isComposing) return false;
+  const count = slash.rows.length;
+  if (e.key === "ArrowDown") slash.pick = (slash.pick + 1) % count;
+  else if (e.key === "ArrowUp") slash.pick = (slash.pick + count - 1) % count;
+  else if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+    e.preventDefault();
+    pickSlash(slash.rows[slash.pick]);
+    return true;
+  } else if (e.key === "Escape") slash.closedFor = $("prompt").value;
+  else return false;
+  e.preventDefault();
+  renderSlashList();
+  return true;
+}
+
+function renderBackground(tasks) {
+  const line = $("chat-background");
+  line.hidden = !tasks.length;
+  if (!tasks.length) return line.replaceChildren();
+  const parts = [el("span", "", T.backgroundRunning.replace("{name}", tasks[0].label))];
+  if (tasks.length > 1) parts.push(el("span", "more", T.backgroundMore.replace("{n}", String(tasks.length - 1))));
+  line.replaceChildren(...parts);
+}
+
+// While a chat is open: an agent between turns says nothing else that would tell.
+const backgroundLook = { pane: null, rev: "" };
+async function lookAtBackground() {
+  if (!inChat()) {
+    backgroundLook.pane = null;
+    return renderBackground([]);
+  }
+  if (backgroundLook.pane !== state.pane) {
+    backgroundLook.pane = state.pane;
+    backgroundLook.rev = "";
+    renderBackground([]);
+  }
+  const pane = state.pane;
+  try {
+    const res = await fetch(`/api/chat?pane=${pane}&rev=${backgroundLook.rev}`, { credentials: "same-origin" });
+    if (res.status !== 200 || pane !== state.pane) return;
+    const answer = await res.json();
+    backgroundLook.rev = answer.rev || "";
+    renderBackground(answer.background || []);
+  } catch {
+    // Offline for a moment: the next look tries again.
+  }
+}
+setInterval(lookAtBackground, 4000);
+
 function renderChat() {
   const chat = inChat() && currentChat();
   const head = $("chat-head");
@@ -1929,7 +2042,9 @@ function setupPrompt() {
     prompt.style.height = Math.min(prompt.scrollHeight, window.innerHeight * 0.3) + "px";
   };
   prompt.addEventListener("input", grow);
+  prompt.addEventListener("input", updateSlashList);
   prompt.addEventListener("keydown", (e) => {
+    if (slashKey(e)) return;
     // Enter sends on a computer; Shift+Enter (or a phone's return key) adds a line.
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(pointer: fine)").matches) {
       e.preventDefault();

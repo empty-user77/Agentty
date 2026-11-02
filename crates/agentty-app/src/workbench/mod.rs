@@ -658,6 +658,10 @@ pub struct Workbench {
     /// The keyboard goes to the workspace in front at the next render: set where the workspace
     /// changed without a window at hand (leaving a plugin's workspace).
     refocus: bool,
+    /// The title bar's tabs, when they don't all fit.
+    tab_strip_scroll: gpui::ScrollHandle,
+    /// The page tab last brought into view, and at which window width.
+    tab_revealed: Rc<std::cell::RefCell<Option<(String, i32)>>>,
     /// The plugin whose workspace is in front and whose panel it brought up.
     plugin_workspace_shown: Option<String>,
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
@@ -1051,6 +1055,8 @@ impl Workbench {
             plugin_browsers: Vec::new(),
             before_plugin_workspace: None,
             refocus: false,
+            tab_strip_scroll: gpui::ScrollHandle::new(),
+            tab_revealed: Default::default(),
             ghosted: false,
             plugin_workspace_shown: None,
             stashed_browser: None,

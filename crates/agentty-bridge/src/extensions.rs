@@ -171,6 +171,68 @@ pub fn project_only(agent: Agent, project: &Path) -> Vec<Extension> {
     items
 }
 
+/// A skill or command that can be typed into an agent's input, for a chat's `/` list.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SlashItem {
+    pub name: String,
+    /// What goes into the input: `/jira-skill`, `$fix-it` for Codex.
+    pub invocation: String,
+    pub description: String,
+}
+
+/// What can be typed into `agent`'s input in `project`, closest scope first and each name once.
+/// Reads folders: not for the UI thread.
+pub fn slash_items(agent: Agent, project: Option<&Path>) -> Vec<SlashItem> {
+    let mut seen = std::collections::HashSet::new();
+    let mut items: Vec<Extension> = discover(agent, project)
+        .into_iter()
+        .filter(|item| matches!(item.kind, ExtensionKind::Skill | ExtensionKind::Command) && item.enabled && item.invocation.is_some())
+        .collect();
+    items.sort_by_key(|item| scope_rank(&item.scope));
+    let mut items: Vec<SlashItem> = items
+        .into_iter()
+        .filter_map(|item| {
+            let invocation = item.invocation?;
+            seen.insert(invocation.clone()).then_some(SlashItem { name: item.name, invocation, description: item.description })
+        })
+        .collect();
+    items.sort_by_key(|item| item.name.to_lowercase());
+    items
+}
+
+/// The word being looked up when `text` is a command still being typed: all of it, a `/` or `$` and
+/// no space. Anything after a space is the command's own text, and the list has done its work.
+pub fn slash_query(text: &str) -> Option<&str> {
+    let word = text.strip_prefix('/').or_else(|| text.strip_prefix('$'))?;
+    (!word.contains(char::is_whitespace)).then_some(word)
+}
+
+/// The items matching `query`: those starting with it first, then those containing it. The remote
+/// page orders them the same way, so both show the same thing.
+pub fn slash_matches<'a>(items: &'a [SlashItem], query: &str) -> Vec<&'a SlashItem> {
+    let query = query.to_lowercase();
+    let word = |item: &SlashItem| item.invocation.trim_start_matches(['/', '$']).to_lowercase();
+    let (mut first, mut then) = (Vec::new(), Vec::new());
+    for item in items {
+        let word = word(item);
+        if word.starts_with(&query) {
+            first.push(item);
+        } else if word.contains(&query) {
+            then.push(item);
+        }
+    }
+    first.extend(then);
+    first
+}
+
+/// What a list shows for what the composer holds. `/` looks through everything (Codex's skills are
+/// asked for with `$`, but nobody should have to know); `$` only through what `$` starts.
+pub fn slash_find<'a>(items: &'a [SlashItem], text: &str) -> Vec<&'a SlashItem> {
+    let Some(query) = slash_query(text) else { return Vec::new() };
+    let dollar = text.starts_with('$');
+    slash_matches(items, query).into_iter().filter(|item| !dollar || item.invocation.starts_with('$')).collect()
+}
+
 fn scope_rank(scope: &Scope) -> u8 {
     match scope {
         Scope::Project => 0,
@@ -883,6 +945,45 @@ pub fn mcp_remove_command(agent: Agent, name: &str, scope: &Scope) -> anyhow::Re
         Agent::Codex => ["codex", "mcp", "remove", name].map(String::from).to_vec(),
         other => anyhow::bail!("{} MCP servers are not managed here", other.display_name()),
     })
+}
+
+#[cfg(test)]
+mod slash_tests {
+    use super::*;
+
+    fn item(invocation: &str) -> SlashItem {
+        SlashItem { name: invocation.trim_start_matches('/').into(), invocation: invocation.into(), description: String::new() }
+    }
+
+    #[test]
+    fn a_query_is_a_command_still_being_typed() {
+        assert_eq!(slash_query("/"), Some(""));
+        assert_eq!(slash_query("/jira"), Some("jira"));
+        assert_eq!(slash_query("$fix"), Some("fix"));
+        assert_eq!(slash_query("/jira do it"), None);
+        assert_eq!(slash_query("/jira "), None, "picked: the rest is the prompt");
+        assert_eq!(slash_query("/jira\nmore"), None);
+        assert_eq!(slash_query("hello /jira"), None);
+        assert_eq!(slash_query(""), None);
+    }
+
+    #[test]
+    fn a_dollar_is_only_a_command_where_the_agent_has_such_commands() {
+        let items = [item("/review"), item("$fix-it")];
+        assert_eq!(slash_find(&items, "/").len(), 2);
+        assert_eq!(slash_find(&items, "$").len(), 1, "$HOME is not a list of Claude's skills");
+        assert!(slash_find(&items, "$HOME").is_empty());
+        assert!(slash_find(&items, "/review now").is_empty());
+    }
+
+    #[test]
+    fn what_starts_with_the_query_comes_first() {
+        let items = [item("/a-jira"), item("/jira-skill"), item("/review"), item("/plugin:jira")];
+        let found: Vec<&str> = slash_matches(&items, "JIRA").iter().map(|i| i.invocation.as_str()).collect();
+        assert_eq!(found, ["/jira-skill", "/a-jira", "/plugin:jira"]);
+        assert_eq!(slash_matches(&items, "").len(), 4);
+        assert!(slash_matches(&items, "zzz").is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -44,6 +44,7 @@ mod chat_view;
 pub(super) use chat_view::footer_model;
 mod selectable;
 pub(super) mod selection_ui;
+mod slash;
 
 /// Workers on screen at once, in a grid of two columns.
 pub const MAX_WORKERS: usize = 4;
@@ -137,6 +138,10 @@ pub struct ChatState {
     open: Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     /// The model menu under the composer.
     model_menu: bool,
+    /// The `/` list over the composer.
+    slash: slash::SlashList,
+    /// What the agent has running in the background (a plain chat's transcript says).
+    background: Vec<agentty_bridge::chat_log::BackgroundTask>,
     /// Files the next message carries (a plain chat's composer: `+` or dropped on the chat).
     attachments: Vec<PathBuf>,
     /// What the next message replies to: a selection, quoted in front of it.
@@ -751,6 +756,8 @@ impl Workbench {
                 plain,
                 open: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
                 model_menu: false,
+                slash: Default::default(),
+                background: Vec::new(),
                 attachments: Vec::new(),
                 quote: None,
                 stopped_at: None,
@@ -935,8 +942,22 @@ impl Workbench {
         state.input.as_ref().map(|(input, _)| input.clone())
     }
 
+    /// A chat in front whose hidden terminal still has the keyboard: switching to a chat leaves its
+    /// terminal up until the conversation is read, the keyboard goes there meanwhile, and what is
+    /// typed next would land in a terminal nobody sees.
+    fn keyboard_to_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for state in self.chats.values().filter(|state| state.plain) {
+            if gpui::Focusable::focus_handle(state.lead.read(cx), cx).is_focused(window) {
+                if let Some(input) = self.chat_input_for(&state.lead, cx) {
+                    window.focus(&gpui::Focusable::focus_handle(&input, cx));
+                }
+            }
+        }
+    }
+
     /// Forgets chats whose lead is gone, and gives new ones their composer.
     pub(super) fn prepare_chats(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.keyboard_to_composer(window, cx);
         let chat_view = crate::settings::settings(cx).chat_view;
 
         let panes = self.all_panes();
@@ -988,8 +1009,13 @@ impl Workbench {
                 }
             });
             let subscription = cx.subscribe_in(&input, window, move |this, _, event: &TextInputEvent, window, cx| {
-                if let TextInputEvent::Confirmed = event {
-                    this.send_chat_message(id, window, cx);
+                if this.slash_key(id, event, window, cx) {
+                    return;
+                }
+                match event {
+                    TextInputEvent::Confirmed => this.send_chat_message(id, window, cx),
+                    TextInputEvent::Changed => this.slash_text_changed(id, cx),
+                    _ => {}
                 }
             });
             if let Some(state) = self.chats.get_mut(&id) {
@@ -1125,6 +1151,19 @@ impl Workbench {
         }
         if setup != state.setup_screen {
             state.setup_screen = setup;
+            cx.notify();
+        }
+        // Each look: a notice that a task ended writes no row, and the agent is idle by then.
+        let since = {
+            let lead = state.lead.read(cx);
+            lead.agent_since_ms.unwrap_or(lead.launched_at_ms)
+        };
+        let running = match &state.log {
+            Some((_, reader)) => reader.try_lock().ok().map(|reader| reader.background(since)),
+            None => Some(Vec::new()),
+        };
+        if let Some(running) = running.filter(|running| *running != state.background) {
+            state.background = running;
             cx.notify();
         }
         if state.loading {
@@ -2158,6 +2197,19 @@ impl Workbench {
                 self.attach_paths(id, &[PathBuf::from(path.trim())], window, cx);
             }
             // What the pane in front runs and what its chat reads.
+            // What the composer holds, its `/` list and the background line, as they stand.
+            ("slash", _) => {
+                let Some(pane) = self.active_pane() else { return };
+                let id = pane.entity_id();
+                let Some(state) = self.chats.get(&id) else { return };
+                let text = state.input.as_ref().map(|(input, _)| input.read(cx).text().to_string()).unwrap_or_default();
+                let rows: Vec<String> = self.slash_rows(id, cx).into_iter().map(|item| item.invocation).collect();
+                let tasks: Vec<&str> = state.background.iter().map(|task| task.label.as_str()).collect();
+                eprintln!(
+                    "chat-slash: {}",
+                    serde_json::json!({ "text": text, "rows": rows, "pick": state.slash.picked(), "background": tasks })
+                );
+            }
             ("info", _) => {
                 let Some(pane) = self.active_pane() else { return };
                 let view = pane.read(cx);

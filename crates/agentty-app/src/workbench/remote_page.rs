@@ -152,6 +152,7 @@ impl Workbench {
                         chat_capable: chat_source.is_some(),
                         chat_view: self.remote_chat_shown(&pane),
                         chat_source,
+                        agent_since_ms: view.agent_since_ms.unwrap_or(view.launched_at_ms),
                         dir,
                         roots,
                     });

@@ -63,6 +63,8 @@ pub struct ChatState<'a> {
     pub needs_user: bool,
     pub elapsed: Option<u64>,
     pub live: Option<&'a ChatLive>,
+    /// When the agent now running started: background tasks of an earlier run are gone.
+    pub agent_since_ms: u64,
 }
 
 /// The entries as JSON, made again only when the conversation changed.
@@ -156,6 +158,10 @@ impl Follow {
             render(entries, cut, home)
         });
         let live = state.live;
+        // What the agent has running in the background, as the desktop's chat shows it.
+        let tasks = self.reader.as_ref().map(|reader| reader.background(state.agent_since_ms)).unwrap_or_default();
+        let background: Vec<Value> =
+            tasks.iter().map(|task| json!({ "id": task.id, "label": truncate_chars(&task.label, MAX_LABEL) })).collect();
         let mut head = json!({
             "pane": state.pane,
             "agent": source.agent.id(),
@@ -167,6 +173,7 @@ impl Follow {
             "mode": live.and_then(|live| live.mode),
             "effort": live.and_then(|live| live.effort),
             "truncated": rendered.truncated,
+            "background": background,
         });
         if let Some(question) = live.and_then(|live| live.question.as_ref()) {
             let options: Vec<Value> = question
@@ -343,7 +350,7 @@ mod tests {
     const HOME: &str = "/Users/me";
 
     fn state<'a>(live: Option<&'a ChatLive>) -> ChatState<'a> {
-        ChatState { pane: 7, status: "Working", working: true, needs_user: false, elapsed: Some(3), live }
+        ChatState { pane: 7, status: "Working", working: true, needs_user: false, elapsed: Some(3), live, agent_since_ms: 0 }
     }
 
     fn temp_log(name: &str, text: &str) -> PathBuf {
@@ -354,6 +361,28 @@ mod tests {
 
     fn source() -> ChatSource {
         ChatSource { agent: Agent::Claude, session: Some("session".into()) }
+    }
+
+    #[test]
+    fn an_answer_says_what_runs_in_the_background_and_rev_moves_when_it_ends() {
+        let started = r#"{"type":"assistant","timestamp":"2026-11-02T06:55:12.609Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 4","description":"Wait a bit","run_in_background":true}}]}}"#;
+        let path = temp_log("background", &format!("{started}\n"));
+        let mut follow = Follow::at_path(source(), path.clone());
+        let (rev, body) = follow.answer(&source(), &state(None), "");
+        let answer: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(answer["background"][0]["label"], "Wait a bit");
+        // An agent started after the task: the task went with the last one.
+        let later = ChatState { agent_since_ms: u64::MAX / 2, ..state(None) };
+        let (_, body) = follow.answer(&source(), &later, "");
+        let answer: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(answer["background"].as_array().unwrap().len(), 0);
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, r#"{{"type":"user","message":{{"content":"<task-notification><tool-use-id>t1</tool-use-id><status>completed</status></task-notification>"}}}}"#).unwrap();
+        let (ended, body) = follow.answer(&source(), &state(None), "");
+        let answer: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(answer["background"].as_array().unwrap().len(), 0);
+        assert_ne!(rev, ended, "an app polling by rev hears it ended");
     }
 
     #[test]

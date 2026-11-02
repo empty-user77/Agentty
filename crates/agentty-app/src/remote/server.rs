@@ -80,6 +80,9 @@ const BOARD_WAIT: Duration = Duration::from_millis(1500);
 /// Transcripts being read at once, and panes whose reading is kept for their next poll: each holds
 /// up to a window of the conversation in memory.
 const MAX_CHAT_READS: usize = 4;
+/// What one `/api/skills` answer holds at most.
+const MAX_SKILLS: usize = 200;
+const MAX_SKILL_TEXT: usize = 200;
 const MAX_FOLLOWS: usize = 6;
 /// Transcripts being read now (see [`MAX_CHAT_READS`]).
 static CHAT_READS: AtomicUsize = AtomicUsize::new(0);
@@ -977,6 +980,7 @@ impl Hub {
             ("GET", "/api/folders") => Routed::Response(self.folders(request, &config)),
             ("GET", "/api/file") => Routed::Response(self.file(request)),
             ("GET", "/api/chat") => Routed::Response(self.chat(request)),
+            ("GET", "/api/skills") => Routed::Response(self.skills(request)),
             ("GET", "/api/board") => Routed::Response(self.board(request, &config)),
             ("GET", "/api/sessions") => {
                 let voice = self.voice_available();
@@ -1114,12 +1118,41 @@ impl Hub {
             needs_user: session.needs_user,
             elapsed: session.elapsed,
             live: live.as_ref(),
+            agent_since_ms: session.agent_since_ms,
         };
         let (rev, body) = follow.answer(source, &state, &chat::home_text());
         if request.query_param("rev").as_deref() == Some(rev.as_str()) {
             return Response::new(304, "application/json; charset=utf-8", Vec::new());
         }
         Response::new(200, "application/json; charset=utf-8", body)
+    }
+
+    /// `GET /api/skills`: what can be typed into the agent of a pane on the list, for a composer's `/`
+    /// list. The folder and the agent are the app's, never the request's; paths stay out of it.
+    fn skills(&self, request: &Request) -> Response {
+        let Some(pane) = request.query_param("pane").and_then(|p| p.parse::<u64>().ok()) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let found = {
+            let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+            view.sessions.iter().find(|s| s.pane == pane).map(|s| (s.chat_source.as_ref().map(|source| source.agent), s.dir.clone()))
+        };
+        let Some((agent, dir)) = found else { return Response::json(404, &json!({ "error": "no such session" })) };
+        let Some(agent) = agent else { return Response::json(409, &json!({ "error": "no chat" })) };
+        let Some(_slot) = Slot::take(&CHAT_READS, MAX_CHAT_READS) else {
+            return Response::json(429, &json!({ "error": "busy" }));
+        };
+        let items: Vec<serde_json::Value> = agentty_bridge::extensions::slash_items(agent, Some(&dir))
+            .into_iter()
+            .take(MAX_SKILLS)
+            .map(|item| {
+                let description: String = item.description.chars().take(MAX_SKILL_TEXT).collect();
+                json!({ "name": item.name, "invocation": item.invocation, "description": description })
+            })
+            .collect();
+        let mut answer = json!({ "items": items });
+        chat::clean_value(&mut answer, &chat::home_text());
+        Response::json(200, &answer)
     }
 
     /// What the screen of a chat says: as last read, or a moment's wait for the app when that is
@@ -2113,6 +2146,7 @@ mod tests {
             chat_capable: false,
             chat_view: false,
             chat_source: None,
+            agent_since_ms: 0,
             dir: std::path::PathBuf::new(),
             roots: Vec::new(),
         }
@@ -2410,7 +2444,7 @@ mod tests {
     fn everything_needs_a_session() {
         let hub = hub("secret-password");
         hub.publish(Vec::new(), vec![session(7)], Vec::new());
-        for path in ["/api/sessions", "/api/events", "/api/events?pane=7", "/api/chat?pane=7", "/api/board"] {
+        for path in ["/api/sessions", "/api/events", "/api/events?pane=7", "/api/chat?pane=7", "/api/skills?pane=7", "/api/board"] {
             assert_eq!(send(&hub, &Req::get(path).raw()).0, 401, "{path}");
         }
         assert_eq!(send(&hub, &Req::post("/api/input", json!({ "pane": 7, "kind": "text", "text": "ls" })).raw()).0, 401);
@@ -2748,6 +2782,24 @@ mod tests {
         let follow = Arc::new(Mutex::new(Follow::at_path(source, path.clone())));
         hub.follows.lock().unwrap().insert(pane, (Instant::now(), follow));
         path
+    }
+
+    #[test]
+    fn skills_are_a_listed_chats_own() {
+        let hub = hub("secret-password");
+        chat_pane(&hub, 7, "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n");
+        let cookie = sign_in(&hub, "secret-password");
+        let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw());
+        assert_eq!(get("/api/skills").0, 400, "which pane?");
+        assert_eq!(get("/api/skills?pane=x").0, 400);
+        assert_eq!(get("/api/skills?pane=99").0, 404, "a pane the page is not shown");
+        assert_eq!(get("/api/skills?pane=8").0, 409, "a shell has no skills");
+        let (status, _, body) = get("/api/skills?pane=7");
+        assert_eq!(status, 200, "{body}");
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        for item in value["items"].as_array().unwrap() {
+            assert!(item.get("path").is_none(), "where a skill's file is stays here");
+        }
     }
 
     #[test]

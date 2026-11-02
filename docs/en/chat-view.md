@@ -21,6 +21,12 @@ Chat view draws a Claude Code, Codex, Antigravity or Gemini CLI pane as a chat, 
 - Attach files with **+** or by dragging them in; they show as thumbnails and chips.
 - **Stop** interrupts the running turn. A message the agent puts back after a stop returns to the composer.
 
+## Skills and background work
+
+Type `/` in the composer to see the skills and commands the agent has. Keep typing to narrow the list, move with the arrow keys, and press Enter or Tab, or click, to pick one. It goes into the composer with room for more words and is not sent: press Enter or the send button when the message is ready. Esc closes the list.
+
+When the agent leaves work running in the background, a line over the composer names it until it finishes, so a quiet chat isn't mistaken for a finished one.
+
 ## The start screen
 
 A new session shows the agent and model, the folder (opens the files panel), the branch (opens Git), a few ways to begin that fill the composer without sending, and the agent's earlier sessions in this folder, picked up again with a click.

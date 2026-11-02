@@ -690,6 +690,8 @@ strings! {
     "chat.title" => ["Team", "팀", "チーム", "团队", "Team"],
     "chat.placeholder" => ["Message the lead agent… (Enter sends, Shift+Enter adds a line)", "리드 에이전트에게 메시지… (Enter 전송, Shift+Enter 줄바꿈)", "リードエージェントにメッセージ…（Enter で送信、Shift+Enter で改行）", "给主控智能体发消息…（Enter 发送，Shift+Enter 换行）", "Nachricht an den Lead-Agent … (Enter sendet, Shift+Enter fügt eine Zeile ein)"],
     "chat.show_terminal" => ["Terminal", "터미널", "ターミナル", "终端", "Terminal"],
+    "chat.background_running" => ["{name}: running in the background…", "{name} 백그라운드 작업 처리 중…", "{name}: バックグラウンドで処理中…", "{name}：后台处理中…", "{name}: läuft im Hintergrund …"],
+    "chat.background_more" => ["+{n} more", "외 {n}개", "他 {n} 件", "另外 {n} 个", "+{n} weitere"],
     "chat.placeholder_plain" => ["Describe a task or ask a question", "작업을 설명하거나 질문하세요", "タスクを説明するか質問してください", "描述任务或提出问题", "Beschreibe eine Aufgabe oder stelle eine Frage"],
     "chat.tool_write" => ["Created {target}", "{target} 생성", "{target} を作成", "创建 {target}", "{target} erstellt"],
     "chat.tool_edit" => ["Edited {target}", "{target} 수정", "{target} を編集", "编辑 {target}", "{target} bearbeitet"],

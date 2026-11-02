@@ -14,7 +14,15 @@ All notable changes to this project are documented here. The format follows
   period (7 days by default). Open it from the Monitoring tabs or a workspace's menu; set the period there or in
   Settings → General. Restored workspaces resume their sessions, orchestrations and board tickets.
 
+- Chat view: typing `/` in the composer lists the agent's skills and commands. Picking one puts it in the composer,
+  with room for more words, without sending it.
+- Chat view: a line over the composer names what the agent is running in the background until it finishes. The remote
+  page shows both for chat workspaces, and the remote API serves them to the apps (`/api/skills`, `background` in
+  `/api/chat`).
+
 ### Fixed
+- Right after switching a pane to chat view, typing went to its hidden terminal instead of the composer.
+- In a narrow window, the Monitoring tab in front could be past the end of the tab strip.
 - Typing in a pane could stop reaching it when an agent, or the page itself, moved focus inside an in-app browser
   page. A page now takes the keyboard only when you click in it.
 - The team board could show a background task's notification as a session's goal, in place of what you asked.

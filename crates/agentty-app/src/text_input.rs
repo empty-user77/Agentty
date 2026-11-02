@@ -114,6 +114,8 @@ pub struct TextInput {
     rows: usize,
     /// A message composer: Enter sends (Confirmed) and Shift+Enter adds a line.
     enter_sends: bool,
+    /// See [`TextInput::set_arrows_to_owner`].
+    arrows_to_owner: bool,
     /// First line drawn, when the text is taller than `rows`.
     scroll_line: usize,
     /// Each visible line of the last paint: where it starts in the content, and its layout.
@@ -172,6 +174,7 @@ impl TextInput {
             keep_pasted_lines: false,
             rows: 0,
             enter_sends: false,
+            arrows_to_owner: false,
             scroll_line: 0,
             last_lines: Vec::new(),
             menu_at: None,
@@ -229,6 +232,12 @@ impl TextInput {
     }
 
     /// Whether this field holds more than one line.
+    /// While set, Up and Down are told to the owner (a list open over the field) even with several
+    /// lines, instead of moving the caret.
+    pub fn set_arrows_to_owner(&mut self, on: bool) {
+        self.arrows_to_owner = on;
+    }
+
     pub fn is_multiline(&self) -> bool {
         self.rows > 1 || self.grow_to > 1
     }
@@ -1254,14 +1263,14 @@ impl Render for TextInput {
             .on_action(cx.listener(|_, _: &NextField, _, cx| cx.emit(TextInputEvent::Next)))
             .on_action(cx.listener(|_, _: &PreviousField, _, cx| cx.emit(TextInputEvent::Previous)))
             .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
-                if this.is_multiline() {
+                if this.is_multiline() && !this.arrows_to_owner {
                     this.move_line(false, false, cx);
                 } else {
                     cx.emit(TextInputEvent::Up);
                 }
             }))
             .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
-                if this.is_multiline() {
+                if this.is_multiline() && !this.arrows_to_owner {
                     this.move_line(true, false, cx);
                 } else {
                     cx.emit(TextInputEvent::Down);
