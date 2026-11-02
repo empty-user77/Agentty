@@ -216,7 +216,7 @@ pub fn next_free_window_slot() -> usize {
 }
 
 pub use account_usage::AccountUsage;
-pub(crate) use chat::user_parts;
+pub(crate) use chat::{prompt_words, user_parts};
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
 pub use plugin_panel::pin_installed_sidebar_plugins;
