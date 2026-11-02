@@ -1,9 +1,9 @@
 //! Signing in to a page with what Chrome already holds.
 //!
 //! When a page in the in-app browser asks to sign in, a bar over it offers Chrome's sign-in for
-//! that site. Once the user said "always", it is looked up by itself. Whatever happens stays in
-//! sight in the same bar, ending either signed in, or with the two ways forward: sign in here, or
-//! sign in in Chrome (picked up by itself).
+//! that site. Once the user said "always", it is looked up by itself. When Chrome holds nothing
+//! that works, the page is covered, blurred, until the sign-in shows up in Chrome (picked up by
+//! itself) or the user chooses to sign in right there.
 //!
 //! Only the cookies a browser would send to the page's own host are read, into the store of that
 //! tab. Plugins' pages never take part. No command lets an agent answer the bar or ask for a site:
@@ -31,10 +31,16 @@ const NOTICE_FOR: Duration = Duration::from_secs(6);
 const LOADED_RECENTLY: Duration = Duration::from_secs(30 * 60);
 /// Chrome writes its cookies to disk about every 30 seconds.
 const WAIT_EVERY: Duration = Duration::from_secs(6);
-const WAIT_FOR: Duration = Duration::from_secs(5 * 60);
+/// The cover stays until the user does something, so after a while Chrome is looked at less often.
+const WAIT_BRISKLY_FOR: Duration = Duration::from_secs(5 * 60);
+const WAIT_SLOWLY_EVERY: Duration = Duration::from_secs(30);
 const WAIT_RELOADS: u32 = 10;
 /// Cookies that keep changing in Chrome (analytics) must not keep reloading the page here.
 const WAIT_RELOAD_EVERY: Duration = Duration::from_secs(30);
+const WAIT_RELOAD_RARELY_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Width of the picture of the page behind the cover: stretched over the page it reads as a blur,
+/// and nothing on the page can be made out in it.
+const COVER_WIDTH: f64 = 56.;
 /// A page that never answered was unloaded or replaced: it is asked again after this.
 const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 /// Cookies not reported in by then are taken as in, so a tab can't wait on them for good.
@@ -120,6 +126,8 @@ pub(super) struct TabSignIn {
     read_pending: bool,
     /// Other profiles holding this site, tried when the first one doesn't sign in.
     other_profiles: Vec<ProfileCookies>,
+    /// The blurred picture of the page behind the cover, once it is taken.
+    cover: Rc<RefCell<Option<std::path::PathBuf>>>,
     /// When a change in Chrome last reloaded the page.
     wait_reloaded_at: Option<Instant>,
     /// What each profile held for the site while waiting for a sign-in in Chrome (`None`: not
@@ -168,7 +176,20 @@ impl TabSignIn {
     }
 
     fn may_reload_for_a_change(&self, reloads: u32, now: Instant) -> bool {
-        reloads < WAIT_RELOADS && self.wait_reloaded_at.is_none_or(|at| now.duration_since(at) >= WAIT_RELOAD_EVERY)
+        let every = if reloads < WAIT_RELOADS { WAIT_RELOAD_EVERY } else { WAIT_RELOAD_RARELY_EVERY };
+        self.wait_reloaded_at.is_none_or(|at| now.duration_since(at) >= every)
+    }
+
+    /// Whether the page is covered, and waiting for a sign-in in Chrome.
+    pub(super) fn covers_page(&self) -> bool {
+        matches!(self.stage, Stage::NotFound { .. } | Stage::Waiting { .. })
+    }
+
+    /// Chrome holds nothing that works here: from now on it is watched for a sign-in.
+    fn start_waiting(&mut self, host: String, now: Instant) {
+        self.seen = None;
+        self.wait_reloaded_at = None;
+        self.stage = Stage::Waiting { host, since: now, next: now, reloads: 0, loaded: None };
     }
 
     /// Whether to ask the page now, taking the look off the list.
@@ -357,6 +378,10 @@ impl Workbench {
         if !crate::platform::HAS_WEBVIEW {
             return;
         }
+        // Pictures left by the last run. The first window only: another's may be in use.
+        if self.slot == 0 {
+            let _ = std::fs::remove_dir_all(covers_dir());
+        }
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(TICK).await;
             if this.update(cx, |this, cx| this.chrome_tick(cx)).is_err() {
@@ -456,6 +481,15 @@ impl Workbench {
         cx.notify();
     }
 
+    /// "Sign in here": the page comes back, and the user's clicks reach it even if an agent is at
+    /// work in it. The site is then left alone like one declined.
+    fn chrome_sign_in_here(&mut self, cx: &mut Context<Self>) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.unlocked = true;
+        }
+        self.chrome_decline(cx);
+    }
+
     /// "No" and "close": this site is left alone until Agentty restarts.
     fn chrome_decline(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self.front_sign_in_tab() else { return };
@@ -471,11 +505,65 @@ impl Workbench {
         let Some(host) = tab.sign_in.stage.host().map(str::to_string) else { return };
         let Some(url) = tab.webview.borrow().as_ref().and_then(|view| view.current_url()) else { return };
         chrome_cookies::open_in_chrome(&url);
+        // Looked at briskly again. What was seen stays what a sign-in has to change.
         let now = Instant::now();
-        tab.sign_in.seen = None;
-        tab.sign_in.wait_reloaded_at = None;
-        tab.sign_in.stage = Stage::Waiting { host, since: now, next: now, reloads: 0, loaded: None };
+        if let Stage::Waiting { since, next, .. } = &mut tab.sign_in.stage {
+            *since = now;
+            *next = now;
+        } else {
+            tab.sign_in.start_waiting(host, now);
+        }
         cx.notify();
+    }
+
+    /// Over the page while Chrome holds no sign-in for it: the page blurred, what to do, and the
+    /// way to sign in right here instead.
+    pub(super) fn render_chrome_cover(&self, tab: &BrowserTab, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !tab.sign_in.covers_page() {
+            return None;
+        }
+        let picture = tab.sign_in.cover.borrow().clone();
+        Some(
+            div()
+                .id("chrome-cover")
+                .absolute()
+                .inset_0()
+                .overflow_hidden()
+                .bg(hex(Chrome::EDITOR))
+                .when_some(picture, |d, picture| d.child(gpui::img(picture).absolute().size_full().object_fit(gpui::ObjectFit::Cover)))
+                .child(div().absolute().inset_0().bg(hex_alpha(Chrome::EDITOR, 0.72)))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .px_6()
+                        .child(div().t_body().text_center().text_color(hex(Chrome::BRIGHT)).child(t(cx, "browser.chrome_cover")))
+                        .child(crate::ui::action_button(
+                            "chrome-sign-in-here",
+                            t(cx, "browser.chrome_direct"),
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.chrome_sign_in_here(cx)),
+                        ))
+                        .child(
+                            div()
+                                .id("chrome-open")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .t_small()
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .hover(|d| d.text_color(hex(Chrome::BRIGHT)))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.chrome_open(cx)))
+                                .child(t(cx, "browser.chrome_open")),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The bar over the page, while there is something to say or ask.
@@ -500,7 +588,8 @@ impl Workbench {
                     .into_any_element()
             };
         let (text, tone, buttons): (String, u32, Vec<AnyElement>) = match stage {
-            Stage::None => return None,
+            // The cover says it (see `render_chrome_cover`).
+            Stage::None | Stage::NotFound { .. } | Stage::Waiting { .. } => return None,
             Stage::Ask { .. } => {
                 let mut buttons = Vec::new();
                 if always {
@@ -528,15 +617,6 @@ impl Workbench {
                     cx.notify();
                 })],
             ),
-            Stage::NotFound { .. } => (
-                tf(cx, "browser.chrome_missing", &[("host", host)]),
-                Chrome::WARNING,
-                vec![
-                    button("chrome-open", "browser.chrome_open", true, cx, Self::chrome_open),
-                    button("chrome-again", "browser.chrome_again", false, cx, Self::chrome_load),
-                    button("chrome-close", "browser.chrome_close", false, cx, Self::chrome_decline),
-                ],
-            ),
             Stage::Failed { refused, .. } => (
                 t(cx, if *refused { "browser.chrome_refused" } else { "browser.chrome_unreadable" }).to_string(),
                 Chrome::WARNING,
@@ -544,11 +624,6 @@ impl Workbench {
                     button("chrome-again", "browser.chrome_retry", true, cx, Self::chrome_load),
                     button("chrome-close", "browser.chrome_close", false, cx, Self::chrome_decline),
                 ],
-            ),
-            Stage::Waiting { .. } => (
-                tf(cx, "browser.chrome_waiting", &[("host", host)]),
-                Chrome::ACCENT,
-                vec![button("chrome-close", "browser.chrome_close", false, cx, Self::chrome_decline)],
             ),
         };
         Some(
@@ -569,6 +644,40 @@ impl Workbench {
                 .children(buttons)
                 .into_any_element(),
         )
+    }
+}
+
+fn covers_dir() -> std::path::PathBuf {
+    agentty_bridge::fsutil::data_dir().join("browser-covers")
+}
+
+/// A very small picture of the page, in the background: the cover shows it stretched.
+fn take_cover_picture(view: &crate::webview::WebView, cover: &Rc<RefCell<Option<std::path::PathBuf>>>) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = covers_dir();
+    if agentty_bridge::fsutil::create_private_dir(&dir).is_err() {
+        return;
+    }
+    // A new name each time: pictures are cached by their path.
+    let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("{}-{unique}.png", std::process::id()));
+    let cover = cover.clone();
+    let taken = path.clone();
+    view.snapshot_png_sized(
+        path,
+        COVER_WIDTH,
+        Box::new(move |result| {
+            // Without a picture the cover is plain, which says the same.
+            if result.is_ok() {
+                *cover.borrow_mut() = Some(taken);
+            }
+        }),
+    );
+}
+
+fn drop_cover_picture(cover: &Rc<RefCell<Option<std::path::PathBuf>>>) {
+    if let Some(path) = cover.borrow_mut().take() {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -646,19 +755,23 @@ fn tick_tab(tab: &mut BrowserTab, always: bool, memory: &mut SignInMemory, now: 
     }
     match sign_in.stage.clone() {
         Stage::Loaded { confirmed_at: Some(at), .. } if now.duration_since(at) >= NOTICE_FOR => sign_in.stage = Stage::None,
+        Stage::NotFound { host } => {
+            sign_in.start_waiting(host, now);
+            take_cover_picture(view, &sign_in.cover);
+        }
         Stage::Waiting { host, since, next, reloads, loaded } if now >= next => {
-            if now.duration_since(since) >= WAIT_FOR {
-                sign_in.stage = Stage::NotFound { host };
-            } else {
-                sign_in.stage = Stage::Waiting { host: host.clone(), since, next: now + WAIT_EVERY, reloads, loaded };
-                // One at a time: a read waiting on macOS's question must not pile up others.
-                if !sign_in.read_pending {
-                    sign_in.read_pending = true;
-                    reads.push((sign_in.id, host));
-                }
+            let every = if now.duration_since(since) >= WAIT_BRISKLY_FOR { WAIT_SLOWLY_EVERY } else { WAIT_EVERY };
+            sign_in.stage = Stage::Waiting { host: host.clone(), since, next: now + every, reloads, loaded };
+            // One at a time: a read waiting on macOS's question must not pile up others.
+            if !sign_in.read_pending {
+                sign_in.read_pending = true;
+                reads.push((sign_in.id, host));
             }
         }
         _ => {}
+    }
+    if !sign_in.covers_page() {
+        drop_cover_picture(&sign_in.cover);
     }
     // Other profiles' cookies are only held while the first one's are being tried.
     if !matches!(sign_in.stage, Stage::Loaded { confirmed_at: None, .. }) {
@@ -853,7 +966,50 @@ mod tests {
         sign_in.wait_reloaded_at = Some(now);
         assert!(!sign_in.may_reload_for_a_change(1, now + Duration::from_secs(29)));
         assert!(sign_in.may_reload_for_a_change(1, now + Duration::from_secs(30)));
-        assert!(!sign_in.may_reload_for_a_change(WAIT_RELOADS, now + Duration::from_secs(300)));
+        // A cover can stay for long, so a sign-in is never missed for good: only more slowly.
+        assert!(!sign_in.may_reload_for_a_change(WAIT_RELOADS, now + Duration::from_secs(299)));
+        assert!(sign_in.may_reload_for_a_change(WAIT_RELOADS, now + Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn the_cover_is_up_exactly_while_waiting_for_chrome() {
+        let now = Instant::now();
+        let mut sign_in = TabSignIn::default();
+        for (stage, covered) in [
+            (Stage::None, false),
+            (Stage::Ask { host: "a.test".into() }, false),
+            (Stage::Reading { host: "a.test".into() }, false),
+            (Stage::Loaded { host: "a.test".into(), profile: "P".into(), confirmed_at: None }, false),
+            (Stage::Failed { host: "a.test".into(), refused: true }, false),
+            (Stage::NotFound { host: "a.test".into() }, true),
+            (Stage::Waiting { host: "a.test".into(), since: now, next: now, reloads: 0, loaded: None }, true),
+        ] {
+            sign_in.stage = stage;
+            assert_eq!(sign_in.covers_page(), covered, "{:?}", sign_in.stage);
+        }
+    }
+
+    #[test]
+    fn waiting_starts_from_a_clean_look_at_chrome() {
+        let now = Instant::now();
+        let mut sign_in = TabSignIn { seen: Some(HashMap::new()), wait_reloaded_at: Some(now), ..Default::default() };
+        sign_in.start_waiting("a.test".into(), now);
+        assert_eq!(sign_in.seen, None);
+        assert_eq!(sign_in.wait_reloaded_at, None);
+        assert_eq!(sign_in.stage, Stage::Waiting { host: "a.test".into(), since: now, next: now, reloads: 0, loaded: None });
+    }
+
+    #[test]
+    fn a_covered_page_leaving_sign_in_uncovers_it_and_says_where_from_if_it_came_from_chrome() {
+        let now = Instant::now();
+        let waiting = Stage::Waiting { host: "a.test".into(), since: now, next: now, reloads: 1, loaded: Some("Work".into()) };
+        let (stage, _) = run(&waiting, "a.test", false, true);
+        assert!(matches!(stage, Stage::Loaded { confirmed_at: Some(_), .. }));
+        let mut sign_in = TabSignIn { stage, ..Default::default() };
+        assert!(!sign_in.covers_page());
+        sign_in.stage = Stage::Waiting { host: "a.test".into(), since: now, next: now, reloads: 0, loaded: None };
+        let (stage, _) = run(&sign_in.stage, "other.test", false, true);
+        assert_eq!(stage, Stage::None, "gone to a page that asks nothing");
     }
 
     #[test]

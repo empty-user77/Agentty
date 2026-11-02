@@ -28,7 +28,7 @@ Turning it off returns the page to the panel's own width.
 On macOS, when a page asks you to sign in, a bar above it offers the sign-in you already have in Google Chrome. Choose **Always** to have it looked up by itself from then on, **Just this once**, or **No** to leave that site alone until Agentty restarts. The first time, macOS asks whether Agentty may use Chrome's storage key: choose **Allow**.
 
 - **If it works**, the page reloads signed in, and the bar says which Chrome profile it came from.
-- **If Chrome has nothing that works**, sign in right there in the page, or choose **Sign in in Chrome**: the page opens in Chrome, and once you are signed in there the sign-in is picked up here by itself, usually within a minute.
+- **If Chrome has nothing that works**, the page is covered and blurred until you finish signing in in Chrome, usually within a minute of doing so: it then carries over by itself. **Sign in here** brings the page back so you can sign in in it, and **Open in Chrome** opens the page there.
 - **If you sign out here**, the sign-in is not loaded back on its own for 30 minutes: the bar asks first.
 
 Change it in **Settings → Browser → Sign-ins**: Ask, Always or Off, and which Chrome profile to use when you have several. Otherwise the profile last used comes first, and the next one is tried if it doesn't sign in.

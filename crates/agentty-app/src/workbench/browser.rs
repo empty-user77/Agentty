@@ -977,7 +977,8 @@ impl Workbench {
         let webview = tab.webview.clone();
         let hidden = self.overlay_open();
         // A failed load shows its message in place of the page (the native view would cover it).
-        let covered = hidden || tab.error.is_some();
+        // So does the cover over a page waiting for a sign-in in Chrome.
+        let covered = hidden || tab.error.is_some() || tab.sign_in.covers_page();
         if covered {
             if let Some(view) = webview.borrow_mut().as_mut() {
                 view.hide();
@@ -1064,6 +1065,7 @@ impl Workbench {
                         .relative()
                         .child(content)
                         .when_some(tab.error.clone().filter(|_| !hidden), |d, error| d.child(self.render_load_error(error, cx)))
+                        .children(self.render_chrome_cover(tab, cx).filter(|_| !hidden && tab.error.is_none()))
                         .when(hidden, |d| {
                             d.child(
                                 div()
