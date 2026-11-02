@@ -393,7 +393,10 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers)),
+                        matches!(
+                            self.page,
+                            Some(Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Trash)
+                        ),
                         "page.monitoring",
                         Box::new(|this, cx| this.open_page(Page::Browsers, cx)),
                         cx,
@@ -2143,10 +2146,13 @@ impl Workbench {
                 if page == Page::Extensions && !matches!(category, "skills" | "agents" | "mcp") {
                     tabs.push((Page::Extensions, Some(category), t(cx, "page.extensions")));
                 }
+                tabs.push((Page::Trash, None, t(cx, "page.trash")));
                 tabs
             };
             let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => monitoring(),
+                Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions | Page::Trash => {
+                    monitoring()
+                }
                 Page::Git => vec![(page, None, t(cx, "page.git"))],
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],

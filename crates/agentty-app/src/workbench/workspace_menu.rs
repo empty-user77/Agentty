@@ -248,7 +248,7 @@ impl Workbench {
     }
 
     /// "Delete Worktree": the close dialog for the workspace, with its worktree ticked to go too.
-    fn request_delete_tree(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn request_delete_tree(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace_menu = None;
         let Some(tree) = self.deletable_tree(id, cx) else { return };
         self.close_confirm = Some(CloseConfirm {
@@ -572,9 +572,9 @@ impl Workbench {
         .iter()
         .filter(|on| **on)
         .count() as f32;
-        // header + rename, open in + copy path, pin + unread, new group, parent, delete, plus the
-        // rows that come and go, and four rules, inside the popover's padding.
-        12. + 24. + ROW + COLOUR_BLOCK + palette + ROW * (2. + 2. + 1. + 1. + 1. + optional) + RULE * 4.
+        // header + rename, open in + copy path, pin + unread, new group, parent, delete, view trash,
+        // plus the rows that come and go, and five rules, inside the popover's padding.
+        12. + 24. + ROW + COLOUR_BLOCK + palette + ROW * (2. + 2. + 1. + 1. + 1. + 1. + optional) + RULE * 5.
     }
 
     /// Hovering a menu row unfolds its flyout, or folds away the one that is open.
@@ -773,6 +773,12 @@ impl Workbench {
                 this.request_close(CloseTarget::Workspace(id), window, cx)
             },
         )))
+        .child(rule())
+        .child(
+            row("wm-view-trash", "trash-2", t(cx, "workspace.view_trash"), false)
+                .on_hover(hover(None, cx))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_trash(cx))),
+        )
     }
 }
 

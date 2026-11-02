@@ -77,3 +77,13 @@ What can be cleared is only what is made again by itself:
 - **Other** — the trash and log files.
 
 Dependencies such as `node_modules` or `~/.m2`, and anything a project needs to run, are never offered. Each removal is confirmed first and checked again right before it happens; links are never followed. The next build or install just takes a little longer.
+
+## Trash
+
+**Delete Workspace** moves a workspace to the trash instead of removing it: its terminals close and it leaves the list. Open the trash from the end of the Monitoring tabs, or with **View Trash** at the bottom of a workspace's menu.
+
+Each entry shows when it was deleted, when it goes for good, its workspace path and its session paths. Tick some or all of them to restore them or delete them now; deleting asks first and can't be undone. A restored workspace comes back asleep and wakes when you open it, with its sessions resumed. Its orchestrations and board tickets come back with it.
+
+Entries go by themselves after 7 days. Change that with **Delete automatically after** on this page or in Settings → General: a longer period also applies to what is already in the trash, a shorter one only to what you delete from then on.
+
+A worktree or sync data you chose to delete with the workspace stays until the workspace is deleted for good. Session files are never deleted: they stay where the agent keeps them.

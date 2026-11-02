@@ -1877,6 +1877,7 @@ impl Workbench {
                             t(cx, "settings.confirm_close"),
                             toggle("confirm-close", prefs.confirm_close, |s| s.confirm_close = !s.confirm_close, cx),
                         ))
+                        .child(row(t(cx, "settings.trash_retention"), super::trash::retention_stepper(cx)))
                         // On Windows a pane's console closes with it, and what runs there with it:
                         // nothing to choose.
                         .when(!cfg!(windows), |group| {

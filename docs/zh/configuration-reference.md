@@ -72,6 +72,7 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `agentGuide` | 从这里启动的智能体会收到 Agentty 命令的简短说明 |
 | `stopServersOnClose` | 关闭窗格时停止其中启动的服务器 |
 | `confirmClose` | 关闭用过的东西前先确认 |
+| `trashRetentionDays` | 已删除的工作区在彻底删除前保留在废纸篓中的天数（默认 7 天） |
 | `agentBarPosition` | `top` 或 `bottom` |
 | `workspaceSearchBar` | 工作区列表上方的搜索框，搜索名称及其中的对话（默认开启） |
 | `sortFinishedToTop` | 智能体完成后把该工作区移到顶部（默认关闭；关闭时保留你自行排列的顺序） |

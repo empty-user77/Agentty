@@ -212,6 +212,7 @@ impl Workbench {
             (Page::Worktrees, "page.worktrees", ""),
             (Page::Disk, "page.disk", ""),
             (Page::Browsers, "page.browsers", ""),
+            (Page::Trash, "page.trash", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
             (Page::Remote, "page.remote", ""),

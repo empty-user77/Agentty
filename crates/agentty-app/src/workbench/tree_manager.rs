@@ -179,7 +179,7 @@ impl Workbench {
     }
 
     /// Trees an open pane works in: removing them would pull the folder out from under it.
-    fn trees_in_use(&self, cx: &gpui::App) -> HashSet<PathBuf> {
+    pub(super) fn trees_in_use(&self, cx: &gpui::App) -> HashSet<PathBuf> {
         self.all_panes()
             .iter()
             .filter_map(|pane| agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()))

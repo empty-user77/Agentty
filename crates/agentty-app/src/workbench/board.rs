@@ -572,6 +572,26 @@ impl Workbench {
         self.board_unbind(|t| t.slot == slot && t.workspace == Some(ws_id));
     }
 
+    /// The tickets workspace `ws_id` of this window works on.
+    pub(super) fn board_tickets_of(&self, ws_id: u64) -> Vec<u64> {
+        let slot = self.slot;
+        with_store(|store| store.file.tickets.iter().filter(|t| t.slot == slot && t.workspace == Some(ws_id)).map(|t| t.id).collect())
+    }
+
+    /// Back from the trash: its tickets are its again, unless another workspace took them meanwhile.
+    pub(super) fn board_rebind_tickets(&mut self, tickets: &[u64], ws_id: u64) {
+        if tickets.is_empty() {
+            return;
+        }
+        let slot = self.slot;
+        self.board_update(|file| {
+            for ticket in file.tickets.iter_mut().filter(|t| tickets.contains(&t.id) && t.workspace.is_none()) {
+                ticket.slot = slot;
+                ticket.workspace = Some(ws_id);
+            }
+        });
+    }
+
     /// After the window's workspaces were restored: tickets of this window whose workspace did not
     /// come back lose it (workspace ids are given out again after a restart).
     pub(super) fn board_forget_missing_workspaces(&mut self) {

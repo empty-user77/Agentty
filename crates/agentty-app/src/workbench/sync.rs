@@ -390,23 +390,45 @@ impl Workbench {
         }
     }
 
-    /// The workspace is about to be removed: its final state goes with the next sync, and with
-    /// `purge` its data leaves the repository.
-    pub(super) fn sync_workspace_removed(&mut self, id: u64, purge: bool, cx: &mut Context<Self>) {
+    /// The workspace is about to be removed: its final state goes with the next sync.
+    pub(super) fn sync_workspace_removed(&mut self, id: u64, cx: &mut Context<Self>) {
         let key = self.sync_key(id);
         let Some(sync_id) = self.sync.config.workspaces.get(&key).cloned() else { return };
         let Some(ws) = self.workspaces.iter().find(|w| w.id == id) else { return };
-        if purge {
-            self.sync.purge.push((ws.plugin.clone(), sync_id));
-        } else {
-            let input = WorkspaceInput { sync_id: Some(sync_id), ..self.sync_input(ws, WorkspaceState::Deleted, cx) };
-            self.sync.removed.push(input);
-        }
+        let input = WorkspaceInput { sync_id: Some(sync_id), ..self.sync_input(ws, WorkspaceState::Deleted, cx) };
+        self.sync.removed.push(input);
         self.sync.pending.remove(&id);
         let _ = bridge::update_config(|c| {
             c.workspaces.remove(&key);
         });
         self.sync.config.workspaces.remove(&key);
+        self.sync_soon(Scope::Some(HashSet::new()), cx);
+    }
+
+    /// Whether a sync can run now (connected and not paused).
+    pub(super) fn sync_ready(&self) -> bool {
+        self.sync.active()
+    }
+
+    /// Its id in the repository, kept with it in the trash.
+    pub(super) fn workspace_sync_id(&self, id: u64) -> Option<String> {
+        self.sync.config.workspaces.get(&self.sync_key(id)).cloned()
+    }
+
+    /// Back from the trash, under a new local id: it syncs on as the same workspace.
+    pub(super) fn sync_workspace_restored(&mut self, id: u64, sync_id: String, cx: &mut Context<Self>) {
+        let key = self.sync_key(id);
+        let stored = (key.clone(), sync_id.clone());
+        let _ = bridge::update_config(move |c| {
+            c.workspaces.insert(stored.0.clone(), stored.1.clone());
+        });
+        self.sync.config.workspaces.insert(key, sync_id);
+        self.sync_soon(Scope::Some(HashSet::from([id])), cx);
+    }
+
+    /// Deleted for good with "Also delete sync data": its data leaves the repository.
+    pub(super) fn sync_purge_trashed(&mut self, plugin: Option<String>, sync_id: String, cx: &mut Context<Self>) {
+        self.sync.purge.push((plugin, sync_id));
         self.sync_soon(Scope::Some(HashSet::new()), cx);
     }
 
@@ -505,6 +527,10 @@ impl Workbench {
             let state = if open { WorkspaceState::Open } else { WorkspaceState::Closed };
             request.workspaces.push(self.sync_input(ws, state, cx));
         }
+        // Deleted and back from the trash before this ran (or a failed run put it back): the Deleted
+        // state must not follow the open one.
+        let listed: HashSet<String> = self.workspaces.iter().filter_map(|ws| self.workspace_sync_id(ws.id)).collect();
+        self.sync.removed.retain(|input| !input.sync_id.as_ref().is_some_and(|id| listed.contains(id)));
         request.workspaces.append(&mut self.sync.removed);
         request.purge.append(&mut self.sync.purge);
         request.retention = self.sync.retention;
