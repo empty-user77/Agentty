@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-11-03
+
 ### Added
 - In-app browser (macOS): when a page asks to sign in, a bar offers the sign-in you have in Chrome, once or always.
   If Chrome has none that works, the page is blurred until you sign in in Chrome, which carries over by itself, or
@@ -14,11 +16,13 @@ All notable changes to this project are documented here. The format follows
   period (7 days by default). Open it from the Monitoring tabs or a workspace's menu; set the period there or in
   Settings → General. Restored workspaces resume their sessions, orchestrations and board tickets.
 
-- Chat view and team chats: typing `/` in the composer lists the agent's skills and commands. Picking one puts it in the composer,
-  with room for more words, without sending it.
-- Chat view and team chats: a line over the composer names what the agent is running in the background until it finishes. The remote
-  page shows both for chat workspaces, and the remote API serves them to the apps (`/api/skills`, `background` in
-  `/api/chat`). Meanwhile the status reads Running in background instead of Done.
+- Chat view and team chats: typing `/` in the composer lists the agent's skills and commands. Picking one puts it in
+  the composer, with room for more words, without sending it.
+- Chat view and team chats: a line over the composer names what the agent is running in the background until it
+  finishes. The remote page shows both for chat workspaces, and the remote API serves them to the apps (`/api/skills`,
+  `background` in `/api/chat`). Meanwhile the status reads Running in background instead of Done.
+- Remote access: the phone apps can put a workspace to sleep, close a tab and move a workspace to the trash. Nothing
+  from a phone deletes for good.
 
 ### Fixed
 - A prompt of more than about 1 KB sent while an agent was still starting was cut off and left unsent, and the rest of
