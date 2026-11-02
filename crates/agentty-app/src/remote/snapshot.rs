@@ -124,6 +124,9 @@ pub struct SessionInfo {
     /// page.
     #[serde(skip)]
     pub dir: std::path::PathBuf,
+    /// When the agent running in it started, in ms since the epoch. Never sent to the page.
+    #[serde(skip)]
+    pub agent_since_ms: u64,
     /// The folders the page may open files from for this terminal (`files`): its working tree
     /// and its workspace's. Never sent to the page.
     #[serde(skip)]

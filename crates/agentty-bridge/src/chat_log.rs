@@ -17,6 +17,8 @@ use std::path::Path;
 const NO_RESPONSE: &str = "No response requested.";
 /// How much of a tool's output a step keeps.
 const OUTPUT_CHARS: usize = 6_000;
+/// Background tasks kept at most: the oldest goes (it may never have said it ended).
+const MAX_BACKGROUND: usize = 16;
 const OUTPUT_LINES: usize = 80;
 /// How much of what a tool ran on (a command, a patch) a step keeps.
 const DETAIL_CHARS: usize = 2_000;
@@ -61,6 +63,20 @@ pub struct ToolStep {
     pub failed: bool,
     /// What a file edit changed: lines starting with `-` (taken out) and `+` (put in).
     pub diff: Option<String>,
+}
+
+/// Work the agent left running in the background: it may be idle, waiting for this to finish.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundTask {
+    /// The tool call that started it.
+    pub id: String,
+    /// The agent's own id for it, once it has said (`KillShell` and the like go by this one).
+    pub task_id: Option<String>,
+    /// What it is: what the agent said it is for, else its command.
+    pub label: String,
+    /// When it started, in ms since the epoch: tasks die with the agent, and one started before the
+    /// agent now running is not running any more, though no line in the transcript says so.
+    pub started_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,6 +173,12 @@ impl Reader {
     /// The entries held now, oldest first.
     pub fn entries(&self) -> &[Entry] {
         &self.builder.entries
+    }
+
+    /// What the agent has running in the background, if it started at `since_ms` or later (when
+    /// the agent now running started). Read apart from the entries, so a window doesn't lose them.
+    pub fn background(&self, since_ms: u64) -> Vec<BackgroundTask> {
+        self.builder.background.iter().filter(|task| task.started_ms.is_none_or(|at| at >= since_ms as i64)).cloned().collect()
     }
 
     /// Whether a windowed reader has let older entries or blocks go.
@@ -264,6 +286,8 @@ struct Builder {
     tasks: Vec<(String, Todo)>,
     /// Tasks created so far: Claude Code numbers them on, deleted ones included.
     tasks_created: usize,
+    /// What runs in the background now.
+    background: Vec<BackgroundTask>,
     /// The first entry added or changed since [`Reader::update`] last looked.
     changed_from: Option<usize>,
 }
@@ -314,12 +338,118 @@ impl Builder {
         }
     }
 
+    fn background_started(&mut self, id: &str, label: String, started_ms: Option<i64>) {
+        if self.background.len() >= MAX_BACKGROUND {
+            self.background.remove(0);
+        }
+        if !self.background.iter().any(|task| task.id == id) {
+            self.background.push(BackgroundTask { id: id.to_string(), task_id: None, label, started_ms });
+        }
+    }
+
+    /// A tool's result says about the background: it never started (failed), or under which id it
+    /// runs, which is also how a command the user sent to the background late shows up.
+    fn background_result(&mut self, id: &str, task_id: Option<&str>, failed: bool, started_ms: Option<i64>) {
+        if failed {
+            return self.background.retain(|task| task.id != id);
+        }
+        let Some(task_id) = task_id else { return };
+        if !self.background.iter().any(|task| task.id == id) {
+            let label = self.steps.get(id).and_then(|&(entry, block)| match self.entries.get(entry)?.blocks.get(block)? {
+                Block::Tool(step) => background_label(step.description.as_deref(), step.detail.as_deref()),
+                _ => None,
+            });
+            self.background_started(id, label.unwrap_or_else(|| task_id.to_string()), started_ms);
+        }
+        if let Some(task) = self.background.iter_mut().find(|task| task.id == id) {
+            task.task_id = Some(task_id.to_string());
+        }
+    }
+
+    /// Finished or stopped: goes by the tool call's id or the agent's own.
+    fn background_ended(&mut self, id: &str) {
+        self.background.retain(|task| task.id != id && task.task_id.as_deref() != Some(id));
+    }
+
     fn result(&mut self, id: &str, output: String, failed: bool) {
         let Some(&(entry, block)) = self.steps.get(id) else { return };
         self.changed(entry);
         if let Some(Block::Tool(step)) = self.entries.get_mut(entry).and_then(|e| e.blocks.get_mut(block)) {
             step.output = Some(clip_output(&output));
             step.failed = failed;
+        }
+    }
+}
+
+/// How a background task is named: one line, what it is for before what it runs.
+fn background_label(description: Option<&str>, detail: Option<&str>) -> Option<String> {
+    description.or(detail).map(|text| one_line(text, 120)).filter(|label| !label.is_empty())
+}
+
+/// The ids in a line's finished-task notices. Only a notice with a status says it ended.
+fn ended_task_ids(text: &str) -> Vec<String> {
+    const OPEN: &str = "<task-notification>";
+    const CLOSE: &str = "</task-notification>";
+    let tag = |notice: &str, name: &str| {
+        let open = format!("<{name}>");
+        let close = format!("</{name}>");
+        let start = notice.find(&open)? + open.len();
+        let end = notice[start..].find(&close)?;
+        Some(notice[start..start + end].trim().to_string())
+    };
+    let mut ids = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let end = after.find(CLOSE).unwrap_or(after.len());
+        let notice = &after[..end];
+        if tag(notice, "status").is_some() {
+            ids.extend(tag(notice, "tool-use-id"));
+            ids.extend(tag(notice, "task-id"));
+        }
+        rest = &after[end..];
+    }
+    ids
+}
+
+/// Keeps the background list up to date from one line of the transcript.
+fn claude_background(b: &mut Builder, v: &Value) {
+    let started_ms = v["timestamp"].as_str().and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.timestamp_millis());
+    let mut texts: Vec<&str> = Vec::new();
+    for value in [&v["message"]["content"], &v["attachment"]["prompt"]] {
+        match value {
+            Value::String(text) => texts.push(text),
+            Value::Array(parts) => texts.extend(parts.iter().filter_map(|part| part["text"].as_str())),
+            _ => {}
+        }
+    }
+    for id in texts.iter().filter(|text| text.contains("<task-notification>")).flat_map(|text| ended_task_ids(text)) {
+        b.background_ended(&id);
+    }
+    let Some(blocks) = v["message"]["content"].as_array() else { return };
+    for block in blocks {
+        match block["type"].as_str() {
+            Some("tool_use") => {
+                let (id, input) = (block["id"].as_str().unwrap_or_default(), &block["input"]);
+                match block["name"].as_str() {
+                    Some("KillShell" | "KillBash" | "TaskStop") => {
+                        if let Some(task) = str_field(input, &["shell_id", "task_id", "bash_id"]) {
+                            b.background_ended(task);
+                        }
+                    }
+                    _ if !id.is_empty() && input["run_in_background"].as_bool() == Some(true) => {
+                        let label = background_label(str_field(input, &["description"]), str_field(input, &["command", "prompt"]));
+                        b.background_started(id, label.unwrap_or_else(|| block["name"].as_str().unwrap_or("tool").to_string()), started_ms);
+                    }
+                    _ => {}
+                }
+            }
+            Some("tool_result") => {
+                let id = block["tool_use_id"].as_str().unwrap_or_default();
+                let failed = block["is_error"].as_bool() == Some(true);
+                b.background_result(id, v["toolUseResult"]["backgroundTaskId"].as_str(), failed, started_ms);
+            }
+            _ => {}
         }
     }
 }
@@ -351,6 +481,7 @@ fn claude_line(b: &mut Builder, line: &str) {
     if v["isSidechain"].as_bool() == Some(true) {
         return;
     }
+    claude_background(b, &v);
     if v["isMeta"].as_bool() == Some(true) {
         // The harness's own lines, except a message from another session reaching an idle one.
         if let Some(text) = crate::claude::peer_text(&v) {
@@ -720,6 +851,68 @@ mod tests {
 {"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>"}}"#;
         let said: Vec<String> = claude_entries(lines(log)).into_iter().map(|e| e.text).collect();
         assert_eq!(said, ["plain", "look at this\n[image]"]);
+    }
+
+    fn background_of(log: &str, since_ms: u64) -> Vec<String> {
+        let mut b = Builder::default();
+        for line in lines(log) {
+            claude_line(&mut b, &line);
+        }
+        b.background.iter().filter(|t| t.started_ms.is_none_or(|at| at >= since_ms as i64)).map(|t| t.label.clone()).collect()
+    }
+
+    const STARTED: &str = r#"{"type":"assistant","timestamp":"2026-11-02T06:55:12.609Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 4","description":"Sleep for four seconds","run_in_background":true}}]}}"#;
+    const RUNNING: &str = r#"{"type":"user","timestamp":"2026-11-02T06:55:14.328Z","toolUseResult":{"backgroundTaskId":"bk1"},"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Command running in background with ID: bk1."}]}}"#;
+
+    #[test]
+    fn a_background_task_runs_until_its_notice_with_a_status() {
+        let log = format!("{STARTED}\n{RUNNING}");
+        assert_eq!(background_of(&log, 0), ["Sleep for four seconds"]);
+        let notice = |status: &str| {
+            format!(
+                r#"{{"type":"user","message":{{"content":"<task-notification>\n<task-id>bk1</task-id>\n{status}<summary>x</summary>\n</task-notification>"}}}}"#
+            )
+        };
+        assert_eq!(background_of(&format!("{log}\n{}", notice("")), 0).len(), 1, "no status: it did not say it ended");
+        assert!(background_of(&format!("{log}\n{}", notice("<status>completed</status>")), 0).is_empty());
+        assert!(background_of(&format!("{log}\n{}", notice("<status>failed</status>")), 0).is_empty());
+    }
+
+    #[test]
+    fn a_background_task_ends_by_any_way_the_transcript_says() {
+        let log = format!("{STARTED}\n{RUNNING}");
+        let queued = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification><tool-use-id>t1</tool-use-id><status>completed</status></task-notification>"}}"#;
+        assert!(background_of(&format!("{log}\n{queued}"), 0).is_empty(), "the notice queued mid-turn");
+        let killed =
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"KillShell","input":{"shell_id":"bk1"}}]}}"#;
+        assert!(background_of(&format!("{log}\n{killed}"), 0).is_empty(), "stopped by the agent");
+        let failed = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"no"}]}}"#;
+        assert!(background_of(&format!("{STARTED}\n{failed}"), 0).is_empty(), "never started");
+    }
+
+    #[test]
+    fn a_background_task_of_an_earlier_run_of_the_agent_is_not_running() {
+        let started = chrono::DateTime::parse_from_rfc3339("2026-11-02T06:55:12.609Z").unwrap().timestamp_millis() as u64;
+        let log = format!("{STARTED}\n{RUNNING}");
+        assert_eq!(background_of(&log, started).len(), 1);
+        assert!(background_of(&log, started + 1).is_empty());
+    }
+
+    #[test]
+    fn a_command_sent_to_the_background_late_is_seen_by_its_result() {
+        let call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npm run build","description":"Build it"}}]}}"#;
+        assert!(background_of(call, 0).is_empty());
+        assert_eq!(background_of(&format!("{call}\n{RUNNING}"), 0), ["Build it"]);
+    }
+
+    #[test]
+    fn a_window_keeps_the_background_tasks_its_entries_let_go() {
+        let rest: Vec<String> = (0..30).map(|n| format!(r#"{{"type":"user","message":{{"content":"m{n}"}}}}"#)).collect();
+        let path = temp_log("background-window", &format!("{STARTED}\n{RUNNING}\n{}\n", rest.join("\n")));
+        let mut reader = Reader::windowed(Agent::Claude, 3, 3);
+        reader.update(&path).unwrap();
+        assert!(reader.cut());
+        assert_eq!(reader.background(0).len(), 1);
     }
 
     #[test]
