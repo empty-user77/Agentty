@@ -135,6 +135,9 @@ struct Live {
     width: f32,
 }
 
+/// Below this height (points) a chat pane shows its input and nothing else.
+const SHORT_PANE: f32 = 170.;
+
 impl Workbench {
     /// Whether `pane` is drawn as chat view's chat right now (not its terminal).
     pub(in crate::workbench) fn plain_chat_in_front(&self, pane: &Pane, cx: &App) -> bool {
@@ -321,8 +324,14 @@ impl Workbench {
         let id = pane.entity_id();
         let live = self.live(state, cx);
 
-        let messages: AnyElement =
-            if state.shown.is_empty() { self.render_chat_welcome(state, &live, cx) } else { message_list(state, cx) };
+        let short = self.chat_pane_is_short(id);
+        let messages: AnyElement = if short {
+            div().flex_1().min_h_0().into_any_element()
+        } else if state.shown.is_empty() {
+            self.render_chat_welcome(state, &live, cx)
+        } else {
+            message_list(state, cx)
+        };
         let approval =
             live.choices.clone().map(|choices| self.render_chat_question(id, choices, live.question.clone(), &live.question_detail, cx));
         let interrupted = (!live.working && live.interrupted).then(|| {
@@ -412,12 +421,14 @@ impl Workbench {
                 // beside it opens or closes, draw again at once instead of showing the old layout
                 // squeezed (or stretched) until something else redraws.
                 .child({
-                    let (widths, drawn_at) = (self.pane_bounds.clone(), live.width);
+                    let (widths, drawn_at, drawn_short) = (self.pane_bounds.clone(), live.width, short);
                     gpui::canvas(
                         |_, _, _| {},
                         move |_, _, window, _| {
-                            let now = widths.borrow().get(&id).map(|b| f32::from(b.size.width));
-                            if now.is_some_and(|now| (now - drawn_at).abs() > 1.) {
+                            let bounds = widths.borrow().get(&id).copied();
+                            let now = bounds.map(|b| f32::from(b.size.width));
+                            let short_now = bounds.is_some_and(|b| f32::from(b.size.height) < SHORT_PANE);
+                            if short_now != drawn_short || now.is_some_and(|now| (now - drawn_at).abs() > 1.) {
                                 window.refresh();
                             }
                         },
@@ -708,7 +719,13 @@ impl Workbench {
     }
 
     /// The composer, and under it where the agent works, its model, permission mode and context.
+    /// Whether the pane is so low that only the input fits: what is typed must stay in sight.
+    fn chat_pane_is_short(&self, id: EntityId) -> bool {
+        self.pane_bounds.borrow().get(&id).is_some_and(|bounds| f32::from(bounds.size.height) < SHORT_PANE)
+    }
+
     fn render_chat_composer(&self, state: &ChatState, live: &Live, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let short = self.chat_pane_is_short(state.lead.entity_id());
         let (input, _) = state.input.as_ref()?;
         let id = state.lead.entity_id();
         let round = |d: gpui::Stateful<gpui::Div>| {
@@ -837,7 +854,13 @@ impl Workbench {
                 .pt_1()
                 .pb_3()
                 .child(column(
-                    div().flex().flex_col().gap_1p5().children(self.render_chat_background(state, cx)).child(field).child(footer),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1p5()
+                        .when(!short, |d| d.children(self.render_chat_background(state, cx)))
+                        .child(field)
+                        .when(!short, |d| d.child(footer)),
                 ))
                 .into_any_element(),
         )

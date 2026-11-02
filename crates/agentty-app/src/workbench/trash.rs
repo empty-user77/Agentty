@@ -8,7 +8,7 @@
 use super::persist::{LayoutState, NodeSnapshot, PaneSnapshot, TabSnapshot, WorkspaceSnapshot};
 use super::tree_manager::{badge, check_box, confirm_dialog};
 use super::{Workbench, Workspace};
-use crate::i18n::{t, tf};
+use crate::i18n::{t, tf, tf_count};
 use crate::launch::PaneKind;
 use crate::settings::{settings, update_settings};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -210,6 +210,16 @@ fn date_text(secs: i64) -> String {
 }
 
 /// Whole days until `expiry`, rounded up: what is left of today still counts as a day.
+/// What a trash row's title and detail lines leave of the window's width (points).
+const TITLE_MARGIN: f32 = 300.;
+const DETAIL_MARGIN: f32 = 290.;
+
+/// A path that keeps both ends when it doesn't fit in `max` characters: the last folder is what
+/// tells two entries apart.
+fn path_line(text: &str, max: usize) -> gpui::Div {
+    div().min_w_0().truncate().child(crate::ui::middle_ellipsis(text, max))
+}
+
 fn days_left(expiry: i64, now: i64) -> i64 {
     ((expiry - now).max(0) + DAY_SECS - 1) / DAY_SECS
 }
@@ -241,10 +251,11 @@ pub(super) fn retention_stepper(cx: &mut Context<Workbench>) -> gpui::Div {
         .items_center()
         .gap_1()
         .child(step("trash-retention-dec", "−", false, cx))
-        .child(div().w(px(56.)).flex().justify_center().t_body().text_color(hex(Chrome::BRIGHT)).child(tf(
+        .child(div().w(px(56.)).flex().justify_center().t_body().text_color(hex(Chrome::BRIGHT)).child(tf_count(
             cx,
             "trash.days",
-            &[("n", &days.to_string())],
+            days as usize,
+            &[],
         )))
         .child(step("trash-retention-inc", "+", true, cx))
 }
@@ -327,7 +338,7 @@ impl Workbench {
         }
         self.close_workspace(id, window, cx);
         self.trash.loaded = false;
-        self.show_toast(tf(cx, "trash.moved", &[("name", &title), ("n", &days.to_string())]), cx);
+        self.show_toast(tf_count(cx, "trash.moved", days as usize, &[("name", &crate::ui::middle_ellipsis(&title, 48))]), cx);
     }
 
     /// Opens the page (from the workspace menu; a second click does not close it).
@@ -711,6 +722,10 @@ impl Workbench {
         let checked = self.trash.selected.contains(&id);
         let expiry = item.expiry(retention(cx));
         let left = days_left(expiry, now_secs());
+        // How many characters fit beside the row's labels and buttons at this window's width.
+        let width = f32::from(self.agent_window.viewport.width);
+        let title_room = ((width - TITLE_MARGIN) / 8.).max(24.) as usize;
+        let detail_room = ((width - DETAIL_MARGIN) / 7.5).max(24.) as usize;
         let detail = |label: &str, value: String| {
             div()
                 .flex()
@@ -718,7 +733,7 @@ impl Workbench {
                 .gap_2()
                 .min_w_0()
                 .child(div().w(px(112.)).flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(label.to_string()))
-                .child(div().flex_1().min_w_0().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(value))
+                .child(path_line(&value, detail_room).flex_1().t_small().text_color(hex(Chrome::FOREGROUND)))
         };
         let mut details = div()
             .flex()
@@ -766,9 +781,9 @@ impl Workbench {
                             .items_center()
                             .gap_2()
                             .min_w_0()
-                            .child(div().t_body().truncate().text_color(hex(Chrome::BRIGHT)).child(item.title.clone()))
+                            .child(path_line(&item.title, title_room).t_body().text_color(hex(Chrome::BRIGHT)))
                             .child(badge(
-                                tf(cx, "trash.days_left", &[("n", &left.to_string())]),
+                                tf_count(cx, "trash.days_left", left.max(0) as usize, &[]),
                                 if left <= 1 { Chrome::WARNING } else { Chrome::MUTED },
                             )),
                     )
@@ -813,7 +828,7 @@ impl Workbench {
             div()
                 .t_body()
                 .text_color(hex(Chrome::FOREGROUND))
-                .child(tf(cx, "trash.confirm_body", &[("n", &chosen.len().to_string())]))
+                .child(tf_count(cx, "trash.confirm_body", chosen.len(), &[]))
                 .into_any_element(),
             div().t_caption().text_color(hex(Chrome::MUTED)).max_h(px(72.)).overflow_hidden().child(names).into_any_element(),
         ];
@@ -822,7 +837,7 @@ impl Workbench {
                 div()
                     .t_caption()
                     .text_color(hex(Chrome::WARNING))
-                    .child(tf(cx, "trash.confirm_trees", &[("n", &trees.to_string())]))
+                    .child(tf_count(cx, "trash.confirm_trees", trees, &[]))
                     .into_any_element(),
             );
         }

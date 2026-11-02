@@ -83,7 +83,7 @@ const REMOTE_TEXT: usize = 3_000;
 /// Tool steps of one reply shown before the rest fold into a count.
 const TOOL_STEPS_SHOWN: usize = 3;
 /// The widest the conversation runs in a wide pane: lines stay readable, as in a chat app.
-const CHAT_COLUMN: f32 = 780.;
+const CHAT_COLUMN: f32 = 920.;
 
 /// What the lead is told before the user's first message. English, like every prompt Agentty
 /// ships; the last line names the language to talk in.
@@ -988,6 +988,8 @@ impl Workbench {
             let keep = alive.contains(id) && (!state.plain || wanted(&state.lead, cx));
             if !keep {
                 selectable::drop_chat(id.as_u64());
+                // Nothing looks at the transcript any more: the status goes back to the pane's own.
+                state.lead.update(cx, |view, _| view.background_running = false);
             }
             keep
         });
@@ -1164,6 +1166,11 @@ impl Workbench {
         };
         if let Some(running) = running.filter(|running| *running != state.background) {
             state.background = running;
+            let running = !state.background.is_empty();
+            state.lead.update(cx, |view, cx| {
+                view.background_running = running;
+                cx.emit(crate::terminal::TerminalEvent::StatusChanged);
+            });
             cx.notify();
         }
         if state.loading {
