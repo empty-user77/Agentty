@@ -770,6 +770,25 @@ impl SearchEngine {
 }
 
 /// Unknown or removed engines in older settings fall back to the default instead of failing the file.
+/// Using the sign-ins Chrome holds when a page in the in-app browser asks to sign in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChromeSignIn {
+    #[default]
+    Ask,
+    Always,
+    Off,
+}
+
+fn lenient_chrome_sign_in<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<ChromeSignIn, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        "always" => ChromeSignIn::Always,
+        "off" => ChromeSignIn::Off,
+        _ => ChromeSignIn::Ask,
+    })
+}
+
 fn lenient_search_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<SearchEngine, D::Error> {
     let value = String::deserialize(deserializer)?;
     Ok(match value.as_str() {
@@ -934,6 +953,11 @@ pub struct BrowserSettings {
     /// Each terminal's tab keeps cookies and sign-ins of its own instead of sharing the browser's.
     #[serde(default)]
     pub separate_sessions: bool,
+    /// What to do when a page asks to sign in: offer Chrome's sign-in, use it, or leave it.
+    #[serde(deserialize_with = "lenient_chrome_sign_in")]
+    pub chrome_sign_in: ChromeSignIn,
+    /// The Chrome profile (its folder) to use; `None` looks in all of them, last used first.
+    pub chrome_profile: Option<String>,
     /// Terminals' browsers kept running out of sight; beyond it the one seen longest ago is
     /// unloaded (and loads again when its terminal is selected).
     pub background_limit: u32,
@@ -958,6 +982,8 @@ impl Default for BrowserSettings {
             agent_tools: true,
             auto_open_servers: true,
             separate_sessions: false,
+            chrome_sign_in: ChromeSignIn::Ask,
+            chrome_profile: None,
             background_limit: 6,
             memory_limit: 30,
         }

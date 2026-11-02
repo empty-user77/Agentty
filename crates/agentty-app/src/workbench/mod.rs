@@ -17,6 +17,7 @@ mod browsers_page;
 mod chat;
 mod chat_team;
 mod chrome;
+mod chrome_sign_in;
 mod confirm;
 mod content_search;
 mod context_menu;
@@ -216,7 +217,7 @@ pub fn next_free_window_slot() -> usize {
 }
 
 pub use account_usage::AccountUsage;
-pub(crate) use chat::user_parts;
+pub(crate) use chat::{prompt_words, user_parts};
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
 pub use plugin_panel::pin_installed_sidebar_plugins;
@@ -657,6 +658,8 @@ pub struct Workbench {
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
     /// automation's pages) is in front.
     stashed_browser: Option<browser::BrowserPanel>,
+    /// Sites declined or just loaded with Chrome's sign-in, for this run.
+    chrome_sign_ins: chrome_sign_in::SignInMemory,
     /// The browsers of the terminals not in front, kept as they were (see `terminal_browser`).
     pane_browsers: HashMap<u64, browser::BrowserPanel>,
     /// The terminal whose browser `browser` is (and `stashed_browser`, while a plugin's workspace
@@ -1045,6 +1048,7 @@ impl Workbench {
             ghosted: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
+            chrome_sign_ins: Default::default(),
             pane_browsers: HashMap::new(),
             browser_owner: None,
             terminal_links: Vec::new(),
@@ -1241,6 +1245,7 @@ impl Workbench {
             async {}
         })
         .detach();
+        this.watch_chrome_sign_in(cx);
         this
     }
 

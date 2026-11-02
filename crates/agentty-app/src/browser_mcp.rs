@@ -22,7 +22,7 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool("browser_navigate", "Load a URL in the in-app browser.", json!({ "url": s("URL, host:port or search words") }), &["url"]),
-        tool("browser_status", "Current URL, title and whether the page is loading.", json!({}), &[]),
+        tool("browser_status", "Current URL, title and whether the page is loading. signIn tells where a sign-in the page asks for stands: waiting-for-user (the user is being asked whether to use Chrome's sign-in; only the user can answer), loading-from-chrome, loaded-from-chrome, or user-must-sign-in.", json!({}), &[]),
         tool("browser_wait_load", "Wait until the page finished loading.", json!({ "timeout_ms": n("default 15000") }), &[]),
         tool(
             "browser_go",

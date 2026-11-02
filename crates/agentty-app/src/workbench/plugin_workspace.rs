@@ -224,19 +224,23 @@ impl Workbench {
         self.open_plugin_panel(&plugin, cx);
         // The browser in here shows the automation's pages only: the user's own tabs wait, out of
         // sight, for the user to come back.
-        if let Some(browser) = self.browser.take() {
+        if let Some(mut browser) = self.browser.take() {
+            // Plugins' pages don't wait with them: those are the plugins', and go out of sight.
+            browser.tabs.retain(|tab| tab.owner.is_none());
             for tab in &browser.tabs {
-                if tab.owner.is_none() {
-                    if let Some(view) = tab.webview.borrow_mut().as_mut() {
-                        view.hide();
-                    }
+                if let Some(view) = tab.webview.borrow_mut().as_mut() {
+                    view.hide();
                 }
             }
             // Joins a browser already set aside rather than replacing it: the tabs in it — the
             // user's, and terminals' pages still at work — would otherwise be gone.
             match self.stashed_browser.as_mut() {
-                Some(stashed) => stashed.tabs.extend(browser.tabs.into_iter().filter(|tab| tab.owner.is_none())),
-                None => self.stashed_browser = Some(browser),
+                Some(stashed) => stashed.tabs.extend(browser.tabs),
+                None if browser.tabs.is_empty() => {}
+                None => {
+                    browser.active = browser.active.min(browser.tabs.len() - 1);
+                    self.stashed_browser = Some(browser);
+                }
             }
         }
         self.instance_shown = None;

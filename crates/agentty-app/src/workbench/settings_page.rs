@@ -840,7 +840,7 @@ fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Cont
 
 impl Workbench {
     fn render_browser_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        use crate::settings::{LinkOpener, SearchEngine};
+        use crate::settings::{ChromeSignIn, LinkOpener, SearchEngine};
         let prefs = settings(cx).clone();
         let b = prefs.browser.clone();
         let mut engines = chip_row();
@@ -852,6 +852,48 @@ impl Workbench {
                 cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.browser.search_engine = engine)),
             ));
         }
+        let mut chrome_modes = chip_row();
+        for (id, label, mode) in [
+            ("chrome-ask", "settings.browser_chrome_ask", ChromeSignIn::Ask),
+            ("chrome-always", "settings.browser_chrome_always", ChromeSignIn::Always),
+            ("chrome-off", "settings.browser_chrome_off", ChromeSignIn::Off),
+        ] {
+            chrome_modes = chrome_modes.child(chip(
+                id,
+                t(cx, label),
+                b.chrome_sign_in == mode,
+                cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    if mode == ChromeSignIn::Off {
+                        // Off the main thread: a read may be holding it, waiting on macOS.
+                        std::thread::spawn(agentty_bridge::chrome_cookies::forget_key);
+                    }
+                    update_settings(cx, move |s| s.browser.chrome_sign_in = mode)
+                }),
+            ));
+        }
+        // A choice only with more than one profile to choose from.
+        let found_profiles = super::chrome_sign_in::chrome_profiles();
+        let chrome_profiles = (found_profiles.len() > 1).then(|| {
+            let mut chips = chip_row().flex_wrap().child(chip(
+                "chrome-profile-any",
+                t(cx, "settings.browser_chrome_profile_any"),
+                b.chrome_profile.is_none(),
+                cx.listener(|_, _: &ClickEvent, _, cx| update_settings(cx, |s| s.browser.chrome_profile = None)),
+            ));
+            for profile in found_profiles {
+                let dir = profile.dir.clone();
+                chips = chips.child(chip(
+                    SharedString::from(format!("chrome-profile-{}", profile.dir)),
+                    profile.name,
+                    b.chrome_profile.as_deref() == Some(dir.as_str()),
+                    cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        let dir = dir.clone();
+                        update_settings(cx, move |s| s.browser.chrome_profile = Some(dir))
+                    }),
+                ));
+            }
+            chips
+        });
         let opener = |id: &'static str, label: &'static str, value: LinkOpener, cx: &mut Context<Self>| {
             chip(
                 id,
@@ -888,6 +930,13 @@ impl Workbench {
                         ),
                     )),
             )
+            .when(super::chrome_sign_in::chrome_available(), |d| {
+                d.child(
+                    section(t(cx, "settings.browser_sign_in"))
+                        .child(row_with_hint(t(cx, "settings.browser_chrome"), t(cx, "settings.browser_chrome_hint"), chrome_modes))
+                        .when_some(chrome_profiles, |d, profiles| d.child(row(t(cx, "settings.browser_chrome_profile"), profiles))),
+                )
+            })
             .child(
                 section(t(cx, "settings.browser_content"))
                     .child(row(

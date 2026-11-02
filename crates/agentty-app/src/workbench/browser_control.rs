@@ -123,6 +123,7 @@ impl Workbench {
         let about_the_page = !matches!(request.command.as_str(), "url" | "title" | "status" | "wait-load" | "back" | "forward" | "reload");
         let revived = about_the_page && tab.revived_at.take_if(|at| at.elapsed() < Duration::from_secs(15)).is_some();
         let webview = tab.webview.clone();
+        let sign_in = tab.sign_in.for_agent();
         // The page had been unloaded (to stay within the in-app browser's limits) and is loading
         // again: a command that reads or acts on it runs once it has loaded, on the page the agent
         // left rather than on a blank one.
@@ -149,7 +150,9 @@ impl Workbench {
         match request.command.as_str() {
             "url" => send(json(serde_json::json!(view.current_url()))),
             "title" => send(json(serde_json::json!(view.title()))),
-            "status" => send(json(serde_json::json!({ "url": view.current_url(), "title": view.title(), "loading": view.is_loading() }))),
+            "status" => send(json(
+                serde_json::json!({ "url": view.current_url(), "title": view.title(), "loading": view.is_loading(), "signIn": sign_in }),
+            )),
             "back" => {
                 view.back();
                 send(json(serde_json::json!(true)))
