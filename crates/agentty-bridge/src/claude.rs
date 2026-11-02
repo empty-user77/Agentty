@@ -223,7 +223,7 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
             cwd = v["cwd"].as_str().map(str::to_string);
         }
         let turn = match v["type"].as_str() {
-            Some("user") => user_text(&v).map(|text| Turn { role: Role::User, text }),
+            Some("user") => said_text(&v).map(|text| Turn { role: Role::User, text }),
             // A message typed while a turn ran is recorded as an attachment, not as a user entry.
             Some("attachment") => queued_text(&v).map(|text| Turn { role: Role::User, text }),
             Some("assistant") => assistant_text(&v).map(|text| Turn { role: Role::Assistant, text }),
@@ -286,6 +286,30 @@ pub(crate) fn peer_text(v: &Value) -> Option<String> {
     let start = text.find("<cross-session-message")?;
     let end = text[start..].find(CLOSE).map_or(text.len(), |at| start + at + CLOSE.len());
     Some(text[start..end].to_string())
+}
+
+/// What a user's turn says in a conversation: their words, or `/jira-skill ping` for a skill or
+/// command they ran, as they typed it.
+pub(crate) fn said_text(v: &Value) -> Option<String> {
+    user_text(v).or_else(|| command_call(&content_text(&v["message"]["content"])?))
+}
+
+/// `/name args` from how Claude Code records a slash command in a transcript.
+fn command_call(text: &str) -> Option<String> {
+    let between = |tag: &str| {
+        let open = format!("<{tag}>");
+        let start = text.find(&open)? + open.len();
+        let end = text[start..].find(&format!("</{tag}>"))?;
+        Some(text[start..start + end].trim().to_string())
+    };
+    if !text.trim_start().starts_with("<command-") {
+        return None;
+    }
+    let name = between("command-name").filter(|name| name.starts_with('/'))?;
+    Some(match between("command-args").filter(|args| !args.is_empty()) {
+        Some(args) => format!("{name} {args}"),
+        None => name,
+    })
 }
 
 fn human_text(text: &str) -> Option<String> {
@@ -535,6 +559,19 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_command_the_user_ran_reads_as_they_typed_it() {
+        let ran =
+            "<command-message>jira-skill</command-message>\n<command-name>/jira-skill</command-name>\n<command-args>ping</command-args>";
+        assert_eq!(super::command_call(ran).as_deref(), Some("/jira-skill ping"));
+        assert_eq!(super::command_call("<command-name>/clear</command-name><command-args></command-args>").as_deref(), Some("/clear"));
+        assert_eq!(super::command_call("<local-command-stdout>x</local-command-stdout>"), None);
+        assert_eq!(super::command_call("write <command-name>/x</command-name> in the docs"), None);
+        let turn = serde_json::json!({ "type": "user", "message": { "content": ran } });
+        assert_eq!(super::said_text(&turn).as_deref(), Some("/jira-skill ping"));
+        assert_eq!(super::user_text(&turn), None, "not a prompt: titles and first prompts stay as they were");
+    }
+
     #[test]
     fn a_session_in_two_project_folders_is_the_one_written_last() {
         let dir = std::env::temp_dir().join(format!("agentty-find-{}", std::process::id()));

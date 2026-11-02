@@ -78,6 +78,7 @@ With [remote access](/docs/remote-access) on, a chat workspace opens on the page
 
 - Workers commit on their own branches. They push or open pull requests only if you ask the lead for that.
 - Every worker and reviewer is a full agent session, and four of them working at once use your plan's limits faster than one.
+- Type `/` in the composer to list the lead's skills and commands. Picking one fills the composer without sending, so you can add more words. While the lead has work running in the background, a line over the composer names it.
 - Drag the line between the chat and the grid to give either more room. The layout is saved with the workspace.
 - Turning off **Agents can start parallel tasks** in Settings also stops a chat's lead from starting workers.
 - Chats opened before chat branches existed keep working in the project folder.

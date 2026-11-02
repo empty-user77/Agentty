@@ -41,14 +41,14 @@ impl SlashList {
 
 impl Workbench {
     pub(super) fn slash_rows(&self, id: EntityId, cx: &App) -> Vec<SlashItem> {
-        let Some(state) = self.chats.get(&id).filter(|state| state.plain) else { return Vec::new() };
+        let Some(state) = self.chats.get(&id) else { return Vec::new() };
         let Some((input, _)) = &state.input else { return Vec::new() };
         state.slash.rows(input.read(cx).text())
     }
 
     /// The composer's text changed: the list follows it, and is read if it has not been lately.
     pub(super) fn slash_text_changed(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        let Some(state) = self.chats.get_mut(&id).filter(|state| state.plain) else { return };
+        let Some(state) = self.chats.get_mut(&id) else { return };
         let Some((input, _)) = &state.input else { return };
         let text = input.read(cx).text().to_string();
         state.slash.pick = 0;

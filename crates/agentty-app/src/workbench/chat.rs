@@ -140,7 +140,7 @@ pub struct ChatState {
     model_menu: bool,
     /// The `/` list over the composer.
     slash: slash::SlashList,
-    /// What the agent has running in the background (a plain chat's transcript says).
+    /// What the agent has running in the background (its transcript says).
     background: Vec<agentty_bridge::chat_log::BackgroundTask>,
     /// Files the next message carries (a plain chat's composer: `+` or dropped on the chat).
     attachments: Vec<PathBuf>,
@@ -347,6 +347,8 @@ pub(crate) fn user_parts(text: &str) -> Vec<(&'static str, String)> {
 enum Loaded {
     /// The whole conversation (a chat workspace's lead), and whether its briefing is in it.
     All(Vec<ChatItem>, bool),
+    /// The same for a chat workspace's lead, with what reads its log for background work.
+    Lead(Vec<ChatItem>, bool, Arc<std::sync::Mutex<agentty_bridge::chat_log::Reader>>),
     /// A plain chat's rows from its `usize`th entry on: the ones before are as they were.
     From(usize, Vec<Vec<ChatItem>>, Arc<std::sync::Mutex<agentty_bridge::chat_log::Reader>>),
 }
@@ -1240,9 +1242,17 @@ impl Workbench {
                     agentty_bridge::model::Agent::Codex => agentty_bridge::codex::transcript(&path),
                     _ => agentty_bridge::claude::transcript(&path),
                 };
+                // The lead's rows come from its turns; the log says what it left running.
+                let reader = match log {
+                    Some((read, reader)) if same_log(&read, &path) => reader,
+                    _ => Arc::new(std::sync::Mutex::new(agentty_bridge::chat_log::Reader::new(agent))),
+                };
+                if let Ok(mut reader) = reader.lock() {
+                    let _ = reader.update(&path);
+                }
                 turns.ok().map(|(_, turns)| {
                     let (items, briefed) = chat_items(&turns);
-                    Loaded::All(items, briefed)
+                    Loaded::Lead(items, briefed, reader)
                 })
             };
             Some((session, path, len, items))
@@ -1266,6 +1276,10 @@ impl Workbench {
         state.seen_len = len;
         let (items, briefed) = match items {
             Some(Loaded::All(items, briefed)) => (items, briefed),
+            Some(Loaded::Lead(items, briefed, reader)) => {
+                state.log = Some((path.clone(), reader));
+                (items, briefed)
+            }
             Some(Loaded::From(from, rows, reader)) => {
                 // Read anew (another session): no row of the old one stays.
                 if state.log.as_ref().is_none_or(|(read, _)| !same_log(read, &path)) {
@@ -2127,15 +2141,7 @@ impl Workbench {
         });
         let composer = state.input.as_ref().map(|(input, _)| {
             let id = state.lead.entity_id();
-            div()
-                .flex_shrink_0()
-                .m_3()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(hex(Chrome::BORDER))
-                .bg(hex(Chrome::PANEL))
+            let row = div()
                 .flex()
                 .items_end()
                 .gap_2()
@@ -2154,7 +2160,21 @@ impl Workbench {
                         .hover(|s| s.opacity(0.85))
                         .child(icon("send", 14., hex(Chrome::BRIGHT)))
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.send_chat_message(id, window, cx))),
-                )
+                );
+            div().flex_shrink_0().m_3().flex().flex_col().gap_1p5().children(self.render_chat_background(state, cx)).child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .bg(hex(Chrome::PANEL))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(self.render_slash_list(state, cx))
+                    .child(row),
+            )
         });
         div()
             .flex_1()

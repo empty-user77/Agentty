@@ -498,7 +498,7 @@ fn claude_line(b: &mut Builder, line: &str) {
                     b.result(id, result_text(&block["content"]), failed);
                 }
             }
-            if let Some(text) = crate::claude::user_text(&v) {
+            if let Some(text) = crate::claude::said_text(&v) {
                 b.user(text);
             }
         }
