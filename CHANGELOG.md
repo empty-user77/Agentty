@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A prompt sent from the chat could stay typed in Claude Code's input without being sent. Enter is now pressed again
+  while exactly what was sent is still there.
+
 ## [0.3.10] - 2026-11-02
 
 ### Added
