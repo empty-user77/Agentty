@@ -153,6 +153,13 @@ pub enum Command {
     Wake { workspace: u64 },
     /// A new tab in a workspace, with a shell or an agent, where the workspace is.
     NewTab { workspace: u64, kind: PaneKind },
+    /// A workspace put to sleep: its processes end, its tabs wait to be started again.
+    Sleep { workspace: u64 },
+    /// A workspace moved to the trash, where it can be restored. Its worktrees and sync data stay:
+    /// nothing the phone asks for deletes them.
+    Trash { workspace: u64 },
+    /// The tab holding `pane` closed, with all its splits. It can be reopened from the closed tabs.
+    CloseTab { workspace: u64, pane: u64 },
     /// A new workspace in a folder under the remote folder (checked), with a shell or an agent,
     /// listed under `group` (made if there is none) when one is given, and named `title` when one is given.
     OpenFolder { folder: std::path::PathBuf, kind: PaneKind, group: Option<String>, title: Option<String> },
@@ -224,6 +231,9 @@ impl Command {
             | Command::Choice { pane, .. } => Some(*pane),
             Command::Wake { .. }
             | Command::NewTab { .. }
+            | Command::Sleep { .. }
+            | Command::Trash { .. }
+            | Command::CloseTab { .. }
             | Command::OpenFolder { .. }
             | Command::OpenPort { .. }
             | Command::Orchestration(_) => None,
@@ -352,6 +362,9 @@ struct WorkspaceBody {
     /// For `open`: the name the new workspace is shown with, instead of the tool's.
     #[serde(default)]
     title: Option<String>,
+    /// For `close`: a pane of the tab to close.
+    #[serde(default)]
+    pane: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1579,12 +1592,26 @@ impl Hub {
                 None => Response::json(200, &json!({ "ok": true })),
             };
         }
-        let known = self.view.lock().unwrap_or_else(|e| e.into_inner()).workspaces.iter().any(|w| w.id == body.workspace);
-        if !known {
+        let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(shown) = view.workspaces.iter().find(|w| w.id == body.workspace) else {
             return Response::json(404, &json!({ "error": "no such workspace" }));
+        };
+        let tab_found = body.pane.is_some_and(|pane| shown.tabs.iter().any(|tab| tab.panes.contains(&pane)));
+        drop(view);
+        if body.pane.is_some() && body.action != "close" {
+            return Response::json(400, &json!({ "error": "bad request" }));
         }
         let command = match (body.action.as_str(), body.tool.as_str()) {
             ("wake", "") => Command::Wake { workspace: body.workspace },
+            ("sleep", "") => Command::Sleep { workspace: body.workspace },
+            ("trash", "") => Command::Trash { workspace: body.workspace },
+            ("close", "") => {
+                let Some(pane) = body.pane else { return Response::json(400, &json!({ "error": "bad request" })) };
+                if !tab_found {
+                    return Response::json(404, &json!({ "error": "no such tab" }));
+                }
+                Command::CloseTab { workspace: body.workspace, pane }
+            }
             ("new", tool) => {
                 let Some(kind) = kind(tool) else { return Response::json(400, &json!({ "error": "bad request" })) };
                 if !self.take_new_tab() {
@@ -1660,7 +1687,16 @@ impl Hub {
             return Response::json(429, &json!({ "error": "busy" }));
         }
         // Asked twice before the app's round (a double tap): once is enough.
-        if matches!(command, Command::Wake { .. } | Command::OpenPort { .. } | Command::Orchestration(_)) && inbox.contains(&command) {
+        let once = matches!(
+            command,
+            Command::Wake { .. }
+                | Command::Sleep { .. }
+                | Command::Trash { .. }
+                | Command::CloseTab { .. }
+                | Command::OpenPort { .. }
+                | Command::Orchestration(_)
+        );
+        if once && inbox.contains(&command) {
             return Response::json(200, &json!({ "ok": true }));
         }
         inbox.push(command);
@@ -1792,7 +1828,8 @@ impl Hub {
 
 /// What the page lists: workspaces, terminals and plugins.
 fn overview(view: &View, voice: bool) -> serde_json::Value {
-    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins, "voice": voice })
+    // `manage`: this Mac takes `sleep`, `close` and `trash`, so an app shows them only where they work.
+    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins, "voice": voice, "manage": true })
 }
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
@@ -2513,6 +2550,56 @@ mod tests {
         assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "shell" })), 429, "a few tabs a minute, not a flood");
         let anonymous = send(&hub, &Req::post("/api/workspace", json!({ "workspace": 3, "action": "wake" })).raw()).0;
         assert_eq!(anonymous, 401, "needs a session");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn sleeps_trashes_and_closes_only_what_the_page_is_shown() {
+        let hub = hub("secret-password");
+        let mut shown = workspace(3);
+        let tab = |panes: Vec<u64>| crate::remote::snapshot::TabInfo { title: "tab".into(), active_pane: panes[0], panes, chat: None };
+        shown.tabs = vec![tab(vec![10, 11]), tab(vec![12])];
+        let mut other = workspace(5);
+        other.tabs = vec![tab(vec![20])];
+        hub.publish(vec![shown, other], Vec::new(), Vec::new());
+        let cookie = sign_in(&hub, "secret-password");
+        let act = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/workspace", body) }.raw()).0;
+
+        assert_eq!(act(json!({ "workspace": 3, "action": "sleep" })), 200);
+        assert_eq!(act(json!({ "workspace": 3, "action": "sleep" })), 200, "a double tap");
+        assert_eq!(act(json!({ "workspace": 3, "action": "trash" })), 200);
+        assert_eq!(act(json!({ "workspace": 3, "action": "close", "pane": 11 })), 200, "any split names its tab");
+        assert_eq!(act(json!({ "workspace": 3, "action": "close", "pane": 11 })), 200, "a double tap");
+        assert_eq!(
+            hub.take_commands(),
+            vec![Command::Sleep { workspace: 3 }, Command::Trash { workspace: 3 }, Command::CloseTab { workspace: 3, pane: 11 }],
+            "what was tapped twice was not queued again"
+        );
+
+        assert_eq!(act(json!({ "workspace": 4, "action": "sleep" })), 404, "a workspace the page is not shown");
+        assert_eq!(act(json!({ "workspace": 4, "action": "trash" })), 404);
+        assert_eq!(act(json!({ "workspace": 4, "action": "close", "pane": 10 })), 404);
+        assert_eq!(act(json!({ "workspace": 3, "action": "close", "pane": 20 })), 404, "a tab of another workspace");
+        assert_eq!(act(json!({ "workspace": 3, "action": "close", "pane": 99 })), 404, "no such tab");
+        assert_eq!(act(json!({ "workspace": 3, "action": "close" })), 400, "which tab is not left to chance");
+        assert_eq!(act(json!({ "workspace": 3, "action": "sleep", "pane": 10 })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "trash", "pane": 10 })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "wake", "pane": 10 })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "trash", "tool": "shell" })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "trash", "trees": ["/"] })), 400, "nothing to go with it can be named");
+        assert_eq!(act(json!({ "workspace": 3, "action": "trash", "purge": true })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "purge" })), 400, "the trash is as far as a phone goes");
+        assert!(hub.take_commands().is_empty(), "nothing refused was queued");
+
+        for body in [
+            json!({ "workspace": 3, "action": "sleep" }),
+            json!({ "workspace": 3, "action": "trash" }),
+            json!({ "workspace": 3, "action": "close", "pane": 10 }),
+        ] {
+            assert_eq!(send(&hub, &Req::post("/api/workspace", body).raw()).0, 401, "needs a session");
+        }
+        let (_, _, overview) = send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get("/api/sessions") }.raw());
+        assert!(overview.contains("\"manage\":true"), "an app can tell this Mac takes them: {overview}");
         hub.shutdown();
     }
 
