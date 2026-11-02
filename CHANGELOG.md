@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
   Browser → Sign-ins sets Ask, Always or Off and the Chrome profile. Agents see where it stands in `browser_status`.
 
 ### Fixed
+- A prompt sent from the chat could stay typed in Claude Code's input without being sent. Enter is now pressed again
+  while exactly what was sent is still there.
 - A plugin's page could stay on screen over everything after the in-app browser was closed, with no way to close it
   short of restarting the app.
 

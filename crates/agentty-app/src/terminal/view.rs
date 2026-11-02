@@ -234,6 +234,32 @@ pub fn held_message_choice(lines: &[String]) -> Option<usize> {
     }
 }
 
+/// How long to look after pressing Enter before pressing it again, while what was sent still sits
+/// in the input.
+const SUBMIT_RECHECKS_MS: [u64; 3] = [600, 1200, 2400];
+
+/// Whether `sent` still sits in Claude Code's input box: between the box's two borders, at the end
+/// of what is there. The conversation above the box shows it too once it went through, and anything
+/// the user typed after it, or instead of it, is not this. Other programs draw no such box and
+/// never match.
+pub fn sent_text_in_input(lines: &[String], sent: &str) -> bool {
+    let is_border = |line: &String| line.trim_start().starts_with("───");
+    let Some(bottom) = lines.iter().rposition(is_border) else { return false };
+    let Some(top) = lines[..bottom].iter().rposition(is_border) else { return false };
+    let Some(first) = lines[top + 1..bottom].iter().find(|line| !line.trim().is_empty()) else { return false };
+    let Some(typed) = first.trim_start().strip_prefix('❯') else { return false };
+    // Rows wrap anywhere: only the characters are compared, without any white space.
+    let mut input: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+    let after_first = lines[top + 1..bottom].iter().skip_while(|line| line.trim().is_empty()).skip(1);
+    input.extend(after_first.flat_map(|line| line.chars()).filter(|c| !c.is_whitespace()));
+    let sent: Vec<char> = sent.chars().filter(|c| !c.is_whitespace()).collect();
+    if sent.is_empty() {
+        return false;
+    }
+    let tail: String = sent[sent.len().saturating_sub(24)..].iter().collect();
+    input.ends_with(&tail)
+}
+
 /// Classifies the visible bottom lines of Claude Code / Codex.
 pub fn classify_screen(lines: &[String]) -> ScreenState {
     let mut state = ScreenState::default();
@@ -1912,6 +1938,7 @@ impl TerminalView {
             return;
         }
         self.submit_busy = true;
+        let sent = text.clone();
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
@@ -1933,8 +1960,26 @@ impl TerminalView {
                     Err(_) => return,
                 }
             }
+            let _ = this.update(cx, |view, _| view.write(b"\r".to_vec()));
+            // A busy program can miss that Enter, and the text then just sits in the input with
+            // nobody knowing. Pressed again only while exactly what was sent is still there.
+            for wait in SUBMIT_RECHECKS_MS {
+                cx.background_executor().timer(Duration::from_millis(wait)).await;
+                let pressed = this.update(cx, |view, _| {
+                    let lines = view.screen_lines(40);
+                    let left = sent_text_in_input(&lines, &sent);
+                    if left && held_message_choice(&lines).is_none() {
+                        view.write(b"\r".to_vec());
+                    }
+                    left
+                });
+                match pressed {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return,
+                }
+            }
             let _ = this.update(cx, |view, cx| {
-                view.write(b"\r".to_vec());
                 view.submit_busy = false;
                 if let Some(next) = view.submit_queue.pop_front() {
                     view.submit_prompt(next, cx);
@@ -3417,6 +3462,31 @@ mod screen_tests {
         assert!(!classify_screen(&lines("* the reply used 5k tokens (roughly · half)\n>")).busy);
         assert!(!classify_screen(&lines("* the reply used (5k tokens · half)\n>")).busy);
         assert!(!classify_screen(&lines("· the reply used (5k tokens · half)\n>")).busy);
+        // What was sent, still in the input box or gone from it.
+        let sent = "'/var/T/스크린샷 오전 11.11.18.png' 이거는 문구를\n그리고 지금 TC 도는것도 블럭이 너무 많은데";
+        let boxed = |input: &str| lines(&format!("⏺ 답변\n───────────\n{input}\n───────────\n  bypass permissions on"));
+        assert!(super::sent_text_in_input(
+            &boxed("❯ '/var/T/스크린샷 오전 11.11.18.png' 이거는 문구를\n  그리고 지금 TC 도는것도 블럭이 너무 많은데"),
+            sent
+        ));
+        assert!(
+            super::sent_text_in_input(
+                &boxed("❯ '/var/T/스크린샷 오전 11.11.18.png' 이거는 문구를\n  그리고 지금 TC 도는것도\n  블럭이 너무 많은데"),
+                sent
+            ),
+            "wrapped elsewhere"
+        );
+        assert!(!super::sent_text_in_input(&boxed("❯ "), sent), "it went through");
+        assert!(!super::sent_text_in_input(&boxed("❯ 전혀 다른 내용"), sent), "the user's own");
+        assert!(!super::sent_text_in_input(&boxed("❯ 그리고 지금 TC 도는것도 블럭이 너무 많은데 그리고 더"), sent), "the user typed on");
+        assert!(
+            !super::sent_text_in_input(&lines("❯ 그리고 지금 TC 도는것도 블럭이 너무 많은데\n⏺ 답변\n───────────\n❯ \n───────────"), sent),
+            "in the conversation above"
+        );
+        assert!(!super::sent_text_in_input(&lines("❯ 그리고 지금 TC 도는것도 블럭이 너무 많은데"), sent), "no box: some other program");
+        assert!(!super::sent_text_in_input(&boxed("  그리고 지금 TC 도는것도 블럭이 너무 많은데"), sent), "not an input");
+        assert!(!super::sent_text_in_input(&boxed("❯ "), "  \n "), "nothing was sent");
+        assert!(super::sent_text_in_input(&boxed("❯ ok"), "ok"));
         // A message from another session held for the user, and a reply that merely quotes it.
         let held = lines("  Message body (this is what will be delivered):\n │ hi\n ❯ Deny — drop it and tell the sender it was declined\n   Deliver this message to Claude");
         let state = classify_screen(&held);

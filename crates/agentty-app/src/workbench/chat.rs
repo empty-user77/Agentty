@@ -2142,7 +2142,8 @@ impl Workbench {
         match argument.split_once(':').unwrap_or((argument, "")) {
             ("send", text) => {
                 let Some(id) = front else { return eprintln!("agentty: no chat in front") };
-                self.say_to_lead(id, text.trim().to_string(), cx);
+                // `\\n` for a line break: one debug command is one line.
+                self.say_to_lead(id, text.trim().replace("\\n", "\n"), cx);
             }
             // What ⇧⌘J does on the pane in front: chat view on or off.
             ("view", _) => self.toggle_chat_view(window, cx),

@@ -5300,6 +5300,13 @@ impl Workbench {
             // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
             // the chat in front, `chat terminal` flips its view, `chat state` prints it.
             "chat" => self.debug_chat(argument, window, cx),
+            // `submit-prompt <text>`: what sending a prompt does to the pane in front, `\\n` a line break.
+            "submit-prompt" => {
+                if let Some(pane) = self.active_pane() {
+                    let text = argument.replace("\\n", "\n");
+                    pane.update(cx, |view, cx| view.submit_prompt(text, cx));
+                }
+            }
             // Moves the orchestration chart by `dx dy` (what a drag on it does).
             "board-pan" => {
                 let mut parts = argument.split_whitespace().filter_map(|v| v.parse::<f32>().ok());
