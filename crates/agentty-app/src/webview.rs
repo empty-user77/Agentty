@@ -601,29 +601,7 @@ pub fn set_cookies(cookies: &[Cookie]) {
     unsafe {
         let store = cookie_store();
         for cookie in cookies {
-            let properties: Id = msg_send![class!(NSMutableDictionary), dictionary];
-            let put = |key: &str, value: Id| {
-                if !value.is_null() {
-                    let _: () = msg_send![properties, setObject: value forKey: ns_string(key)];
-                }
-            };
-            put("Name", ns_string(&cookie.name));
-            put("Value", ns_string(&cookie.value));
-            put("Domain", ns_string(&cookie.domain));
-            put("Path", ns_string(&cookie.path));
-            if cookie.secure {
-                put("Secure", ns_string("TRUE"));
-            }
-            if cookie.http_only {
-                put("HttpOnly", ns_string("TRUE"));
-            }
-            if let Some(policy) = &cookie.same_site {
-                put("SameSite", ns_string(policy));
-            }
-            if let Some(expires) = cookie.expires {
-                put("Expires", msg_send![class!(NSDate), dateWithTimeIntervalSince1970: expires]);
-            }
-            let made: Id = msg_send![class!(NSHTTPCookie), cookieWithProperties: properties];
+            let made = http_cookie(cookie);
             if made.is_null() {
                 continue;
             }
@@ -631,6 +609,68 @@ pub fn set_cookies(cookies: &[Cookie]) {
             let _: () = msg_send![store, setCookie: made completionHandler: &*done];
         }
     }
+}
+
+/// Puts cookies into `profile`'s store, then calls `done` on the main thread when all are in.
+pub fn set_cookies_of(profile: Profile, cookies: &[Cookie], done: impl FnOnce() + 'static) {
+    use block::ConcreteBlock;
+    let done = std::rc::Rc::new(std::cell::RefCell::new(Some(done)));
+    let left = std::rc::Rc::new(std::cell::Cell::new(cookies.len()));
+    let one_done = {
+        let (done, left) = (done.clone(), left.clone());
+        move || {
+            left.set(left.get().saturating_sub(1));
+            if left.get() == 0 {
+                if let Some(done) = done.borrow_mut().take() {
+                    done();
+                }
+            }
+        }
+    };
+    unsafe {
+        let store = cookie_store_of(profile);
+        if store.is_null() || cookies.is_empty() {
+            left.set(1);
+            return one_done();
+        }
+        for cookie in cookies {
+            let made = http_cookie(cookie);
+            if made.is_null() {
+                one_done();
+                continue;
+            }
+            let finished = one_done.clone();
+            let block = ConcreteBlock::new(finished).copy();
+            let _: () = msg_send![store, setCookie: made completionHandler: &*block];
+        }
+    }
+}
+
+/// The `NSHTTPCookie` for `cookie` (null when WebKit refuses it).
+unsafe fn http_cookie(cookie: &Cookie) -> Id {
+    let properties: Id = msg_send![class!(NSMutableDictionary), dictionary];
+    let put = |key: &str, value: Id| {
+        if !value.is_null() {
+            let _: () = msg_send![properties, setObject: value forKey: ns_string(key)];
+        }
+    };
+    put("Name", ns_string(&cookie.name));
+    put("Value", ns_string(&cookie.value));
+    put("Domain", ns_string(&cookie.domain));
+    put("Path", ns_string(&cookie.path));
+    if cookie.secure {
+        put("Secure", ns_string("TRUE"));
+    }
+    if cookie.http_only {
+        put("HttpOnly", ns_string("TRUE"));
+    }
+    if let Some(policy) = &cookie.same_site {
+        put("SameSite", ns_string(policy));
+    }
+    if let Some(expires) = cookie.expires {
+        put("Expires", msg_send![class!(NSDate), dateWithTimeIntervalSince1970: expires]);
+    }
+    msg_send![class!(NSHTTPCookie), cookieWithProperties: properties]
 }
 
 pub struct WebView {

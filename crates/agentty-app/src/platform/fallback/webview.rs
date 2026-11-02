@@ -184,6 +184,11 @@ pub fn cookies_of(_profile: Profile, _keep: impl Fn(&str) -> bool + 'static, rep
 
 pub fn remove_profile(_bytes: [u8; 16]) {}
 
+/// Nothing reads Chrome's sign-ins on this platform yet (`chrome_cookies::available` is false).
+pub fn set_cookies_of(_profile: Profile, _cookies: &[Cookie], done: impl FnOnce() + 'static) {
+    done();
+}
+
 pub fn any_view() -> bool {
     false
 }

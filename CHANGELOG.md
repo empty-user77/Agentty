@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- In-app browser (macOS): when a page asks to sign in, a bar offers the sign-in you have in Chrome, once or always.
+  If Chrome has none that works, the page is blurred until you sign in in Chrome, which carries over by itself, or
+  choose to sign in right there. Settings →
+  Browser → Sign-ins sets Ask, Always or Off and the Chrome profile. Agents see where it stands in `browser_status`.
+
 ### Fixed
 - A plugin's page could stay on screen over everything after the in-app browser was closed, with no way to close it
   short of restarting the app.

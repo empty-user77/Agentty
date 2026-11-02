@@ -1921,6 +1921,11 @@ pub fn set_cookies(cookies: &[Cookie]) {
     }
 }
 
+/// Nothing reads Chrome's sign-ins on this platform yet (`chrome_cookies::available` is false).
+pub fn set_cookies_of(_profile: Profile, _cookies: &[Cookie], done: impl FnOnce() + 'static) {
+    done();
+}
+
 /// Deletes a profile's store: its cookies, cache and site data.
 pub fn remove_profile(bytes: [u8; 16]) {
     if let Some(page) = page_of(Some(bytes)) {

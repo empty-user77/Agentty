@@ -23,6 +23,20 @@ The phone button beside the address bar lays the page out at a device's size ins
 
 Turning it off returns the page to the panel's own width.
 
+## Sign in with Chrome
+
+On macOS, when a page asks you to sign in, a bar above it offers the sign-in you already have in Google Chrome. Choose **Always** to have it looked up by itself from then on, **Just this once**, or **No** to leave that site alone until Agentty restarts. The first time, macOS asks whether Agentty may use Chrome's storage key: choose **Allow**.
+
+- **If it works**, the page reloads signed in, and the bar says which Chrome profile it came from.
+- **If Chrome has nothing that works**, the page is covered and blurred until you finish signing in in Chrome, usually within a minute of doing so: it then carries over by itself. **Sign in here** brings the page back so you can sign in in it, and **Open in Chrome** opens the page there.
+- **If you sign out here**, the sign-in is not loaded back on its own for 30 minutes: the bar asks first.
+
+Change it in **Settings → Browser → Sign-ins**: Ask, Always or Off, and which Chrome profile to use when you have several. Otherwise the profile last used comes first, and the next one is tried if it doesn't sign in.
+
+Only the cookies a browser would send to that site are copied, into the in-app browser (or that terminal's own cookies when they are kept separate). Nothing is read for a plugin's page or in private mode, and an agent can't answer the bar or ask for a site: it only sees how things stand, in `signIn` of `browser_status`. With **Always**, though, a sign-in page is enough, whoever opened it: an agent that opens one gets in if Chrome is signed in to that site, even in a tab you aren't looking at, and then acts in that session. Use **Ask** if you want to decide each time.
+
+Some sites tie a sign-in to the browser it was made in and refuse the copy, and then you sign in here once. On Windows this isn't available: Chrome there ties its key to Chrome itself.
+
 ## Letting an agent drive it
 
 Claude Code and Codex can control this browser through MCP: click, type, read the console, take a screenshot. It is how an agent checks its own work on a running page.
