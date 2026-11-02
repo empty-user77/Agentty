@@ -139,6 +139,8 @@ pub struct BrowserTab {
     pub(super) profile: Option<[u8; 16]>,
     /// When its page was loaded again after being unloaded: an agent's commands wait for it.
     pub(super) revived_at: Option<Instant>,
+    /// Where signing in with Chrome's sign-in stands on this tab's page.
+    pub(super) sign_in: super::chrome_sign_in::TabSignIn,
 }
 
 impl BrowserTab {
@@ -160,6 +162,7 @@ impl BrowserTab {
             viewport: None,
             profile: None,
             revived_at: None,
+            sign_in: Default::default(),
         }
     }
 
@@ -316,7 +319,7 @@ impl BrowserPanel {
         &self.tabs[self.active.min(self.tabs.len() - 1)]
     }
 
-    fn tab_mut(&mut self) -> &mut BrowserTab {
+    pub(super) fn tab_mut(&mut self) -> &mut BrowserTab {
         let index = self.active.min(self.tabs.len() - 1);
         &mut self.tabs[index]
     }
@@ -331,7 +334,7 @@ impl BrowserPanel {
         let tabs: Vec<serde_json::Value> = self
             .tabs
             .iter()
-            .map(|tab| serde_json::json!({ "url": tab.url, "title": tab.title, "loading": tab.loading, "error": tab.error.as_ref().map(|e| e.message.clone()) }))
+            .map(|tab| serde_json::json!({ "url": tab.url, "title": tab.title, "loading": tab.loading, "error": tab.error.as_ref().map(|e| e.message.clone()), "signIn": tab.sign_in.debug_stage() }))
             .collect();
         let net = &self.tab().net;
         serde_json::json!({
@@ -1051,6 +1054,7 @@ impl Workbench {
                 .child(self.render_browser_toolbar(browser, cx))
                 .children(locked.then(|| self.render_lock_bar(cx)))
                 .children(self.render_sign_in_banner(tab.owner, cx))
+                .children(self.render_chrome_sign_in(tab, cx))
                 .children(self.render_responsive_bar(&browser.responsive, cx))
                 .child(progress_bar(tab.loading || tab.finishing(), tab.progress))
                 .child(

@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- In-app browser (macOS): when a page asks to sign in, a bar offers the sign-in you have in Chrome, once or always.
+  If Chrome has none that works, sign in in the page, or in Chrome and it is picked up by itself. Settings →
+  Browser → Sign-ins sets Ask, Always or Off and the Chrome profile. Agents see where it stands in `browser_status`.
+
 ## [0.3.10] - 2026-11-02
 
 ### Added

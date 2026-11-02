@@ -47,6 +47,11 @@ libc = "0.2.189"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+# Opens what Chrome encrypted, for signing in to the in-app browser with Chrome's sign-ins.
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha1 = "0.10"
 # Transcription on the GPU: Large-v3 Turbo answers a prompt in about a second with Metal, several
 # times slower on the CPU alone. Still only built with the `voice` feature (the dependency stays
 # optional); the Metal shaders are embedded in the binary.
