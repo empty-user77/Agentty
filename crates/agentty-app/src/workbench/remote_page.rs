@@ -188,9 +188,25 @@ impl Workbench {
     }
 
     /// Applies one of the page's inputs if its terminal is in this window.
-    pub fn remote_apply(&mut self, command: &Command, cx: &mut Context<Self>) -> bool {
+    pub fn remote_apply(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match command {
             Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
+            Command::Sleep { workspace } => {
+                if self.remote_workspace(*workspace).is_none() {
+                    return false;
+                }
+                self.sleep_workspace(*workspace, window, cx);
+                return true;
+            }
+            // To the trash only, with its worktrees and sync data left for a decision at the Mac.
+            Command::Trash { workspace } => {
+                if self.remote_workspace(*workspace).is_none() {
+                    return false;
+                }
+                self.move_workspace_to_trash(*workspace, Vec::new(), false, window, cx);
+                return true;
+            }
+            Command::CloseTab { workspace, pane } => return self.remote_close_tab(*workspace, *pane, window, cx),
             Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, self.kind_here(*kind, cx), cx),
             Command::OpenFolder { folder, kind, group, title } => {
                 return self.remote_open_folder(folder.clone(), group.clone(), title.clone(), self.kind_here(*kind, cx), cx)
@@ -239,6 +255,9 @@ impl Workbench {
             Command::Release { .. } => view.set_remote_size(None, cx),
             Command::Wake { .. }
             | Command::NewTab { .. }
+            | Command::Sleep { .. }
+            | Command::Trash { .. }
+            | Command::CloseTab { .. }
             | Command::OpenFolder { .. }
             | Command::Chat { .. }
             | Command::OpenPort { .. }
@@ -264,6 +283,22 @@ impl Workbench {
             self.persist(cx);
             cx.notify();
         }
+        true
+    }
+
+    /// Closes the tab holding `pane`, with all its splits, as its close button does. Its worktree
+    /// stays: whether that goes is asked at the Mac.
+    fn remote_close_tab(&mut self, id: u64, pane: u64, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.remote_workspace(id) else { return false };
+        let Some(panes) = self.workspaces[index]
+            .tabs
+            .iter()
+            .map(|tab| tab.root.leaves())
+            .find(|leaves| leaves.iter().any(|leaf| leaf.read(cx).pane_id == pane))
+        else {
+            return false;
+        };
+        self.perform_close(super::confirm::CloseTarget::Tabs(panes), window, cx);
         true
     }
 

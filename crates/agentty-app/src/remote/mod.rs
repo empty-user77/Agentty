@@ -1040,7 +1040,7 @@ fn tick(cx: &mut App) {
             order.sort_by_key(|window| !window.update(cx, |wb, _, cx| wb.remote_holds_orchestration(id, cx)).unwrap_or(false));
         }
         for window in &order {
-            let handled = window.update(cx, |wb, _, cx| wb.remote_apply(&command, cx)).unwrap_or(false);
+            let handled = window.update(cx, |wb, window, cx| wb.remote_apply(&command, window, cx)).unwrap_or(false);
             if handled {
                 break;
             }
