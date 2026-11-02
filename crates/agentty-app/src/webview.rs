@@ -425,6 +425,96 @@ extern "C" fn perform_key_equivalent(this: &Object, _: Sel, event: Id) -> BOOL {
     }
 }
 
+thread_local! {
+    /// The debug driver is pressing the mouse: its events reach the window directly, so they are
+    /// never the application's current event.
+    static TEST_PRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// See `TEST_PRESS`.
+pub fn note_test_press(pressing: bool) {
+    TEST_PRESS.with(|press| press.set(pressing));
+}
+
+/// Whether the mouse is being pressed on this web view at this moment.
+unsafe fn pressed_on(view: &Object) -> bool {
+    if TEST_PRESS.with(|press| press.get()) {
+        return true;
+    }
+    // NSEventTypeLeftMouseDown, RightMouseDown, OtherMouseDown.
+    const PRESSES: [u64; 3] = [1, 3, 25];
+    let app: Id = msg_send![class!(NSApplication), sharedApplication];
+    let event: Id = msg_send![app, currentEvent];
+    if event.is_null() {
+        return false;
+    }
+    let kind: u64 = msg_send![event, type];
+    let window: Id = msg_send![view, window];
+    let event_window: Id = msg_send![event, window];
+    if !PRESSES.contains(&kind) || window.is_null() || event_window != window {
+        return false;
+    }
+    let location: NSPoint = msg_send![event, locationInWindow];
+    let inside: NSPoint = msg_send![view, convertPoint: location fromView: std::ptr::null_mut::<Object>()];
+    let bounds: NSRect = msg_send![view, bounds];
+    inside.x >= bounds.origin.x
+        && inside.y >= bounds.origin.y
+        && inside.x < bounds.origin.x + bounds.size.width
+        && inside.y < bounds.origin.y + bounds.size.height
+}
+
+/// Window classes that got `make_first_responder`.
+static GUARDED_WINDOWS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// The keyboard comes to a page only when the person clicks in it. A script's `focus()` (a page's own,
+/// or the one an agent's click runs) makes WebKit ask the window for it too, which would take it from
+/// whatever the person is typing in: another pane, even when this page is parked out of sight. The
+/// script's element is still the page's active element. This has to be the window's answer: by the
+/// time a view is asked, the one holding the keyboard has already let go of it.
+extern "C" fn make_first_responder(this: &Object, _: Sel, responder: Id) -> BOOL {
+    unsafe {
+        if !responder.is_null() {
+            let page: BOOL = msg_send![responder, isKindOfClass: web_view_class()];
+            if page == YES && !holds_keyboard(&*responder) && !pressed_on(&*responder) {
+                return NO;
+            }
+        }
+        // From the class that got this method: the object's own may be a subclass made at runtime.
+        let guarded = GUARDED_WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut class = this.class();
+        while !guarded.contains(&(class as *const Class as usize)) {
+            match class.superclass() {
+                Some(parent) => class = parent,
+                None => return NO,
+            }
+        }
+        let Some(parent) = class.superclass() else { return NO };
+        msg_send![super(this, parent), makeFirstResponder: responder]
+    }
+}
+
+/// Puts `make_first_responder` on a window's class, once. Added to that class alone (GPUI's own), not
+/// to `NSWindow`, so no other window in the process is affected.
+unsafe fn guard_window_keyboard(window: Id) {
+    let class: &Class = msg_send![window, class];
+    let mut guarded = GUARDED_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    let key = class as *const Class as usize;
+    if guarded.contains(&key) {
+        return;
+    }
+    let imp: extern "C" fn(&Object, Sel, Id) -> BOOL = make_first_responder;
+    // An object, a selector and an object, returning a BOOL.
+    let added = objc::runtime::class_addMethod(
+        class as *const Class as *mut Class,
+        sel!(makeFirstResponder:),
+        std::mem::transmute::<extern "C" fn(&Object, Sel, Id) -> BOOL, objc::runtime::Imp>(imp),
+        c"c@:@".as_ptr(),
+    );
+    if added == YES {
+        guarded.push(key);
+    }
+}
+
 /// `WKWebView` that hands browser shortcuts to Agentty instead of letting them fall through.
 fn web_view_class() -> &'static Class {
     static REGISTER: Once = Once::new();
@@ -733,6 +823,7 @@ impl WebView {
             if parent.is_null() {
                 return None;
             }
+            guard_window_keyboard(ns_window);
             let config: Id = msg_send![class!(WKWebViewConfiguration), new];
             let bool_of = |on: bool| if on { YES } else { NO };
             let preferences: Id = msg_send![config, preferences];

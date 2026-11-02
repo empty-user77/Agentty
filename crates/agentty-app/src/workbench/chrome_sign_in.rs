@@ -127,7 +127,7 @@ pub(super) struct TabSignIn {
     /// Other profiles holding this site, tried when the first one doesn't sign in.
     other_profiles: Vec<ProfileCookies>,
     /// The blurred picture of the page behind the cover, once it is taken.
-    cover: Rc<RefCell<Option<std::path::PathBuf>>>,
+    cover: Rc<RefCell<Option<CoverPicture>>>,
     /// When a change in Chrome last reloaded the page.
     wait_reloaded_at: Option<Instant>,
     /// What each profile held for the site while waiting for a sign-in in Chrome (`None`: not
@@ -232,7 +232,8 @@ impl TabSignIn {
 pub(super) struct SignInMemory {
     /// The user said no, or closed the bar: not brought up again.
     declined: HashSet<String>,
-    /// When Chrome was last looked in for a site.
+    /// When a site's cookies last went in from Chrome, or reading them failed. Chrome having none
+    /// doesn't count: there is nothing to hold back, and it may have some by the next look.
     tried_at: HashMap<String, Instant>,
     /// The user denied macOS's question: asked in the bar from then on, not by macOS again.
     refused: bool,
@@ -360,11 +361,11 @@ fn apply(tab: &mut BrowserTab, found: ProfileCookies) {
 
 /// Loads `found` into the tab, the rest kept to try next.
 fn load_into(tab: &mut BrowserTab, host: &str, mut found: Vec<ProfileCookies>, memory: &mut SignInMemory) {
-    memory.tried_at.insert(host.to_string(), Instant::now());
     if found.is_empty() {
         tab.sign_in.stage = Stage::NotFound { host: host.into() };
         return;
     }
+    memory.tried_at.insert(host.to_string(), Instant::now());
     let first = found.remove(0);
     tab.sign_in.other_profiles = found;
     tab.sign_in.stage = Stage::Loaded { host: host.into(), profile: first.profile.name.clone(), confirmed_at: None };
@@ -522,7 +523,7 @@ impl Workbench {
         if !tab.sign_in.covers_page() {
             return None;
         }
-        let picture = tab.sign_in.cover.borrow().clone();
+        let picture = tab.sign_in.cover.borrow().as_ref().map(|picture| picture.0.clone());
         Some(
             div()
                 .id("chrome-cover")
@@ -651,8 +652,18 @@ fn covers_dir() -> std::path::PathBuf {
     agentty_bridge::fsutil::data_dir().join("browser-covers")
 }
 
+/// A picture of a page on disk, for as long as something holds it: its tab may go at any moment, with
+/// the workspace it is in, or while the picture is still being taken.
+struct CoverPicture(std::path::PathBuf);
+
+impl Drop for CoverPicture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// A very small picture of the page, in the background: the cover shows it stretched.
-fn take_cover_picture(view: &crate::webview::WebView, cover: &Rc<RefCell<Option<std::path::PathBuf>>>) {
+fn take_cover_picture(view: &crate::webview::WebView, cover: &Rc<RefCell<Option<CoverPicture>>>) {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = covers_dir();
     if agentty_bridge::fsutil::create_private_dir(&dir).is_err() {
@@ -669,16 +680,10 @@ fn take_cover_picture(view: &crate::webview::WebView, cover: &Rc<RefCell<Option<
         Box::new(move |result| {
             // Without a picture the cover is plain, which says the same.
             if result.is_ok() {
-                *cover.borrow_mut() = Some(taken);
+                *cover.borrow_mut() = Some(CoverPicture(taken));
             }
         }),
     );
-}
-
-fn drop_cover_picture(cover: &Rc<RefCell<Option<std::path::PathBuf>>>) {
-    if let Some(path) = cover.borrow_mut().take() {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 /// Looks after one tab; whether anything on screen changed.
@@ -771,7 +776,7 @@ fn tick_tab(tab: &mut BrowserTab, always: bool, memory: &mut SignInMemory, now: 
         _ => {}
     }
     if !sign_in.covers_page() {
-        drop_cover_picture(&sign_in.cover);
+        sign_in.cover.borrow_mut().take();
     }
     // Other profiles' cookies are only held while the first one's are being tried.
     if !matches!(sign_in.stage, Stage::Loaded { confirmed_at: None, .. }) {
@@ -1161,6 +1166,20 @@ mod tests {
             assert_eq!(next_stage, stage);
             assert_eq!(next, Next::Nothing);
         }
+    }
+
+    #[test]
+    fn a_cover_picture_goes_with_the_last_thing_holding_it() {
+        let path = std::env::temp_dir().join(format!("agentty-cover-test-{}.png", std::process::id()));
+        std::fs::write(&path, b"fake picture").unwrap();
+        let cover: Rc<RefCell<Option<CoverPicture>>> = Rc::default();
+        // The tab goes while the picture is still being taken: its callback holds the other handle.
+        let in_flight = cover.clone();
+        drop(cover);
+        *in_flight.borrow_mut() = Some(CoverPicture(path.clone()));
+        assert!(path.exists());
+        drop(in_flight);
+        assert!(!path.exists());
     }
 
     #[test]
