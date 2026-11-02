@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A plugin's page could stay on screen over everything after the in-app browser was closed, with no way to close it
+  short of restarting the app.
+
 ## [0.3.10] - 2026-11-02
 
 ### Added
