@@ -2165,6 +2165,8 @@ impl Workbench {
             for (tab_page, tab_category, label) in pages {
                 let active = tab_page == page && tab_category.is_none_or(|c| c == category);
                 let key = SharedString::from(format!("page-tab-{label}"));
+                // `tab_card` holds the card's hover style, and an element has only one.
+                let hovered = self.tab_hover.as_ref() == Some(&key);
                 tabs = tabs.child(
                     self.tab_card(div().id(key.clone()), key, active, &mut run, cx)
                         .flex()
@@ -2175,15 +2177,15 @@ impl Workbench {
                         .t_body()
                         .when(active, |d| d.text_color(hex(Chrome::BRIGHT)))
                         .when(!active, |d| {
-                            d.text_color(hex(Chrome::MUTED)).cursor_pointer().hover(|s| s.text_color(hex(Chrome::BRIGHT))).on_click(
-                                cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
+                            d.text_color(hex(if hovered { Chrome::BRIGHT } else { Chrome::MUTED })).cursor_pointer().on_click(cx.listener(
+                                move |this, _: &ClickEvent, window, cx| match tab_category {
                                     Some(category) => this.open_extensions(category, window, cx),
                                     None => {
                                         this.page = Some(tab_page);
                                         cx.notify();
                                     }
-                                }),
-                            )
+                                },
+                            ))
                         })
                         .child(label.to_string())
                         .when(active, |d| {

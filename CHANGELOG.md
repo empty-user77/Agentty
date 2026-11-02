@@ -10,8 +10,14 @@ All notable changes to this project are documented here. The format follows
   If Chrome has none that works, the page is blurred until you sign in in Chrome, which carries over by itself, or
   choose to sign in right there. Settings →
   Browser → Sign-ins sets Ask, Always or Off and the Chrome profile. Agents see where it stands in `browser_status`.
+- Delete Workspace moves a workspace to a trash, where it can be restored until it goes for good after a retention
+  period (7 days by default). Open it from the Monitoring tabs or a workspace's menu; set the period there or in
+  Settings → General. Restored workspaces resume their sessions, orchestrations and board tickets.
 
 ### Fixed
+- Typing in a pane could stop reaching it when an agent, or the page itself, moved focus inside an in-app browser
+  page. A page now takes the keyboard only when you click in it.
+- The team board could show a background task's notification as a session's goal, in place of what you asked.
 - A prompt sent from the chat could stay typed in Claude Code's input without being sent. Enter is now pressed again
   while exactly what was sent is still there.
 - A plugin's page could stay on screen over everything after the in-app browser was closed, with no way to close it

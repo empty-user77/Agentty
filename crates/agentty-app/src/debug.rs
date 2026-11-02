@@ -146,7 +146,9 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
         let mouse_counted = |kind: u64, x: f64, y: f64, modifiers: u64, clicks: isize| {
             let location = NSPoint::new(x, frame.size.height - y);
             let event: id = msg_send![class!(NSEvent), mouseEventWithType: kind location: location modifierFlags: modifiers timestamp: 0.0f64 windowNumber: number context: nil eventNumber: 0isize clickCount: clicks pressure: 1.0f32];
+            crate::webview::note_test_press(kind == 1);
             let () = msg_send![ns_window, sendEvent: event];
+            crate::webview::note_test_press(false);
         };
         let mouse = |kind: u64, x: f64, y: f64, modifiers: u64| mouse_counted(kind, x, y, modifiers, 1);
         match (command, coords) {
@@ -155,6 +157,15 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
             ("press", (Some(x), Some(y))) => {
                 mouse(5, x, y, 0);
                 mouse(1, x, y, 0);
+            }
+            // A click through the application's event queue, the way a real one arrives.
+            ("post-click", (Some(x), Some(y))) => {
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                for kind in [1u64, 2u64] {
+                    let location = NSPoint::new(x, frame.size.height - y);
+                    let event: id = msg_send![class!(NSEvent), mouseEventWithType: kind location: location modifierFlags: 0u64 timestamp: 0.0f64 windowNumber: number context: nil eventNumber: 0isize clickCount: 1isize pressure: 1.0f32];
+                    let () = msg_send![app, postEvent: event atStart: false];
+                }
             }
             ("drag-to", (Some(x), Some(y))) => mouse(6, x, y, 0),
             ("release", (Some(x), Some(y))) => mouse(2, x, y, 0),
