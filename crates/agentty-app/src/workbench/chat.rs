@@ -372,6 +372,15 @@ const HARNESS_TAGS: [&str; 9] = [
     "bash-stderr",
 ];
 
+/// What a person wrote in a prompt, without what the CLI added and any message from another session.
+/// None when that leaves nothing: the turn wasn't the person's.
+pub(crate) fn prompt_words(prompt: &str) -> Option<String> {
+    let (_, rest) = peer_messages(prompt);
+    let words = strip_harness_blocks(rest);
+    let words = words.trim();
+    (!words.is_empty()).then(|| words.to_string())
+}
+
 /// How Claude Code wraps a message from another session.
 const PEER_TAG: &str = "cross-session-message";
 
@@ -2859,6 +2868,10 @@ mod tests {
         assert_eq!(items, vec![ChatItem::User("hello".into())]);
         // An unclosed block runs to the end; a similar tag stays.
         assert_eq!(strip_harness_blocks("a <system-reminder> b"), "a ");
+        assert_eq!(prompt_words("<task-notification>\n<task-id>b1</task-id>\n</task-notification>\n"), None);
+        assert_eq!(prompt_words("<system-reminder>be brief</system-reminder>\nFix the total"), Some("Fix the total".into()));
+        assert_eq!(prompt_words("<cross-session-message from=\"x\">hi</cross-session-message>"), None);
+        assert_eq!(prompt_words("Use List<String> here"), Some("Use List<String> here".into()));
         assert_eq!(strip_harness_blocks("a <task-notificationx> b"), "a <task-notificationx> b");
         // A command run with `!`: the command stays, what it printed goes.
         let (items, _) = chat_items(&[

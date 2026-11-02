@@ -1629,7 +1629,9 @@ impl TerminalView {
                 // next request is a new one. A subagent's tool call says nothing about that.
                 if detail.subagent.is_none() {
                     self.ask_gate.resume();
-                    if let Some(prompt) = detail.prompt.clone() {
+                    // The hook also reports what the CLI itself sends the agent, such as a background
+                    // task's notification: that must not take the place of what the person asked.
+                    if let Some(prompt) = detail.prompt.as_deref().and_then(crate::workbench::prompt_words) {
                         self.last_prompt = Some(prompt);
                     }
                 }

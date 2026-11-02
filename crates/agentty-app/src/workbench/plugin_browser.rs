@@ -825,11 +825,14 @@ impl Workbench {
         let waiting = std::mem::take(&mut self.plugin_pages_to_show);
         let mut hidden = Vec::new();
         for page in &mut self.plugin_browsers {
-            if page.shown && !in_panel.contains(&page.id) && !waiting.contains(&page.id) {
-                page.shown = false;
+            let settled = settle_page(page.shown, in_panel.contains(&page.id), waiting.contains(&page.id));
+            page.shown = settled.shown;
+            if settled.leave_screen {
                 if let Some(view) = page.webview.borrow_mut().as_mut() {
                     view.park();
                 }
+            }
+            if settled.tell_plugin {
                 hidden.push((page.plugin.clone(), page.id));
             }
         }
@@ -853,9 +856,45 @@ impl Workbench {
     }
 }
 
+/// Where a plugin's page stands after a render.
+#[derive(Debug, PartialEq)]
+struct SettledPage {
+    shown: bool,
+    /// Its native view goes out of the window. A view stays where it was last placed until told
+    /// otherwise, over whatever is drawn there, so this goes by whether a tab shows it and by
+    /// nothing else.
+    leave_screen: bool,
+    tell_plugin: bool,
+}
+
+fn settle_page(shown: bool, in_panel: bool, waiting: bool) -> SettledPage {
+    let gone = !in_panel && !waiting;
+    SettledPage { shown: if gone { false } else { shown || in_panel }, leave_screen: gone, tell_plugin: gone && shown }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_no_tab_shows_always_leaves_the_screen() {
+        // The bug: back in the panel from a set-aside browser, it counted as hidden, so closing
+        // the panel left its view on screen with nothing to close it by.
+        assert_eq!(settle_page(false, false, false), SettledPage { shown: false, leave_screen: true, tell_plugin: false });
+        assert_eq!(settle_page(true, false, false), SettledPage { shown: false, leave_screen: true, tell_plugin: true });
+    }
+
+    #[test]
+    fn a_page_a_tab_shows_counts_as_shown_however_it_got_there() {
+        assert_eq!(settle_page(false, true, false), SettledPage { shown: true, leave_screen: false, tell_plugin: false });
+        assert_eq!(settle_page(true, true, false), SettledPage { shown: true, leave_screen: false, tell_plugin: false });
+    }
+
+    #[test]
+    fn a_page_about_to_get_its_tab_stays() {
+        assert_eq!(settle_page(true, false, true), SettledPage { shown: true, leave_screen: false, tell_plugin: false });
+        assert_eq!(settle_page(false, false, true), SettledPage { shown: false, leave_screen: false, tell_plugin: false });
+    }
 
     #[test]
     fn a_page_is_laid_out_as_the_plugin_asks() {

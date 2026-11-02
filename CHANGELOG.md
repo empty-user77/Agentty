@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows
   choose to sign in right there. Settings →
   Browser → Sign-ins sets Ask, Always or Off and the Chrome profile. Agents see where it stands in `browser_status`.
 
+### Fixed
+- A plugin's page could stay on screen over everything after the in-app browser was closed, with no way to close it
+  short of restarting the app.
+
 ## [0.3.10] - 2026-11-02
 
 ### Added
