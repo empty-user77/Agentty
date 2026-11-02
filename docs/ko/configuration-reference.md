@@ -72,6 +72,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `agentGuide` | 여기서 시작한 에이전트에게 Agentty 명령 안내를 전달 |
 | `stopServersOnClose` | 페인을 닫으면 거기서 시작한 서버를 종료 |
 | `confirmClose` | 사용한 것을 닫기 전에 확인 |
+| `trashRetentionDays` | 삭제한 작업공간이 완전히 삭제되기 전까지 휴지통에 남는 일수 (기본 7일) |
 | `agentBarPosition` | `top` 또는 `bottom` |
 | `workspaceSearchBar` | 작업공간 목록 위 검색창. 이름과 그 안에서 나눈 대화를 검색(기본 켬) |
 | `sortFinishedToTop` | 에이전트가 끝낸 작업공간을 맨 위로 올림(기본 끔. 끄면 직접 정리한 순서 유지) |

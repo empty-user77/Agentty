@@ -72,6 +72,7 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `agentGuide` | ここで起動したエージェントに Agentty のコマンド案内を渡す |
 | `stopServersOnClose` | ペインを閉じたら、そこで起動したサーバーを終了 |
 | `confirmClose` | 使用したものを閉じる前に確認 |
+| `trashRetentionDays` | 削除したワークスペースが完全に削除されるまでゴミ箱に残る日数（既定は 7 日） |
 | `agentBarPosition` | `top` または `bottom` |
 | `workspaceSearchBar` | ワークスペース一覧の上の検索欄。名前と、その中の会話を検索（既定でオン） |
 | `sortFinishedToTop` | エージェントが終えたワークスペースを一番上へ（既定でオフ。オフなら自分で並べた順序のまま） |

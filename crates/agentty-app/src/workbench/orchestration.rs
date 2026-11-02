@@ -888,19 +888,36 @@ impl Workbench {
     /// A workspace removed for good takes the orchestrations led from it along: their terminals,
     /// open or asleep, are gone with it.
     pub(super) fn forget_orchestrations_in(&mut self, workspace: usize, cx: &gpui::App) {
-        let gone: Vec<u64> = self
-            .orchestrations()
-            .clone()
-            .iter()
+        for record in self.orchestrations_in(workspace, cx) {
+            self.forget_orchestration(record.id);
+        }
+    }
+
+    /// The orchestrations led from workspace `workspace`.
+    pub(super) fn orchestrations_in(&mut self, workspace: usize, cx: &gpui::App) -> Vec<Record> {
+        let records = self.orchestrations().clone();
+        records
+            .into_iter()
             .filter(|r| match self.pane_of_record(r, cx) {
                 Some(pane) => self.locate(&pane).is_some_and(|(w, _)| w == workspace),
                 None => !r.session.is_empty() && self.sleeping_workspace_of(r) == Some(workspace),
             })
-            .map(|r| r.id)
-            .collect();
-        for id in gone {
-            self.forget_orchestration(id);
+            .collect()
+    }
+
+    /// Orchestrations of a workspace back from the trash, found again by their session as after a
+    /// restart. One not yet named by its agent had only a pane to go by, and that is gone.
+    pub(super) fn bring_back_orchestrations(&mut self, records: Vec<Record>) {
+        if records.is_empty() {
+            return;
         }
+        let list = self.orchestrations();
+        for record in records.into_iter().filter(|r| !r.session.is_empty()) {
+            if !list.iter().any(|known| known.id == record.id) {
+                list.push(record);
+            }
+        }
+        save_records(list);
     }
 
     /// The strip across the top of an orchestrator's pane: its stage in the page's words, the way to

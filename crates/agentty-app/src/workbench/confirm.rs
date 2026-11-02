@@ -74,7 +74,10 @@ impl Workbench {
         // Removing a synced workspace always asks: whether its sync data goes too.
         let synced = matches!(target, CloseTarget::Workspace(id) if self.workspace_synced(id));
         if !settings(cx).confirm_close && trees.is_empty() && !synced {
-            return self.perform_close(target, window, cx);
+            return match target {
+                CloseTarget::Workspace(id) => self.move_workspace_to_trash(id, Vec::new(), false, window, cx),
+                target => self.perform_close(target, window, cx),
+            };
         }
         let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
         self.close_confirm = Some(CloseConfirm {
@@ -95,7 +98,7 @@ impl Workbench {
     /// After their panes closed: removes the working trees and their branches. Git keeps what would be
     /// lost — a tree with uncommitted changes, a branch with commits nothing else has — and a toast
     /// says what went and what stayed.
-    fn remove_trees_after_close(&mut self, trees: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+    pub(super) fn remove_trees_after_close(&mut self, trees: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             // The panes' processes leave the folders first.
             cx.background_executor().timer(std::time::Duration::from_millis(600)).await;
@@ -181,8 +184,10 @@ impl Workbench {
                 }
             });
         }
-        if let (CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
-            self.sync_workspace_removed(*id, true, cx);
+        // A workspace goes to the trash; its trees and sync data wait for the permanent delete.
+        if let CloseTarget::Workspace(id) = confirm.target {
+            let trees = if confirm.remove_trees { confirm.trees } else { Vec::new() };
+            return self.move_workspace_to_trash(id, trees, confirm.delete_sync, window, cx);
         }
         self.perform_close(confirm.target, window, cx);
         if confirm.remove_trees && !confirm.trees.is_empty() {
@@ -242,7 +247,10 @@ impl Workbench {
                 tf(
                     cx,
                     "confirm.close_workspace_body",
-                    &[("name", &self.workspaces.iter().find(|w| w.id == *id).map(|w| self.workspace_title(w, cx)).unwrap_or_default())],
+                    &[
+                        ("name", &self.workspaces.iter().find(|w| w.id == *id).map(|w| self.workspace_title(w, cx)).unwrap_or_default()),
+                        ("n", &settings(cx).trash_retention_days.max(1).to_string()),
+                    ],
                 ),
             ),
         };
@@ -332,9 +340,14 @@ impl Workbench {
                                                 &[("n", &confirm.trees.len().to_string())],
                                             )))
                                             .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(names))
-                                            .child(
-                                                div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "confirm.remove_trees_hint")),
-                                            ),
+                                            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(
+                                                cx,
+                                                if matches!(confirm.target, CloseTarget::Workspace(_)) {
+                                                    "trash.remove_trees_hint"
+                                                } else {
+                                                    "confirm.remove_trees_hint"
+                                                },
+                                            ))),
                                     ),
                             )
                         })

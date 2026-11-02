@@ -72,6 +72,7 @@ Secrets are never in these files. They live in the operating system's credential
 | `agentGuide` | Agents started here get a short guide to Agentty's commands |
 | `stopServersOnClose` | Closing a pane stops the servers started in it |
 | `confirmClose` | Ask before closing something that was used |
+| `trashRetentionDays` | Days a deleted workspace stays in the trash before it is deleted for good (7 by default) |
 | `agentBarPosition` | `top` or `bottom` |
 | `workspaceSearchBar` | Search box above the workspace list, over names and the conversations held in them (on by default) |
 | `sortFinishedToTop` | Move a workspace to the top when its agent finishes (off by default; off keeps the order you arranged yourself) |

@@ -92,6 +92,8 @@ mod tab_menu;
 mod tasks;
 mod terminal_browser;
 mod todo;
+mod trash;
+pub use trash::DEFAULT_RETENTION_DAYS as TRASH_RETENTION_DAYS;
 mod tree_manager;
 pub mod update;
 mod voice_input;
@@ -351,6 +353,8 @@ pub enum Page {
     Disk,
     /// Monitoring → every in-app browser open: whose, its state, its memory.
     Browsers,
+    /// Monitoring → deleted workspaces, until they go for good.
+    Trash,
     Settings,
     Extensions,
     Plugins,
@@ -640,6 +644,7 @@ pub struct Workbench {
     status_menu_pane: Option<Pane>,
     processes: processes::ProcessMonitor,
     tree_manager: tree_manager::TreeManager,
+    trash: trash::TrashPage,
     disk_manager: disk_page::DiskManager,
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
@@ -1035,6 +1040,7 @@ impl Workbench {
             status_menu_pane: None,
             processes: Default::default(),
             tree_manager: Default::default(),
+            trash: Default::default(),
             disk_manager: Default::default(),
             inventory: Default::default(),
             browser: None,
@@ -1174,6 +1180,7 @@ impl Workbench {
         this.start_server_watch(cx);
         this.start_sync(cx);
         this.start_browser_budget(cx);
+        this.start_trash_expiry(cx);
         browsers_page::clear_previews();
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
@@ -1832,7 +1839,7 @@ impl Workbench {
         let group = self.workspaces[index].group;
         let panes: Vec<Pane> = self.workspaces[index].tabs.iter().flat_map(|t| t.root.leaves()).collect();
         // Its final state goes to the sync repository before the workspace is gone.
-        self.sync_workspace_removed(id, false, cx);
+        self.sync_workspace_removed(id, cx);
         self.forget_orchestrations_in(index, cx);
         self.workspaces[index].dormant = None;
         self.removing_workspace = Some(id);
@@ -3161,30 +3168,7 @@ impl Workbench {
     }
 
     fn persist(&self, cx: &gpui::App) {
-        let workspaces = self
-            .workspaces
-            .iter()
-            .map(|ws| {
-                if let Some(dormant) = &ws.dormant {
-                    // Live tabs beside a snapshot are saved with it, never dropped.
-                    let mut tabs = if ws.asleep_on_close && !ws.tabs.is_empty() { Vec::new() } else { dormant.tabs.clone() };
-                    tabs.extend(ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)));
-                    return WorkspaceSnapshot {
-                        name: ws.name.clone(),
-                        group: ws.group,
-                        closed_tabs: ws.closed_tabs.clone(),
-                        color: None,
-                        color_value: ws.color,
-                        remote_hidden: ws.remote_hidden,
-                        marks: ws.marks.clone(),
-                        parked: ws.parked.clone(),
-                        tabs,
-                        ..dormant.clone()
-                    };
-                }
-                self.live_snapshot(ws, cx)
-            })
-            .collect();
+        let workspaces = self.workspaces.iter().map(|ws| self.workspace_snapshot(ws, cx)).collect();
         let state = LayoutState {
             groups: self
                 .groups
@@ -3525,6 +3509,7 @@ impl Render for Workbench {
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
             Some(Page::Worktrees) => self.render_tree_manager(cx).into_any_element(),
             Some(Page::Disk) => self.render_disk_page(cx).into_any_element(),
+            Some(Page::Trash) => self.render_trash_page(cx).into_any_element(),
             Some(Page::Browsers) => self.render_browsers_page(cx).into_any_element(),
             Some(Page::Settings) => self.render_settings(window, cx).into_any_element(),
             Some(Page::Extensions) => gpui::AnyView::from(self.extensions_view(window, cx))
@@ -4146,6 +4131,7 @@ impl Workbench {
             Page::Processes => "processes",
             Page::Worktrees => "worktrees",
             Page::Disk => "disk",
+            Page::Trash => "trash",
             Page::Browsers => "browsers",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
@@ -4453,6 +4439,8 @@ impl Workbench {
                         "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
                         "sync": self.sync.debug_state(),
+                        "trash": self.trash_debug_state(),
+                        "page": self.page.map(Self::page_name),
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                         "plugins": {
                             "panel": self.plugin_panel,
@@ -4513,6 +4501,7 @@ impl Workbench {
                     "processes" => Some(Page::Processes),
                     "worktrees" => Some(Page::Worktrees),
                     "disk" => Some(Page::Disk),
+                    "trash" => Some(Page::Trash),
                     "browsers" => Some(Page::Browsers),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
@@ -4805,10 +4794,24 @@ impl Workbench {
                 None => self.debug_browser_budget(cx),
             },
             // `workspace-at <n>`: the n-th workspace in front, as its card does.
-            // `close-workspace <n>`: removes the n-th workspace, as its confirmed "Delete" does.
+            // `close-workspace <n>`: moves the n-th workspace to the trash, as its confirmed "Delete" does.
             "close-workspace" => {
                 if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
-                    self.close_workspace(id, window, cx);
+                    self.move_workspace_to_trash(id, Vec::new(), false, window, cx);
+                }
+            }
+            "trash-restore" | "trash-purge" => self.debug_trash(command, argument, cx),
+            // `delete-tree <n>`: asks to delete the n-th workspace's worktree, as its menu does.
+            "delete-tree" => {
+                if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
+                    self.request_delete_tree(id, window, cx);
+                }
+            }
+            // `workspace-menu <n>`: opens the n-th workspace's menu, as its card's ⋯ does.
+            "workspace-menu" => {
+                if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
+                    self.open_workspace_menu(id, 80.);
+                    cx.notify();
                 }
             }
             "workspace-at" => {
@@ -5191,10 +5194,13 @@ impl Workbench {
             "close-confirm" => {
                 if let Some(confirm) = self.close_confirm.take() {
                     eprintln!("layout: confirming removes_workspace={}", confirm.removes_workspace);
-                    if let (confirm::CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
-                        self.sync_workspace_removed(*id, true, cx);
+                    match confirm.target {
+                        confirm::CloseTarget::Workspace(id) => {
+                            let trees = if confirm.remove_trees { confirm.trees } else { Vec::new() };
+                            self.move_workspace_to_trash(id, trees, confirm.delete_sync, window, cx);
+                        }
+                        target => self.perform_close(target, window, cx),
                     }
-                    self.perform_close(confirm.target, window, cx);
                 }
             }
             // `ask-close-workspace <n>`: asks to remove the n-th workspace, as its card's × does.
