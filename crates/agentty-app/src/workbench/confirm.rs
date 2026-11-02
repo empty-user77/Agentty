@@ -1,7 +1,7 @@
 //! "Close this?" confirmation for panes, tabs and workspaces (unless turned off in settings).
 
 use super::{Pane, Workbench};
-use crate::i18n::{t, tf};
+use crate::i18n::{t, tf, tf_count};
 use crate::settings::{settings, update_settings};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -244,13 +244,11 @@ impl Workbench {
             CloseTarget::Tabs(panes) => (t(cx, "confirm.close_tab"), tf(cx, "confirm.close_tab_body", &[("n", &panes.len().to_string())])),
             CloseTarget::Workspace(id) => (
                 t(cx, "confirm.close_workspace"),
-                tf(
+                tf_count(
                     cx,
                     "confirm.close_workspace_body",
-                    &[
-                        ("name", &self.workspaces.iter().find(|w| w.id == *id).map(|w| self.workspace_title(w, cx)).unwrap_or_default()),
-                        ("n", &settings(cx).trash_retention_days.max(1).to_string()),
-                    ],
+                    settings(cx).trash_retention_days.max(1) as usize,
+                    &[("name", &self.workspaces.iter().find(|w| w.id == *id).map(|w| self.workspace_title(w, cx)).unwrap_or_default())],
                 ),
             ),
         };
@@ -438,7 +436,14 @@ impl Workbench {
                                 .child(
                                     button(
                                         "close-confirm-ok",
-                                        t(cx, if confirm.deleting_tree { "confirm.delete" } else { "confirm.close" }),
+                                        t(
+                                            cx,
+                                            if confirm.deleting_tree || matches!(confirm.target, CloseTarget::Workspace(_)) {
+                                                "confirm.delete"
+                                            } else {
+                                                "confirm.close"
+                                            },
+                                        ),
                                         true,
                                     )
                                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.confirm_close(window, cx))),

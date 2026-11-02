@@ -238,6 +238,18 @@ pub fn held_message_choice(lines: &[String]) -> Option<usize> {
 /// in the input.
 const SUBMIT_RECHECKS_MS: [u64; 3] = [600, 1200, 2400];
 
+/// How long a prompt waits for a starting agent to take pastes. After that it goes as it did before:
+/// a program that never turns paste mode on must not hold its prompts back for good.
+const SUBMIT_READY_WAIT: Duration = Duration::from_secs(20);
+const SUBMIT_READY_LOOK: Duration = Duration::from_millis(100);
+
+/// Whether a prompt should wait before going in. Until an agent's interface is up the terminal is
+/// still in line mode, where the system keeps 1024 bytes of a line and drops the rest without a word
+/// (and an Enter pressed then does not reach the input). Paste mode on means the interface is up.
+fn waits_for_paste_mode(agent: Option<PaneKind>, bracketed: bool) -> bool {
+    !bracketed && matches!(agent, Some(PaneKind::Claude | PaneKind::Codex))
+}
+
 /// Whether `sent` still sits in Claude Code's input box: between the box's two borders, at the end
 /// of what is there. The conversation above the box shows it too once it went through, and anything
 /// the user typed after it, or instead of it, is not this. Other programs draw no such box and
@@ -252,12 +264,22 @@ pub fn sent_text_in_input(lines: &[String], sent: &str) -> bool {
     let mut input: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
     let after_first = lines[top + 1..bottom].iter().skip_while(|line| line.trim().is_empty()).skip(1);
     input.extend(after_first.flat_map(|line| line.chars()).filter(|c| !c.is_whitespace()));
+    // A long paste is shown folded, by how many lines it has after the first.
+    let line_breaks = sent.matches('\n').count();
     let sent: Vec<char> = sent.chars().filter(|c| !c.is_whitespace()).collect();
     if sent.is_empty() {
         return false;
     }
     let tail: String = sent[sent.len().saturating_sub(24)..].iter().collect();
-    input.ends_with(&tail)
+    input.ends_with(&tail) || is_folded_paste(&input, line_breaks)
+}
+
+/// Whether the box holds nothing but Claude Code's `[Pasted text #3 +30 lines]` for that many lines
+/// (white space already taken out).
+fn is_folded_paste(input: &str, line_breaks: usize) -> bool {
+    let Some(rest) = input.strip_prefix("[Pastedtext#").and_then(|rest| rest.strip_suffix("lines]")) else { return false };
+    let Some((number, lines)) = rest.split_once('+') else { return false };
+    !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && lines.parse() == Ok(line_breaks)
 }
 
 /// Classifies the visible bottom lines of Claude Code / Codex.
@@ -349,6 +371,8 @@ pub struct TerminalView {
     /// Prompts for `submit_prompt` that wait for the previous one's Enter, and whether one is mid-send.
     submit_queue: std::collections::VecDeque<String>,
     submit_busy: bool,
+    /// The chat view found work running in the background: between turns the status says so.
+    pub background_running: bool,
     pub error: Option<String>,
     focus_handle: FocusHandle,
     marked_text: Option<String>,
@@ -552,6 +576,7 @@ impl TerminalView {
             pending_input: Vec::new(),
             submit_queue: Default::default(),
             submit_busy: false,
+            background_running: false,
             error: None,
             focus_handle: cx.focus_handle(),
             marked_text: None,
@@ -1938,6 +1963,27 @@ impl TerminalView {
             return;
         }
         self.submit_busy = true;
+        if !waits_for_paste_mode(self.agent_kind(), self.mode().contains(TermMode::BRACKETED_PASTE)) {
+            return self.paste_and_enter(text, cx);
+        }
+        cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            while started.elapsed() < SUBMIT_READY_WAIT {
+                let waiting =
+                    this.update(cx, |view, _| waits_for_paste_mode(view.agent_kind(), view.mode().contains(TermMode::BRACKETED_PASTE)));
+                match waiting {
+                    Ok(true) => cx.background_executor().timer(SUBMIT_READY_LOOK).await,
+                    Ok(false) => break,
+                    Err(_) => return,
+                }
+            }
+            let _ = this.update(cx, |view, cx| view.paste_and_enter(text, cx));
+        })
+        .detach();
+    }
+
+    /// The paste and its Enter, once the program can take them.
+    fn paste_and_enter(&mut self, text: String, cx: &mut Context<Self>) {
         let sent = text.clone();
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
@@ -3462,6 +3508,16 @@ mod screen_tests {
         assert!(!classify_screen(&lines("* the reply used 5k tokens (roughly · half)\n>")).busy);
         assert!(!classify_screen(&lines("* the reply used (5k tokens · half)\n>")).busy);
         assert!(!classify_screen(&lines("· the reply used (5k tokens · half)\n>")).busy);
+        // Until an agent's interface is up a prompt waits; other programs never do.
+        assert!(super::waits_for_paste_mode(Some(super::PaneKind::Claude), false));
+        assert!(super::waits_for_paste_mode(Some(super::PaneKind::Codex), false));
+        assert!(!super::waits_for_paste_mode(Some(super::PaneKind::Claude), true));
+        assert!(!super::waits_for_paste_mode(None, false));
+        // A long paste is folded in the box: it is known by its line count, and nothing else is it.
+        let folded = |input: &str| lines(&format!("⏺ 답변\n───────────\n{input}\n───────────\n  bypass permissions on"));
+        assert!(super::sent_text_in_input(&folded("❯ [Pasted text #1 +2 lines]"), "one\ntwo\nthree"));
+        assert!(!super::sent_text_in_input(&folded("❯ [Pasted text #1 +9 lines]"), "one\ntwo\nthree"));
+        assert!(!super::sent_text_in_input(&folded("❯ some words [Pasted text #1 +2 lines]"), "one\ntwo\nthree"));
         // What was sent, still in the input box or gone from it.
         let sent = "'/var/T/스크린샷 오전 11.11.18.png' 이거는 문구를\n그리고 지금 TC 도는것도 블럭이 너무 많은데";
         let boxed = |input: &str| lines(&format!("⏺ 답변\n───────────\n{input}\n───────────\n  bypass permissions on"));

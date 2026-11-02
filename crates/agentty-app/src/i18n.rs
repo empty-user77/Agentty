@@ -17,6 +17,26 @@ pub fn tf(cx: &App, key: &'static str, args: &[(&str, &str)]) -> String {
     text
 }
 
+/// [`tf`] for a sentence about `n` things: `day(s)` reads `1 day` or `2 days`, `Tag(e)` the same way.
+pub fn tf_count(cx: &App, key: &'static str, n: usize, args: &[(&str, &str)]) -> String {
+    counted(&tf(cx, key, args), n)
+}
+
+#[test]
+fn counted_says_one_or_many() {
+    assert_eq!(counted("{n} day(s) left", 1), "1 day left");
+    assert_eq!(counted("{n} day(s) left", 7), "7 days left");
+    assert_eq!(counted("{n} day(s) left", 0), "0 days left");
+    assert_eq!(counted("noch {n} Tag(e)", 1), "noch 1 Tag");
+    assert_eq!(counted("noch {n} Tag(e)", 3), "noch 3 Tage");
+    assert_eq!(counted("{n}일 남음", 1), "1일 남음");
+}
+
+fn counted(text: &str, n: usize) -> String {
+    let (s, e) = if n == 1 { ("", "") } else { ("s", "e") };
+    text.replace("{n}", &n.to_string()).replace("(s)", s).replace("(e)", e)
+}
+
 pub fn tr(language: Language, key: &'static str) -> &'static str {
     let Some(row) = platform_row(key).or_else(|| lookup(key)) else { return key };
     let text = match language.resolved() {
@@ -1659,6 +1679,8 @@ strings! {
     "status.idle_short" => ["Ready", "대기", "待機", "就绪", "Bereit"],
     "status.working_short" => ["Busy", "작업", "作業", "工作", "Aktiv"],
     "status.thinking_short" => ["Think", "생각", "思考", "思考", "Denkt"],
+    "status.background" => ["Running in background", "백그라운드 작업 중", "バックグラウンド実行中", "后台运行中", "Läuft im Hintergrund"],
+    "status.background_short" => ["Background", "백그라운드", "バックグラウンド", "后台", "Hintergrund"],
     "status.finished_short" => ["Done", "완료", "完了", "完成", "Fertig"],
     "status.permission_short" => ["Allow?", "권한", "権限", "权限", "Erlauben?"],
     "status.question_short" => ["Ask", "질문", "質問", "提问", "Frage"],

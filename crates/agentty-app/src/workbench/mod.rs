@@ -4341,6 +4341,13 @@ pub fn status_label(view: &TerminalView, cx: &gpui::App) -> (String, u32) {
 /// word says less than a short one. The colour tells the rest.
 pub fn status_label_sized(view: &TerminalView, compact: bool, cx: &gpui::App) -> (String, u32) {
     use crate::terminal::AgentStatus;
+    if view.background_running
+        && view.is_running()
+        && view.is_agent()
+        && matches!(view.status, AgentStatus::Idle | AgentStatus::Finished(_))
+    {
+        return (t(cx, if compact { "status.background_short" } else { "status.background" }).into(), Chrome::ACCENT);
+    }
     if compact && view.is_running() && view.is_agent() {
         let (key, color) = match &view.status {
             AgentStatus::Idle => ("status.idle_short", Chrome::MUTED),
