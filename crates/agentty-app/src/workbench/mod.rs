@@ -24,6 +24,7 @@ mod context_menu;
 mod db_diagram;
 mod db_page;
 mod diagnostics;
+pub(crate) mod diff_body;
 mod disk_page;
 mod docker_panel;
 mod drop_split;
@@ -619,6 +620,8 @@ pub struct Workbench {
     editor_session_open: bool,
     /// The column lists the sessions to pick from instead of showing one.
     editor_session_picking: bool,
+    /// An instruction waiting for the user to pick the session it goes to.
+    pending_ask: Option<String>,
     /// Dragging the column's edge: (pointer x, width) at the start.
     editor_session_drag: Option<(f32, f32)>,
     /// Width of the editor's area (editor and session together), as last laid out.
@@ -1030,6 +1033,7 @@ impl Workbench {
             editor_link: None,
             editor_session_open: false,
             editor_session_picking: false,
+            pending_ask: None,
             editor_session_drag: None,
             editor_area_width: 1200.,
             discard_confirmed: false,
@@ -3540,8 +3544,8 @@ impl Render for Workbench {
             None if self.editor_visible(cx) => {
                 self.sync_editor_link(cx);
                 let editor = self.render_editor(cx).expect("editor is visible");
-                // A diff takes the editor's place: no session beside it.
-                if self.file_diff.is_some() {
+                // A diff takes the editor's place, with no session beside it until one is asked.
+                if self.file_diff.as_ref().is_some_and(|diff| !diff.session_shown) {
                     editor
                 } else {
                     self.render_editor_with_session(editor, cx)
@@ -4493,6 +4497,20 @@ impl Workbench {
                 });
             }
             "edit" => self.debug_editor("edit", argument, window, cx),
+            "diff-open" => self.open_file_diff(Path::new(argument), cx),
+            "diff-state" => {
+                let state = match self.page {
+                    Some(_) => self.git.as_ref().map(|git| git.read(cx).debug_diff(cx)),
+                    None => self.file_diff.as_ref().map(|diff| diff.body.read(cx).debug_state()),
+                };
+                let session = self.file_diff.as_ref().is_some_and(|diff| diff.session_shown) && self.editor_session_open;
+                eprintln!(
+                    "diff-state: {} session={session} picking={} pending={}",
+                    state.unwrap_or_default(),
+                    self.editor_session_picking,
+                    self.pending_ask.is_some()
+                );
+            }
             "editor" => {
                 let (command, argument) = argument.split_once(' ').unwrap_or((argument, ""));
                 self.debug_editor(command, argument, window, cx);

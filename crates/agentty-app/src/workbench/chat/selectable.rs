@@ -274,7 +274,7 @@ fn index_at(layout: &gpui::TextLayout, text: &str, position: gpui::Point<gpui::P
 }
 
 /// The word around `at` (letters, digits and `_`), for a double click.
-fn word_at(text: &str, at: usize) -> (usize, usize) {
+pub(in crate::workbench) fn word_at(text: &str, at: usize) -> (usize, usize) {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let start = text[..at].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(at, |(i, _)| i);
     let end = text[at..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len(), |(i, _)| at + i);

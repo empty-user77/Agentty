@@ -2,25 +2,37 @@
 //!
 //! Picking a file under the files panel's "changes" tab asks what changed about it, not what is in
 //! it: the editor showed the whole file and left the reader to spot the difference themselves.
-//! The diff is drawn the way AgentGit draws it, and a switch in its header opens the file itself.
+//! The diff is drawn the way AgentGit draws it (see [`DiffBody`]), a switch in its header opens the
+//! file itself, and it follows the file while an agent changes it.
 
+use super::diff_body::DiffBody;
 use super::Workbench;
 use crate::i18n::t;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, middle_ellipsis, IconSize, TypeScale};
 use agentty_bridge::git::{DiffLine, FileChange};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Window};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::SystemTime;
 
 /// What the editor area shows instead of a file: the diff of one changed file.
 pub(super) struct FileDiff {
     pub repo: PathBuf,
     pub path: PathBuf,
-    /// `None` while git is still being asked.
+    /// `None` while git is still being asked for the first time.
     pub lines: Option<Rc<Vec<DiffLine>>>,
     pub error: Option<String>,
-    pub scroll: gpui::UniformListScrollHandle,
+    pub body: Entity<DiffBody>,
+    /// An instruction was sent from a diff: its session stays in view beside the diffs after it.
+    pub session_shown: bool,
+    /// The file's time when it was last read, and whether it is being read now.
+    modified: Option<SystemTime>,
+    reading: bool,
+}
+
+fn modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
 impl Workbench {
@@ -29,20 +41,19 @@ impl Workbench {
         let Some(repo) = agentty_bridge::git::repo_root(path.parent().unwrap_or(path)) else {
             return;
         };
-        let Ok(relative) = path.strip_prefix(&repo) else { return };
-        // The kind matters: an untracked file has no diff to ask git for, it is all new.
-        let change = self.files_panel.as_ref().and_then(|panel| panel.change_for(path)).unwrap_or(FileChange {
-            path: relative.to_string_lossy().into_owned(),
-            original: None,
-            kind: 'M',
-            staged: false,
-        });
+        if path.strip_prefix(&repo).is_err() {
+            return;
+        }
+        let session_shown = self.file_diff.as_ref().is_some_and(|diff| diff.session_shown);
         self.file_diff = Some(FileDiff {
-            repo: repo.clone(),
+            repo,
             path: path.to_path_buf(),
             lines: None,
             error: None,
-            scroll: gpui::UniformListScrollHandle::new(),
+            body: cx.new(DiffBody::new),
+            session_shown,
+            modified: None,
+            reading: false,
         });
         self.page = None;
         self.session_viewer = None;
@@ -51,29 +62,65 @@ impl Workbench {
         if let Some(panel) = self.files_panel.as_mut() {
             panel.select(path);
         }
-        let shown = path.to_path_buf();
+        self.reload_file_diff(cx);
+        cx.notify();
+    }
+
+    /// Reads the shown diff again, keeping the place in it.
+    pub(super) fn reload_file_diff(&mut self, cx: &mut Context<Self>) {
+        let Some(diff) = self.file_diff.as_ref() else { return };
+        let (repo, path) = (diff.repo.clone(), diff.path.clone());
+        let Ok(relative) = path.strip_prefix(&repo) else { return };
+        let rel = relative.to_string_lossy().replace('\\', "/");
+        // The kind matters: an untracked file has no diff to ask git for, it is all new.
+        let change = self.files_panel.as_ref().and_then(|panel| panel.change_for(&path)).unwrap_or(FileChange {
+            path: rel.clone(),
+            original: None,
+            kind: 'M',
+            staged: false,
+        });
+        if let Some(diff) = self.file_diff.as_mut() {
+            diff.modified = modified(&path);
+            diff.reading = true;
+        }
         let task = cx.background_spawn(async move { agentty_bridge::git::working_diff(&repo, &change) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 // The user may have moved on to another file while git was answering.
-                let Some(diff) = this.file_diff.as_mut().filter(|d| d.path == shown) else { return };
-                match result {
-                    Ok(lines) => diff.lines = Some(Rc::new(lines)),
-                    Err(err) => {
-                        diff.lines = Some(Rc::default());
-                        diff.error = Some(format!("{err:#}"));
+                let Some(diff) = this.file_diff.as_mut().filter(|d| d.path == path) else { return };
+                diff.reading = false;
+                let lines = match result {
+                    Ok(lines) => {
+                        diff.error = None;
+                        Rc::new(lines)
                     }
-                }
+                    Err(err) => {
+                        diff.error = Some(format!("{err:#}"));
+                        Rc::default()
+                    }
+                };
+                diff.lines = Some(lines.clone());
+                let body = diff.body.clone();
+                body.update(cx, |body, cx| body.set_lines(lines, rel, None, cx));
                 cx.notify();
             });
         })
         .detach();
-        cx.notify();
+    }
+
+    /// The files panel looked again: reads the diff again when the repository's state changed
+    /// (`changed`) or the file did, which its state doesn't show once it is listed as changed.
+    pub(super) fn refresh_file_diff(&mut self, changed: bool, cx: &mut Context<Self>) {
+        let Some(diff) = self.file_diff.as_ref().filter(|diff| !diff.reading && self.page.is_none()) else { return };
+        if changed || modified(&diff.path) != diff.modified {
+            self.reload_file_diff(cx);
+        }
     }
 
     pub(super) fn close_file_diff(&mut self, cx: &mut Context<Self>) {
         if self.file_diff.take().is_some() {
+            self.pending_ask = None;
             self.editor_shown = self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty());
             cx.notify();
         }
@@ -132,27 +179,7 @@ impl Workbench {
                 let text = diff.error.clone().unwrap_or_else(|| t(cx, "files.diff_none").to_string());
                 div().flex_1().p_6().t_body().text_color(hex(Chrome::MUTED)).child(text).into_any_element()
             }
-            Some(lines) => {
-                let rows = lines.clone();
-                let font: SharedString = crate::settings::terminal_font(cx).into();
-                let gutter = rows.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(0).to_string().len().max(3) as f32 * 8. + 12.;
-                let handle = diff.scroll.clone();
-                let base = handle.0.borrow().base_handle.clone();
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .group(crate::ui::SCROLL_GROUP)
-                    .child(
-                        gpui::uniform_list("file-diff", rows.len(), move |range, _, _| {
-                            range.map(|i| crate::git_view::diff_row(&rows[i], gutter, font.clone())).collect::<Vec<_>>()
-                        })
-                        .track_scroll(handle)
-                        .size_full(),
-                    )
-                    .child(crate::ui::scrollbar(base))
-                    .into_any_element()
-            }
+            Some(_) => div().flex_1().min_h_0().child(diff.body.clone()).into_any_element(),
         };
         Some(div().size_full().flex().flex_col().min_w_0().bg(hex(Chrome::EDITOR)).child(header).child(body).into_any_element())
     }

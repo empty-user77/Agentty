@@ -46,7 +46,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Command palette / Jump to unread | ⇧⌘P / ⇧⌘U |
 | Voice input (record · ⏎ send · Esc cancel) | ⇧⌘M |
 | Search local sessions | ⇧⌘O |
-| Go to a file or symbol / Ask AI about the selection (file editor) | ⌘P / ⌘K |
+| Go to a file or symbol / Ask AI about the selection (file editor, diff) | ⌘P / ⌘K |
 | Go to definition / Find usages / Back (file editor) | F12, ⌘-click / ⇧F12 / ⌃- |
 | Go to implementation (file editor) | ⌘F12 |
 | Find text in the project's files (file editor) | ⇧⌘F |

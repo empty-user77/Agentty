@@ -8,16 +8,13 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, popover, relative_time, tilde, IconSize, TypeScale};
 use crate::workbench::ai_resolve::GitTrouble;
 use agentty_bridge::git::{self, Branch, Commit, CommitFile, DiffLine, FileChange, LineKind, RepoStatus};
-use gpui::{
-    div, prelude::*, px, AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Subscription, Window,
-};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, Subscription, Window};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const SIDEBAR_WIDTH: f32 = 300.;
-const DIFF_ROW: f32 = 20.;
 const FILE_ROW: f32 = 28.;
 const COMMIT_ROW: f32 = 50.;
 const MAX_DIFF_LINES: usize = 20_000;
@@ -102,7 +99,7 @@ pub struct GitView {
     workspace: Option<u64>,
     files_scroll: gpui::UniformListScrollHandle,
     commits_scroll: gpui::UniformListScrollHandle,
-    diff_scroll: gpui::UniformListScrollHandle,
+    diff_body: Entity<crate::workbench::diff_body::DiffBody>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -176,7 +173,7 @@ impl GitView {
             workspace: None,
             files_scroll: gpui::UniformListScrollHandle::new(),
             commits_scroll: gpui::UniformListScrollHandle::new(),
-            diff_scroll: gpui::UniformListScrollHandle::new(),
+            diff_body: cx.new(crate::workbench::diff_body::DiffBody::new),
             _subscriptions: subscriptions,
         }
     }
@@ -400,7 +397,6 @@ impl GitView {
     fn select_file(&mut self, path: String, cx: &mut Context<Self>) {
         self.selected_file = Some(path);
         self.confirm_discard = None;
-        self.diff_scroll = gpui::UniformListScrollHandle::new();
         self.load_working_diff(cx);
         cx.notify();
     }
@@ -430,7 +426,6 @@ impl GitView {
     fn select_commit_file(&mut self, path: String, cx: &mut Context<Self>) {
         let (Some(repo), Some(sha)) = (self.repo.clone(), self.selected_commit.clone()) else { return };
         self.commit_file = Some(path.clone());
-        self.diff_scroll = gpui::UniformListScrollHandle::new();
         let task = cx.background_spawn(async move { git::commit_diff(&repo, &sha, &path).map(|d| (path, d)) });
         self.finish_diff(task, cx);
         cx.notify();
@@ -654,10 +649,6 @@ impl GitView {
         }
         cx.notify();
     }
-}
-
-fn mono(cx: &gpui::App) -> SharedString {
-    crate::settings::terminal_font(cx).into()
 }
 
 fn kind_badge(kind: char) -> Div {
@@ -1247,6 +1238,11 @@ impl GitView {
             .into_any_element()
     }
 
+    /// For the debug driver: what is selected in the diff.
+    pub fn debug_diff(&self, cx: &gpui::App) -> serde_json::Value {
+        self.diff_body.read(cx).debug_state()
+    }
+
     fn render_diff(&self, header: Option<AnyElement>, cx: &mut Context<Self>) -> Div {
         let lines = self.diff.clone();
         let body: AnyElement = if lines.is_empty() {
@@ -1260,24 +1256,12 @@ impl GitView {
                 .child(t(cx, "git.select_file"))
                 .into_any_element()
         } else {
-            let handle = self.diff_scroll.clone();
-            let base = handle.0.borrow().base_handle.clone();
-            let font = mono(cx);
-            let gutter = lines.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(0).to_string().len().max(3) as f32 * 8. + 12.;
-            div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .child(
-                    gpui::uniform_list("git-diff", lines.len(), move |range, _, _| {
-                        range.map(|i| diff_row(&lines[i], gutter, font.clone())).collect::<Vec<_>>()
-                    })
-                    .track_scroll(handle)
-                    .size_full(),
-                )
-                .group(crate::ui::SCROLL_GROUP)
-                .child(crate::ui::scrollbar(base))
-                .into_any_element()
+            let (rel, commit) = match self.tab {
+                Tab::Changes => (self.selected_file.clone(), None),
+                Tab::History => (self.commit_file.clone(), self.selected_commit.clone()),
+            };
+            self.diff_body.update(cx, |body, cx| body.set_lines(lines, rel.unwrap_or_default(), commit, cx));
+            div().flex_1().min_h_0().child(self.diff_body.clone()).into_any_element()
         };
         div().flex_1().min_w_0().h_full().flex().flex_col().bg(hex(Chrome::EDITOR)).children(header).child(body)
     }
@@ -1386,34 +1370,6 @@ impl GitView {
 }
 
 /// One line of a diff, as AgentGit draws it. Shared so the files panel's diff reads the same.
-pub fn diff_row(line: &DiffLine, gutter: f32, font: SharedString) -> AnyElement {
-    let (bg, fg, sign) = match line.kind {
-        LineKind::Added => (Some(hex_alpha(0x2ea043, 0.16)), Chrome::FOREGROUND, "+"),
-        LineKind::Removed => (Some(hex_alpha(0xf85149, 0.16)), Chrome::FOREGROUND, "-"),
-        LineKind::Hunk => (Some(hex_alpha(0x388bfd, 0.12)), Chrome::MUTED, ""),
-        LineKind::Meta => (None, Chrome::MUTED, ""),
-        LineKind::Context => (None, Chrome::FOREGROUND, " "),
-    };
-    let number = |n: Option<u32>| {
-        div().w(px(gutter)).flex_shrink_0().pr_2().flex().justify_end().text_color(hex(0x6e7681)).children(n.map(|n| n.to_string()))
-    };
-    div()
-        .h(px(DIFF_ROW))
-        .w_full()
-        .flex()
-        .items_center()
-        .font_family(font)
-        .text_size(px(12.))
-        .whitespace_nowrap()
-        .overflow_hidden()
-        .when_some(bg, |d, bg| d.bg(bg))
-        .child(number(line.old))
-        .child(number(line.new))
-        .child(div().w(px(16.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(sign))
-        .child(div().flex_1().min_w_0().text_color(hex(fg)).child(line.text.replace('\t', "    ")))
-        .into_any_element()
-}
-
 impl Render for GitView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.repo.is_none() {

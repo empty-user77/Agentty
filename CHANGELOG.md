@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Diffs (a changed file's, and AgentGit's): drag over the code to select it, without the line numbers or the `+` and
+  `-`. Copy and Ask AI come up where the selection ends, as in the file editor (⌘C, ⌘K, ⌘A). Asked from a changed
+  file's diff, the session comes into view beside it, and the diff follows what the agent changes.
+
+### Fixed
+- An instruction from the file editor sent with no session linked was lost. It now waits for the session you pick.
+
 ## [0.3.11] - 2026-11-03
 
 ### Added

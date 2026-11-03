@@ -73,7 +73,10 @@ impl Workbench {
         if let Some(active) = self.active_pane().filter(|p| is_session(p, cx)) {
             return Some(active);
         }
-        let project = self.editor.as_ref().and_then(|e| e.read(cx).active_project().map(Path::to_path_buf));
+        let project = match &self.file_diff {
+            Some(diff) => Some(diff.repo.clone()),
+            None => self.editor.as_ref().and_then(|e| e.read(cx).active_project().map(Path::to_path_buf)),
+        };
         sessions
             .iter()
             .find(|p| {
@@ -96,6 +99,8 @@ impl Workbench {
     /// session comes into view beside the editor.
     pub(super) fn ask_linked_session(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pane) = self.linked_session(cx) else {
+            // What was typed waits for the pick.
+            self.pending_ask = Some(prompt.to_string());
             self.editor_session_open = true;
             self.editor_session_picking = true;
             self.show_toast(t(cx, "editor.ask_pick_session"), cx);
@@ -103,11 +108,45 @@ impl Workbench {
         };
         pane.update(cx, |view, cx| view.submit_prompt(prompt.to_string(), cx));
         self.editor_session_open = true;
-        // The keyboard stays in the editor: the user reads the code while the agent works.
-        if let Some(editor) = self.editor.clone() {
-            editor.read(cx).focus(window);
+        // The keyboard stays in the editor: the user reads the code while the agent works. (A diff
+        // in front takes it back itself: the editor behind it can't be typed in.)
+        if self.file_diff.is_none() {
+            if let Some(editor) = self.editor.clone() {
+                editor.read(cx).focus(window);
+            }
         }
         cx.notify();
+    }
+
+    /// The name of the session an instruction would go to.
+    pub(crate) fn linked_label(&self, cx: &gpui::App) -> Option<String> {
+        self.linked_session(cx).map(|pane| describe(&pane, cx).label)
+    }
+
+    /// *Ask AI* in a diff; false when it could not go anywhere. Beside a changed file's diff the
+    /// session comes into view as it does beside the editor. AgentGit's page has no such column, so
+    /// it says where the instruction went.
+    pub(crate) fn ask_from_diff(&mut self, prompt: String, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.page.is_none() {
+            if let Some(diff) = self.file_diff.as_mut() {
+                diff.session_shown = true;
+                self.ask_linked_session(&prompt, window, cx);
+                return true;
+            }
+        }
+        let Some(pane) = self.linked_session(cx) else {
+            self.show_toast(t(cx, "editor.ask_no_session"), cx);
+            return false;
+        };
+        let label = describe(&pane, cx).label;
+        pane.update(cx, |view, cx| view.submit_prompt(prompt, cx));
+        self.show_toast(crate::i18n::tf(cx, "editor.asked_to", &[("agent", &label)]), cx);
+        true
+    }
+
+    /// A diff's selection went to the clipboard.
+    pub(crate) fn note_copied(&mut self, cx: &mut Context<Self>) {
+        self.show_toast(t(cx, "chat.copied"), cx);
     }
 
     pub(super) fn toggle_editor_session(&mut self, cx: &mut Context<Self>) {
@@ -129,6 +168,17 @@ impl Workbench {
     /// An agent's tool reports a file it changes: the editor marks the spot (before) and reads
     /// the file again (after).
     pub(super) fn editor_signal(&mut self, signal: &AgentSignal, cx: &mut Context<Self>) {
+        // The file a diff shows was just changed: it is out of date now.
+        if signal.detail.event.as_deref() == Some("PostToolUse") {
+            let shown = signal
+                .detail
+                .edit
+                .as_ref()
+                .is_some_and(|edit| self.file_diff.as_ref().is_some_and(|diff| Path::new(&edit.path) == diff.path));
+            if shown {
+                self.reload_file_diff(cx);
+            }
+        }
         let (Some(edit), Some(editor)) = (signal.detail.edit.as_ref(), self.editor.clone()) else { return };
         let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == signal.pane_id) else { return };
         let agent = describe(&pane, cx);
@@ -266,6 +316,7 @@ impl Workbench {
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.editor_session_open = false;
                     this.editor_session_picking = false;
+                    this.pending_ask = None;
                     cx.notify();
                 }),
             )
@@ -283,6 +334,7 @@ impl Workbench {
         }
         for (index, pane) in sessions.into_iter().enumerate() {
             let agent = describe(&pane, cx);
+            let picked = pane.clone();
             let view = pane.read(cx);
             let title = view.title.clone();
             let cwd = view.live_cwd.clone().unwrap_or_else(|| view.spec.cwd.clone());
@@ -304,6 +356,9 @@ impl Workbench {
                         this.editor_link = Some(id);
                         this.editor_session_picking = false;
                         this.sync_editor_link(cx);
+                        if let Some(prompt) = this.pending_ask.take() {
+                            picked.update(cx, |view, cx| view.submit_prompt(prompt, cx));
+                        }
                         cx.notify();
                     }))
                     .child(crate::brand::avatar_working(agent.brand, 18., agent.working, id, agent.color))
