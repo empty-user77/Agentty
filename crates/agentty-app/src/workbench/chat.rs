@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 
 mod chat_view;
 pub(super) use chat_view::footer_model;
-mod selectable;
+pub(super) mod selectable;
 pub(super) mod selection_ui;
 mod slash;
 

@@ -99,7 +99,7 @@ pub fn bind_keys(cx: &mut gpui::App) {
 }
 
 /// The instruction box's key context.
-const ASK: &str = "EditorAsk";
+pub const ASK: &str = "EditorAsk";
 
 /// An instruction being typed about the selected lines.
 pub struct AskBox {

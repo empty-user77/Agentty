@@ -455,7 +455,8 @@ impl Workbench {
             let _ = this.update(cx, |this, cx| {
                 let Some(panel) = this.files_panel.as_mut().filter(|p| p.generation == generation) else { return };
                 panel.loading = false;
-                if panel.snapshot != snapshot {
+                let changed = panel.snapshot != snapshot;
+                if changed {
                     panel.snapshot = snapshot;
                     cx.notify();
                 }
@@ -464,6 +465,7 @@ impl Workbench {
                 if this.files_panel.as_ref().is_some_and(|panel| wanted.is_some_and(|root| root != panel.snapshot.root)) {
                     this.refresh_files_panel(cx);
                 }
+                this.refresh_file_diff(changed, cx);
             });
         })
         .detach();

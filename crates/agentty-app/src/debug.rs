@@ -210,9 +210,13 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                 mouse(5, x, y, 0);
                 mouse(1, x, y, modifiers);
                 mouse(2, x, y, modifiers);
-                if argument.contains("double") {
+                if argument.contains("double") || argument.contains("triple") {
                     mouse_counted(1, x, y, modifiers, 2);
                     mouse_counted(2, x, y, modifiers, 2);
+                }
+                if argument.contains("triple") {
+                    mouse_counted(1, x, y, modifiers, 3);
+                    mouse_counted(2, x, y, modifiers, 3);
                 }
             }
             // `scroll x y lines [sideways]` (negative lines scroll up, negative sideways to the left);
@@ -275,6 +279,9 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                         "escape" => 53,
                         "tab" => 48,
                         "backspace" => 51,
+                        // With ⌘ the key is read from its code: without these it would be `a`.
+                        "c" => 8,
+                        "k" => 40,
                         _ => 0,
                     };
                     let text = NSString::alloc(nil).init_str(&chars);
