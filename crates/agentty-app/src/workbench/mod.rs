@@ -5361,7 +5361,8 @@ impl Workbench {
                     let chip = pane.as_ref().map(|p| self.subagent_chip_counts(p, cx));
                     let status = pane.as_ref().map(|p| format!("{:?}", p.read(cx).status));
                     eprintln!(
-                        "orch-state: id={} stage={:?} team={}/{} running={} cut={} chip={:?} pane={} status={:?} words={words}",
+                        "orch-state: strip={} id={} stage={:?} team={}/{} running={} cut={} chip={:?} pane={} status={:?} words={words}",
+                        orchestration::strip_shown(record.strip_closed, team.all, record.stage),
                         record.id,
                         record.stage,
                         team.done,
