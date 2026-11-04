@@ -27,6 +27,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - An instruction from the file editor sent with no session linked was lost. It now waits for the session you pick.
+- Chat view and team chat: after a click in the conversation or on the pane's bar, typing went nowhere until the input box was
+  clicked. The keyboard now stays with the input box, and typing with text selected goes there too. A click on a
+  terminal pane's bar no longer takes the keyboard from the terminal either.
 
 ## [0.3.11] - 2026-11-03
 

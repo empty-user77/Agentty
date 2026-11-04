@@ -397,7 +397,14 @@ impl Workbench {
                 }))
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| this.selection_ended(id, event.position, cx)),
+                    cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {
+                        this.selection_ended(id, event.position, cx);
+                        // A click on text selects nothing: the keyboard goes back (`keyboard_to_composer`).
+                        if super::selectable::selected_text().is_none() {
+                            super::selectable::clear();
+                            cx.notify();
+                        }
+                    }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
@@ -422,9 +429,15 @@ impl Workbench {
                 // squeezed (or stretched) until something else redraws.
                 .child({
                     let (widths, drawn_at, drawn_short) = (self.pane_bounds.clone(), live.width, short);
+                    // Typing while text is selected goes to the composer, an input method's too.
+                    let typed = state.input.as_ref().map(|(input, _)| input.clone());
+                    let reading = state.reading.clone();
                     gpui::canvas(
                         |_, _, _| {},
-                        move |_, _, window, _| {
+                        move |area, _, window, cx| {
+                            if let Some(input) = typed {
+                                window.handle_input(&reading, gpui::ElementInputHandler::new(area, input), cx);
+                            }
                             let bounds = widths.borrow().get(&id).copied();
                             let now = bounds.map(|b| f32::from(b.size.width));
                             let short_now = bounds.is_some_and(|b| f32::from(b.size.height) < SHORT_PANE);

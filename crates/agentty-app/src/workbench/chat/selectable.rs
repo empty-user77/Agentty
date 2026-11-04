@@ -118,6 +118,11 @@ pub(in crate::workbench) fn selected_text() -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+/// Whether a selection is there or being made (a press on text, the button still down perhaps).
+pub(in crate::workbench) fn has_selection() -> bool {
+    SELECTION.with(|s| s.borrow().is_some())
+}
+
 /// A press anywhere in the chat, after the text's own: true when it was on text (which started a
 /// selection); otherwise the selection is dropped.
 pub(in crate::workbench) fn take_press() -> bool {
