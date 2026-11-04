@@ -585,7 +585,12 @@ impl Workbench {
                         .iter()
                         .map(|turn| {
                             let text = agentty_bridge::fsutil::truncate_chars(&turn.text, TURN_TEXT_LIMIT);
-                            json!({ "role": if turn.role == Role::User { "user" } else { "assistant" }, "text": text })
+                            let role = match turn.role {
+                                Role::User => "user",
+                                Role::Assistant => "assistant",
+                                Role::Summary => "summary",
+                            };
+                            json!({ "role": role, "text": text })
                         })
                         .collect();
                     call.reply(

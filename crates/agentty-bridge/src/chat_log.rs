@@ -90,7 +90,7 @@ pub enum Block {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub role: Role,
-    /// What the user wrote (user entries).
+    /// What the user wrote (user entries), or the summary (summary entries).
     pub text: String,
     /// The reply (assistant entries).
     pub blocks: Vec<Block>,
@@ -302,6 +302,11 @@ impl Builder {
         self.entries.push(Entry { role: Role::User, text, blocks: Vec::new() });
     }
 
+    fn summary(&mut self, text: String) {
+        self.changed(self.entries.len());
+        self.entries.push(Entry { role: Role::Summary, text, blocks: Vec::new() });
+    }
+
     /// The reply being written (to be changed): the last entry when it is one, else a new one.
     fn reply(&mut self) -> &mut Entry {
         if self.entries.last().is_none_or(|e| e.role != Role::Assistant) {
@@ -498,7 +503,9 @@ fn claude_line(b: &mut Builder, line: &str) {
                     b.result(id, result_text(&block["content"]), failed);
                 }
             }
-            if let Some(text) = crate::claude::said_text(&v) {
+            if let Some(text) = crate::claude::compact_summary(&v) {
+                b.summary(text);
+            } else if let Some(text) = crate::claude::said_text(&v) {
                 b.user(text);
             }
         }
@@ -652,6 +659,7 @@ fn codex_line(b: &mut Builder, line: &str) {
             match turn.role {
                 Role::User => b.user(turn.text),
                 Role::Assistant => b.text(&turn.text),
+                Role::Summary => b.summary(turn.text),
             }
         }
         Some("function_call" | "custom_tool_call") => {

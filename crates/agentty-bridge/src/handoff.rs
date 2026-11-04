@@ -105,6 +105,7 @@ fn render(from: Agent, id: &str, to: Agent, cwd: Option<&str>, turns: &[Turn]) -
             let who = match t.role {
                 Role::User => "User",
                 Role::Assistant => from.display_name(),
+                Role::Summary => "Summary of the conversation before this",
             };
             format!("### {who}\n\n{}\n\n", t.text)
         })

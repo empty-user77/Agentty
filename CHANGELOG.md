@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Chat view uses more of a wide window: the conversation runs up to 1400 points wide instead of 920.
+
+### Fixed
+- Chat: the summary Claude Code writes when it compacts a conversation showed as a message from you. It now shows as a
+  closed row labelled Summary, on the remote page too, and no longer counts as your last prompt.
+
 ### Fixed
 - Remote access could say Tailscale wasn't running while it was: only the first `tailscale` tool found was asked (a
   Homebrew one beside the app, say), a tool that hung stopped every later check, and an app outside `/Applications`

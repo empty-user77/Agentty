@@ -344,6 +344,10 @@ button:disabled { opacity: .5; cursor: default; }
 .msg .text { white-space: pre-wrap; }
 .msg.user { align-self: flex-end; max-width: 85%; background: #2b2116; border: 1px solid #5c3d16; border-radius: 12px; padding: 8px 10px; }
 .msg.lead .step { color: var(--muted); font-size: 12px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg.summary { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+.msg.summary summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.msg.summary summary b { color: var(--text, inherit); margin-right: 8px; font-weight: 600; }
+.msg.summary .text { margin-top: 8px; font-size: 13px; }
 .msg.report { background: var(--panel); border-left: 3px solid var(--success); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--muted); max-height: 9.5em; overflow: hidden; }
 .chat-toggle { flex-shrink: 0; font-size: 13px; }
 
