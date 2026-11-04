@@ -23,7 +23,7 @@ A new workspace goes in the **Orchestration** group, made the first time; move i
 
 ## Following, resuming and stopping
 
-The orchestrator's pane has a strip across its top with the same words as this page: planning, the plan ready (with **Start**), running with how many agents are at work and how many are done, done, interrupted or stopped. **Open workflow** comes here; the sidebar and the menu bar mark its workspace with the orchestration icon, in the colour of its stage.
+The orchestrator's pane has a strip across its top with the same words as this page: planning, the plan ready (with **Start**), running with how many agents are at work and how many are done, done, interrupted or stopped. **Open workflow** comes here; the sidebar and the menu bar mark its workspace with the orchestration icon, in the colour of its stage. The **×** closes the strip. It stays closed, across restarts too, until an agent is added or the orchestration needs you (a plan to approve, work to resume).
 
 Orchestrations are kept across restarts. If Agentty quits (or crashes) while one runs, its agents stop with it: the strip and this page say **Interrupted**, and **Resume** opens the session again if needed and has the orchestrator check what is already done and run only what is left. **Stop all** (after a confirmation) ends the orchestrator's turn and every agent still running; **Resume** carries on later. **Delete** takes an orchestration off the list and closes its terminal, with its workspace when that holds nothing else; the files it made stay. Deleting that workspace deletes the orchestration too.
 

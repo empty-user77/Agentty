@@ -124,6 +124,22 @@ pub struct Record {
     /// of them starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan: Vec<PlanAgent>,
+    /// The strip on its pane was closed, and how things stood then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip_closed: Option<StripClosed>,
+}
+
+/// How an orchestration stood when the user closed its strip: news since then brings it back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StripClosed {
+    pub agents: usize,
+    pub stage: Stage,
+}
+
+/// Whether the strip shows: unless it was closed and nothing has happened since that it would have
+/// to say, an agent more or a stop that waits for the user (a plan to approve, work to resume).
+pub(super) fn strip_shown(closed: Option<StripClosed>, agents: usize, stage: Stage) -> bool {
+    closed.is_none_or(|closed| agents > closed.agents || (stage != closed.stage && matches!(stage, Stage::Ready | Stage::Interrupted)))
 }
 
 fn claude() -> agentty_bridge::model::Agent {
@@ -327,6 +343,7 @@ impl Workbench {
             seen_since: None,
             settling_until: 0,
             plan: Vec::new(),
+            strip_closed: None,
         });
         save_records(records);
         Some(id)
@@ -925,6 +942,10 @@ impl Workbench {
     pub(super) fn render_orchestration_strip(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
         let record = self.record_of_pane(pane, cx)?.clone();
         let team = self.team_of(&record.session, Some(pane), cx);
+        if !strip_shown(record.strip_closed, team.all, record.stage) {
+            return None;
+        }
+        let (agents, stage) = (team.all, record.stage);
         let (said, color) = self.stage_words(record.stage, team, cx);
         let ready = record.stage == Stage::Ready;
         let id = record.id;
@@ -968,8 +989,27 @@ impl Workbench {
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_orchestration(id, cx))),
                 )
                 .children(self.stage_buttons(id, record.stage, "strip", cx))
+                .child(
+                    crate::ui::icon_only(
+                        SharedString::from(format!("strip-close-{id}")),
+                        "x",
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.close_orchestration_strip(id, agents, stage, cx)),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "confirm.close"), None)),
+                )
                 .into_any_element(),
         )
+    }
+
+    /// Closes the strip until there is news (`strip_shown`). Kept with the orchestration, so a
+    /// restart doesn't bring it back.
+    fn close_orchestration_strip(&mut self, id: u64, agents: usize, stage: Stage, cx: &mut Context<Self>) {
+        let records = self.orchestrations();
+        if let Some(record) = records.iter_mut().find(|r| r.id == id) {
+            record.strip_closed = Some(StripClosed { agents, stage });
+            save_records(records);
+        }
+        cx.notify();
     }
 
     /// The Orchestration page, at this orchestration.
@@ -988,6 +1028,28 @@ mod tests {
     fn seen(in_turn: bool, turn_over: bool, team: (usize, usize, usize, usize)) -> Seen {
         let (running, done, cut_off, all) = team;
         Seen { alive: true, since: Some(100), in_turn, turn_over, team: Team { running, done, cut_off, all, pending: 0 }, settling: false }
+    }
+
+    #[test]
+    fn a_closed_strip_comes_back_for_news_only() {
+        let closed = Some(StripClosed { agents: 3, stage: Stage::Running });
+        assert!(strip_shown(None, 3, Stage::Running), "never closed");
+        assert!(!strip_shown(closed, 3, Stage::Running));
+        assert!(!strip_shown(closed, 3, Stage::Done), "finishing asks nothing of the user");
+        assert!(!strip_shown(closed, 3, Stage::Stopped), "the user stopped it");
+        assert!(!strip_shown(closed, 2, Stage::Running));
+        assert!(strip_shown(closed, 4, Stage::Running), "an agent more");
+        assert!(strip_shown(closed, 3, Stage::Ready), "a plan to approve");
+        assert!(strip_shown(closed, 3, Stage::Interrupted), "work to resume");
+        let at_the_plan = Some(StripClosed { agents: 0, stage: Stage::Ready });
+        assert!(!strip_shown(at_the_plan, 0, Stage::Ready), "closed with the plan showing: that one was seen");
+    }
+
+    #[test]
+    fn a_record_from_before_the_close_button_reads_as_open() {
+        let text = r#"[{ "id": 1, "session": "s", "goal": "g", "folder": "/tmp/x", "started_ms": 1 }]"#;
+        let records: Vec<Record> = serde_json::from_str(text).unwrap();
+        assert_eq!(records[0].strip_closed, None);
     }
 
     #[test]
@@ -1094,6 +1156,7 @@ mod tests {
             seen_since: Some(5),
             settling_until: 0,
             plan: parse_plan(&serde_json::json!([{ "name": "scan", "wave": 1, "model": "sonnet" }])).unwrap(),
+            strip_closed: Some(StripClosed { agents: 2, stage: Stage::Running }),
         };
         let text = serde_json::to_string(std::slice::from_ref(&record)).unwrap();
         assert!(text.contains("\"interrupted\""));

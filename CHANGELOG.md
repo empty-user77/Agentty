@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows
   The page checks again by itself while it is open.
 
 ### Added
+- The orchestration strip on a terminal can be closed with its X. It stays closed across restarts and comes back when an
+  agent is added, or when the orchestration needs you (a plan to approve, work to resume).
+
+### Added
 - Diffs (a changed file's, and AgentGit's): drag over the code to select it, without the line numbers or the `+` and
   `-`. Copy and Ask AI come up where the selection ends, as in the file editor (⌘C, ⌘K, ⌘A). Asked from a changed
   file's diff, the session comes into view beside it, and the diff follows what the agent changes.
