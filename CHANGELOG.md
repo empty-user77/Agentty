@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Remote access could say Tailscale wasn't running while it was: only the first `tailscale` tool found was asked (a
+  Homebrew one beside the app, say), a tool that hung stopped every later check, and an app outside `/Applications`
+  counted as not installed.
+
+### Changed
+- Remote access says what is actually wrong with Tailscale (switched off, signed out, waiting for approval, its service
+  not answering, an extension macOS hasn't been allowed to run, a Mac account without administrator rights, another VPN
+  in the way, an account Tailscale refuses) with a button for what fixes it, a progress line, a copyable diagnosis and a way to hand it to an agent.
+  The page checks again by itself while it is open.
+
 ### Added
 - The orchestration strip on a terminal can be closed with its X. It stays closed across restarts and comes back when an
   agent is added, or when the orchestration needs you (a plan to approve, work to resume).

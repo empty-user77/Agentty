@@ -74,6 +74,7 @@ mod plugins_page;
 mod processes;
 mod prompt_dialog;
 mod remote_page;
+mod remote_trouble;
 mod responsive;
 pub mod resume_hint;
 mod run_panel;

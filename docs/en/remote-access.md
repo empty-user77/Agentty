@@ -54,6 +54,27 @@ You need:
 
 That's it. Your sessions are now visible on that device.
 
+## If Tailscale isn't detected
+
+The first step of **Before turning it on** says what is wrong and offers what fixes it. The page checks again by itself, so there's nothing to press once it's put right.
+
+| What it says | What to do |
+|---|---|
+| Not installed | **Get Tailscale**. If you just installed it, open it once. |
+| Switched off on this Mac | **Open Tailscale** and turn on **Connect**. If macOS asks to add a VPN or allow a system extension, allow it. |
+| Not signed in | **Sign in**, with the account you'll also use on your phone. |
+| Waiting for approval | Approve this device on the Machines page, or ask the tailnet's admin. |
+| Background service isn't answering | Open Tailscale and finish its first-run steps. On a Mac, allow the system extension in System Settings → General → Login Items & Extensions. On Windows, restart the computer. On Linux, run `sudo systemctl enable --now tailscaled`, then `sudo tailscale up`. |
+| macOS is waiting for you to allow it | In System Settings → General → Login Items & Extensions → Network Extensions, turn on Tailscale. |
+| Another VPN may be blocking it | Disconnect the VPN named there, then turn on **Connect** in Tailscale. |
+| This Mac account isn't allowed | Tailscale's access file is for administrator accounts only. Use one, or give this account administrator rights in System Settings → Users & Groups. |
+| Tailscale refused this account | On Linux, run `sudo tailscale set --operator=$USER` once. On Windows, another account may be using Tailscale. On a Mac a company manages, a policy may be blocking it. |
+| Can't read Tailscale's answer | Quit and reopen Tailscale, or update it. The tool's own message is shown under the text. |
+
+Still stuck? **Have an agent fix it** opens a tab with an agent told what was found: it looks first and asks before changing anything. **Copy diagnosis** copies the same summary to paste into a question. It holds versions and states, and no account, machine or tailnet name.
+
+**Which account?** Any Tailscale account works. It doesn't have to match your Apple account or your computer's user account. What has to match is the Tailscale account on this computer and on the device you connect from.
+
 ## Security
 
 Remote access is only reachable inside your Tailscale network — never on the public internet. Agentty refuses to run if Funnel is turned on for its port. Getting in takes both of these:
