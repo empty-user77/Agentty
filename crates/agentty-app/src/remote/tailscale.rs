@@ -54,6 +54,14 @@ pub enum Trouble {
     Tool(String),
     /// Connected, without a name or an account for this machine.
     NoIdentity,
+    /// macOS is waiting for the user to allow Tailscale's network extension.
+    NeedsExtension,
+    /// Tailscale's VPN is off and another one is connected: (its name).
+    OtherVpn(String),
+    /// This Mac account can't read the file Tailscale lets its tool in with (administrators only).
+    NotAdmin,
+    /// The tool was refused: (what it said).
+    Denied(String),
 }
 
 /// The tools a machine may have, in the order they are tried. A Mac can hold more than one (a
@@ -86,6 +94,8 @@ pub mod test_override {
     use std::sync::Mutex;
     pub static TOOLS: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
     pub static VPN: Mutex<Option<String>> = Mutex::new(None);
+    pub static EXTENSIONS: Mutex<Option<String>> = Mutex::new(None);
+    pub static NOT_ADMIN: Mutex<bool> = Mutex::new(false);
 }
 
 /// Every tool there is, in the order to try them.
@@ -275,14 +285,14 @@ pub fn status() -> Status {
     let Some(first) = tools.first() else {
         // No tool to be found, but macOS has its VPN: it is installed, whatever is in the way.
         return if vpn_listed() {
-            let trouble = if vpn_off() { Trouble::VpnOff } else { Trouble::Tool("the tailscale tool wasn't found".into()) };
+            let trouble = if vpn_off() { why_vpn_off() } else { Trouble::Tool("the tailscale tool wasn't found".into()) };
             Status { installed: true, trouble: Some(trouble), ..Default::default() }
         } else {
             Status::default()
         };
     };
     if vpn_off() {
-        return Status { installed: true, trouble: Some(Trouble::VpnOff), tool: Some(tool_kind(first)), ..Default::default() };
+        return Status { installed: true, trouble: Some(why_vpn_off()), tool: Some(tool_kind(first)), ..Default::default() };
     }
     // The first one connected, else the first that answered at all, else what the first one said.
     let mut answered: Option<(Status, &PathBuf)> = None;
@@ -290,7 +300,15 @@ pub fn status() -> Status {
     for (index, tool) in tools.iter().enumerate() {
         let wait = Duration::from_secs(if index == 0 { 8 } else { 4 });
         let Some(output) = run_tool(tool, &["status", "--json"], wait, true) else {
-            failure.get_or_insert_with(|| Trouble::Tool("tailscale did not run".into()));
+            let started = agentty_bridge::process::command(tool).arg("version").stdin(Stdio::null()).output();
+            let denied = started.is_err_and(|err| err.kind() == std::io::ErrorKind::PermissionDenied);
+            failure.get_or_insert_with(|| {
+                if denied {
+                    Trouble::Denied("permission denied".into())
+                } else {
+                    Trouble::Tool("tailscale did not run".into())
+                }
+            });
             continue;
         };
         let mut status = parse_status(&output.out);
@@ -309,8 +327,79 @@ pub fn status() -> Status {
             *TOOL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tool.clone());
             status
         }
-        None => Status { installed: true, trouble: failure, tool: Some(tool_kind(first)), ..Default::default() },
+        None => {
+            // What stands behind a tool that can't answer, when this system can tell.
+            let trouble = if extension_waiting() {
+                Some(Trouble::NeedsExtension)
+            } else if account_locked_out() {
+                Some(Trouble::NotAdmin)
+            } else {
+                failure
+            };
+            Status { installed: true, trouble, tool: Some(tool_kind(first)), ..Default::default() }
+        }
     }
+}
+
+/// Why the Mac's VPN is off, when something other than its switch keeps it off.
+fn why_vpn_off() -> Trouble {
+    if extension_waiting() {
+        return Trouble::NeedsExtension;
+    }
+    match vpn_list().as_deref().and_then(other_vpn_on) {
+        Some(name) => Trouble::OtherVpn(name),
+        None => Trouble::VpnOff,
+    }
+}
+
+/// The name of a VPN that isn't Tailscale's and is connected, in `scutil --nc list`'s answer.
+fn other_vpn_on(list: &str) -> Option<String> {
+    list.lines()
+        .find(|line| line.contains("(Connected)") && !line.contains("io.tailscale.ipn"))
+        .and_then(|line| line.split('"').nth(1))
+        .map(str::to_string)
+}
+
+/// Whether macOS is waiting for the user to allow Tailscale's network extension.
+fn extension_waiting() -> bool {
+    #[cfg(debug_assertions)]
+    if let Some(list) = test_override::EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return extension_waiting_in(&list);
+    }
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let output = Command::new("/usr/bin/systemextensionsctl").arg("list").stdin(Stdio::null()).output();
+    output.is_ok_and(|output| extension_waiting_in(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// `systemextensionsctl list`'s answer. An old version on its way out (`waiting to uninstall`) is
+/// not waiting for anybody.
+fn extension_waiting_in(list: &str) -> bool {
+    list.lines().any(|line| line.contains("io.tailscale.ipn") && line.contains("waiting for user"))
+}
+
+/// Whether Tailscale is set up on this Mac but its way in is closed to this account: the file its
+/// tool reads is the administrators' group's alone.
+fn account_locked_out() -> bool {
+    #[cfg(debug_assertions)]
+    if *test_override::NOT_ADMIN.lock().unwrap_or_else(|e| e.into_inner()) {
+        return true;
+    }
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let Ok(port) = std::fs::read_link("/Library/Tailscale/ipnport") else { return false };
+    let proof = format!("/Library/Tailscale/sameuserproof-{}", port.display());
+    std::fs::File::open(proof).is_err_and(|err| err.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+/// Whether what the tool said is a refusal rather than a failure.
+pub fn is_denied(said: &str) -> bool {
+    let lower = said.to_lowercase();
+    ["access denied", "access is denied", "permission denied", "not permitted", "--operator", "in use by", "another windows user"]
+        .iter()
+        .any(|word| lower.contains(word))
 }
 
 /// What a tool that gave no status said, without secret paths or the user's home.
@@ -324,6 +413,9 @@ fn failed(output: &Output) -> Trouble {
         said = said.replace(&home, "~");
     }
     let said: String = said.chars().take(200).collect();
+    if is_denied(&said) {
+        return Trouble::Denied(said);
+    }
     let lower = said.to_lowercase();
     let unreachable = ["tailscaled", "is tailscale running", "connection refused", "failed to connect", "service"];
     if unreachable.iter().any(|word| lower.contains(word)) {
@@ -386,6 +478,10 @@ pub fn report(status: &Status, app_version: &str) -> String {
         Some(Trouble::NoService(said)) => format!("the tool can't reach the background service: {said}"),
         Some(Trouble::Tool(said)) => format!("the tool failed: {said}"),
         Some(Trouble::NoIdentity) => "connected, but no machine name or account".to_string(),
+        Some(Trouble::NeedsExtension) => "macOS is waiting for the network extension to be allowed".to_string(),
+        Some(Trouble::OtherVpn(_)) => "the Tailscale VPN is off and another VPN is connected".to_string(),
+        Some(Trouble::NotAdmin) => "this Mac account can't read Tailscale's access file (administrators only)".to_string(),
+        Some(Trouble::Denied(said)) => format!("the tool was refused: {said}"),
         None if !status.installed => "not installed".to_string(),
         None => "none".to_string(),
     };
@@ -1026,6 +1122,47 @@ mod tests {
         assert_eq!(failed(&Output { timed_out: true, ..output("") }), Trouble::Tool("timed out".into()));
         let secret = "ab".repeat(32);
         assert!(!format!("{:?}", failed(&output(&format!("bad http://127.0.0.1:1/{secret}")))).contains(&secret));
+    }
+
+    #[test]
+    fn a_refusal_is_told_from_a_failure() {
+        let output = |all: &str| Output { ok: false, timed_out: false, out: String::new(), all: all.to_string() };
+        for said in [
+            "Access denied: cert access denied",
+            "Use 'sudo tailscale up --operator=$USER' to allow it",
+            "open /var/run/tailscale/tailscaled.sock: permission denied",
+            "Tailscale is in use by another Windows user",
+        ] {
+            assert!(matches!(failed(&output(said)), Trouble::Denied(_)), "{said}");
+        }
+        assert!(!is_denied("failed to connect to local tailscaled"));
+    }
+
+    #[test]
+    fn reads_what_macos_says_about_the_extension() {
+        let on = "*\t*\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1.104.4/101.104.4)\tTailscale Network Extension\t[activated enabled]";
+        let old = "\t\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1.104.2/101.104.2)\tTailscale Network Extension\t[terminated waiting to uninstall on reboot]";
+        let waiting = "\t\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1.104.4/101.104.4)\tTailscale Network Extension\t[activated waiting for user]";
+        let other = "\t\tAAAAAAAAAA\tcom.example.vpn.extension (1/1)\tOther\t[activated waiting for user]";
+        assert!(!extension_waiting_in(&format!("{old}\n{on}")));
+        assert!(extension_waiting_in(waiting));
+        assert!(!extension_waiting_in(other), "someone else's extension");
+    }
+
+    #[test]
+    fn finds_another_vpn_that_is_on() {
+        let tailscale = r#"* (Disconnected)   2A5E VPN (io.tailscale.ipn.macsys) "Tailscale"   [VPN:io.tailscale.ipn.macsys]"#;
+        let work = r#"* (Connected)      7B1C VPN (com.example.vpn) "Work VPN"   [VPN:com.example.vpn]"#;
+        let idle = r#"* (Disconnected)   7B1D VPN (com.example.other) "Idle"   [VPN:com.example.other]"#;
+        assert_eq!(other_vpn_on(&format!("{tailscale}\n{idle}\n{work}")).as_deref(), Some("Work VPN"));
+        assert_eq!(other_vpn_on(&format!("{tailscale}\n{idle}")), None);
+        assert_eq!(other_vpn_on(&tailscale.replace("Disconnected", "Connected")), None);
+    }
+
+    #[test]
+    fn the_report_names_no_other_vpn() {
+        let status = Status { installed: true, trouble: Some(Trouble::OtherVpn("Work VPN".into())), ..Default::default() };
+        assert!(!report(&status, "0.3.11").contains("Work VPN"));
     }
 
     #[test]

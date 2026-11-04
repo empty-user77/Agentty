@@ -65,6 +65,10 @@ The first step of **Before turning it on** says what is wrong and offers what fi
 | Not signed in | **Sign in**, with the account you'll also use on your phone. |
 | Waiting for approval | Approve this device on the Machines page, or ask the tailnet's admin. |
 | Background service isn't answering | Open Tailscale and finish its first-run steps. On a Mac, allow the system extension in System Settings → General → Login Items & Extensions. On Windows, restart the computer. On Linux, run `sudo systemctl enable --now tailscaled`, then `sudo tailscale up`. |
+| macOS is waiting for you to allow it | In System Settings → General → Login Items & Extensions → Network Extensions, turn on Tailscale. |
+| Another VPN may be blocking it | Disconnect the VPN named there, then turn on **Connect** in Tailscale. |
+| This Mac account isn't allowed | Tailscale's access file is for administrator accounts only. Use one, or give this account administrator rights in System Settings → Users & Groups. |
+| Tailscale refused this account | On Linux, run `sudo tailscale set --operator=$USER` once. On Windows, another account may be using Tailscale. On a Mac a company manages, a policy may be blocking it. |
 | Can't read Tailscale's answer | Quit and reopen Tailscale, or update it. The tool's own message is shown under the text. |
 
 Still stuck? **Have an agent fix it** opens a tab with an agent told what was found: it looks first and asks before changing anything. **Copy diagnosis** copies the same summary to paste into a question. It holds versions and states, and no account, machine or tailnet name.

@@ -12,7 +12,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Remote access says what is actually wrong with Tailscale (switched off, signed out, waiting for approval, its service
-  not answering) with a button for what fixes it, a progress line, a copyable diagnosis and a way to hand it to an agent.
+  not answering, an extension macOS hasn't been allowed to run, a Mac account without administrator rights, another VPN
+  in the way, an account Tailscale refuses) with a button for what fixes it, a progress line, a copyable diagnosis and a way to hand it to an agent.
   The page checks again by itself while it is open.
 
 ### Added

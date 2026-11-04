@@ -16,6 +16,12 @@ use std::time::Duration;
 
 const TAILSCALE_DOWNLOAD: &str = "https://tailscale.com/download";
 const TAILSCALE_MACHINES: &str = "https://login.tailscale.com/admin/machines";
+/// System Settings → General → Login Items & Extensions.
+const MAC_EXTENSIONS: &str = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension";
+/// System Settings → Users & Groups.
+const MAC_USERS: &str = "x-apple.systempreferences:com.apple.Users-Groups-Settings.extension";
+/// On Linux, what lets this account use `tailscale serve` and `cert` without sudo.
+const LINUX_OPERATOR: &str = "sudo tailscale set --operator=$USER";
 /// How often the open page looks while something is wrong.
 const LOOK: Duration = Duration::from_secs(3);
 /// Looks that pass between two looks while all is well, to notice it going away.
@@ -27,6 +33,8 @@ enum Fix {
     Download,
     OpenApp,
     Open(String),
+    /// A page of System Settings.
+    Settings(&'static str),
     /// Linux has no app to open: the command to run.
     Copy(&'static str),
     /// Nothing to do but wait a moment.
@@ -62,6 +70,10 @@ fn guidance(status: &Status, os: &str) -> (&'static str, &'static str, Fix) {
             app("sudo systemctl enable --now tailscaled && sudo tailscale up"),
         ),
         Some(Trouble::NoIdentity) => ("remote.ts.no_identity", "remote.ts.no_identity_how", app("sudo tailscale up --force-reauth")),
+        Some(Trouble::NeedsExtension) => ("remote.ts.extension", "remote.ts.extension_how", Fix::Settings(MAC_EXTENSIONS)),
+        Some(Trouble::OtherVpn(_)) => ("remote.ts.other_vpn", "remote.ts.other_vpn_how", Fix::OpenApp),
+        Some(Trouble::NotAdmin) => ("remote.ts.not_admin", "remote.ts.not_admin_how", Fix::Settings(MAC_USERS)),
+        Some(Trouble::Denied(_)) => ("remote.ts.denied", refusal_how(os), app(LINUX_OPERATOR)),
         Some(Trouble::Tool(_)) | None => ("remote.ts.tool", "remote.ts.tool_how", app("sudo systemctl restart tailscaled")),
     }
 }
@@ -75,8 +87,10 @@ fn checks(status: &Status) -> [Option<bool>; 4] {
     let no = Some(false);
     match &status.trouble {
         None => [yes, yes, yes, yes],
-        Some(Trouble::VpnOff | Trouble::Stopped | Trouble::NoService(_)) => [yes, no, None, no],
-        Some(Trouble::Tool(_)) => [yes, None, None, no],
+        Some(Trouble::VpnOff | Trouble::Stopped | Trouble::NoService(_) | Trouble::NeedsExtension | Trouble::OtherVpn(_)) => {
+            [yes, no, None, no]
+        }
+        Some(Trouble::Tool(_) | Trouble::NotAdmin | Trouble::Denied(_)) => [yes, None, None, no],
         Some(Trouble::NeedsLogin(_)) => [yes, yes, no, no],
         Some(Trouble::NeedsApproval) => [yes, yes, yes, no],
         Some(Trouble::Starting) => [yes, yes, None, no],
@@ -93,7 +107,10 @@ fn agent_prompt(report: &str, language: &str) -> String {
          Agentty needs Tailscale connected and signed in, with MagicDNS and HTTPS certificates on for the tailnet. It asks the \
          `tailscale` tool: `/Applications/Tailscale.app/Contents/MacOS/Tailscale` or `tailscale` on the PATH on macOS, \
          `C:\\Program Files\\Tailscale\\tailscale.exe` on Windows.\n\n\
-         Start by only looking: `tailscale version`, `tailscale status`, and on macOS `scutil --nc list`. Then tell me what is wrong \
+         Start by only looking: `tailscale version`, `tailscale status`, and on macOS `scutil --nc list`, `systemextensionsctl list` \
+         and `id -Gn`. Permissions are a likely cause: an extension macOS hasn't been allowed to run, a Mac account that isn't an \
+         administrator, another VPN holding the tunnel, a Linux account that isn't Tailscale's operator, or another Windows user \
+         holding the service. Then tell me what is wrong \
          in plain words and the fewest steps that fix it. Assume I don't know networking. Ask me before anything that changes this \
          computer or my tailnet, such as installing, signing in or out, or starting a service. Never turn on Tailscale Funnel. Don't \
          show my account name, tailnet name or any key in your answers.\n\n\
@@ -151,7 +168,9 @@ impl Workbench {
         let (what, how, fix) = guidance(status, std::env::consts::OS);
         let mono = crate::settings::terminal_font(cx);
         let said = match &status.trouble {
-            Some(Trouble::NoService(said) | Trouble::Tool(said)) if !said.is_empty() => Some(said.clone()),
+            Some(Trouble::NoService(said) | Trouble::Tool(said) | Trouble::Denied(said) | Trouble::OtherVpn(said)) if !said.is_empty() => {
+                Some(said.clone())
+            }
             _ => None,
         };
         let labels = ["remote.ts.check_installed", "remote.ts.check_on", "remote.ts.check_login", "remote.ts.check_connected"];
@@ -183,6 +202,10 @@ impl Workbench {
             Fix::Open(url) => {
                 let label = if url == TAILSCALE_MACHINES { "remote.ts.open_machines" } else { "remote.ts.sign_in" };
                 Some(action_button("remote-ts-fix", t(cx, label), move |_, _, cx| cx.open_url(&url)))
+            }
+            Fix::Settings(page) => {
+                let label = if page == MAC_USERS { "remote.ts.open_users" } else { "remote.ts.open_extensions" };
+                Some(action_button("remote-ts-fix", t(cx, label), move |_, _, cx| cx.open_url(page)))
             }
             Fix::Copy(command) => Some(action_button("remote-ts-fix", t(cx, "remote.ts.copy_command"), move |_, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_string()))
@@ -227,6 +250,42 @@ impl Workbench {
     }
 }
 
+/// The words for a refusal on this system.
+fn refusal_how(os: &str) -> &'static str {
+    match os {
+        "macos" => "remote.ts.denied_how_mac",
+        "windows" => "remote.ts.denied_how_windows",
+        _ => "remote.ts.denied_how_linux",
+    }
+}
+
+/// `text` about a failed certificate, and what to do when the tool's words say it was refused.
+pub(super) fn with_refusal_help(text: String, said: &str, cx: &gpui::App) -> String {
+    if tailscale::is_denied(said) {
+        format!("{text} {}", t(cx, refusal_how(std::env::consts::OS)))
+    } else {
+        text
+    }
+}
+
+/// What to do about a `serve` that was refused, when that is what happened: it reaches here as the
+/// tool's own words, long after the status looked fine.
+pub(super) fn refusal_help(said: &str, cx: &gpui::App) -> Option<Div> {
+    if !tailscale::is_denied(said) {
+        return None;
+    }
+    let os = std::env::consts::OS;
+    let how = refusal_how(os);
+    Some(div().flex().flex_col().gap_2().child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, how).to_string())).when(
+        os == "linux",
+        |d| {
+            d.child(div().flex().child(action_button("remote-ts-operator", t(cx, "remote.ts.copy_command"), |_, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(LINUX_OPERATOR.to_string()))
+            })))
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +304,10 @@ mod tests {
             Trouble::NoService("x".into()),
             Trouble::Tool("x".into()),
             Trouble::NoIdentity,
+            Trouble::NeedsExtension,
+            Trouble::OtherVpn("Work".into()),
+            Trouble::NotAdmin,
+            Trouble::Denied("x".into()),
         ];
         let mut said = std::collections::HashSet::new();
         for trouble in all {
@@ -265,6 +328,14 @@ mod tests {
         assert_eq!(guidance(&with(Trouble::Stopped), "linux").2, Fix::Copy("sudo tailscale up"));
         let url = "https://login.tailscale.com/a/abc".to_string();
         assert_eq!(guidance(&with(Trouble::NeedsLogin(Some(url.clone()))), "linux").2, Fix::Open(url));
+    }
+
+    #[test]
+    fn a_refusal_on_linux_gets_the_operator_command() {
+        assert_eq!(guidance(&with(Trouble::Denied("x".into())), "linux").2, Fix::Copy(LINUX_OPERATOR));
+        assert_eq!(guidance(&with(Trouble::Denied("x".into())), "macos").2, Fix::OpenApp);
+        assert_eq!(guidance(&with(Trouble::NeedsExtension), "macos").2, Fix::Settings(MAC_EXTENSIONS));
+        assert_eq!(guidance(&with(Trouble::NotAdmin), "macos").2, Fix::Settings(MAC_USERS));
     }
 
     #[test]

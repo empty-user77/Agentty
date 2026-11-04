@@ -504,10 +504,30 @@ impl Workbench {
                 };
                 remote::refresh_tailscale(cx);
             }
-            // What macOS says about the VPN, in a test (`-` for what it really says).
+            // What macOS says about the extension, in a test (`-` for what it really says).
+            #[cfg(debug_assertions)]
+            ("ext", list) => {
+                *remote::tailscale::test_override::EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()) =
+                    (list != "-").then(|| list.to_string());
+                remote::refresh_tailscale(cx);
+            }
+            // This account can't read Tailscale's access file, in a test.
+            #[cfg(debug_assertions)]
+            ("notadmin", on) => {
+                *remote::tailscale::test_override::NOT_ADMIN.lock().unwrap_or_else(|e| e.into_inner()) = on == "1";
+                remote::refresh_tailscale(cx);
+            }
+            // A start that Tailscale refused, in a test: only what the page shows, nothing is started.
+            #[cfg(debug_assertions)]
+            ("refused", said) => {
+                cx.global_mut::<remote::Remote>().phase = Phase::Failed(Problem::Other(said.to_string()));
+                cx.refresh_windows();
+            }
+            // What macOS says about the VPN, in a test (`-` for what it really says, `\\n` between lines).
             #[cfg(debug_assertions)]
             ("vpn", list) => {
-                *remote::tailscale::test_override::VPN.lock().unwrap_or_else(|e| e.into_inner()) = (list != "-").then(|| list.to_string());
+                *remote::tailscale::test_override::VPN.lock().unwrap_or_else(|e| e.into_inner()) =
+                    (list != "-").then(|| list.replace("\\n", "\n"));
                 remote::refresh_tailscale(cx);
             }
             // What the page's "Disable remote access" button does, from inside a workbench update as it is.
@@ -1079,7 +1099,7 @@ impl Workbench {
         let (certificate_sub, issue) = match &job {
             remote::Certificate::Issuing => (t(cx, "remote.setup.cert_issuing").to_string(), None),
             remote::Certificate::Failed(why) => (
-                tf(cx, "remote.setup.cert_failed", &[("reason", why)]),
+                super::remote_trouble::with_refusal_help(tf(cx, "remote.setup.cert_failed", &[("reason", why)]), why, cx),
                 Some(action_button("remote-setup-cert", t(cx, "remote.setup.issue_cert"), |_, _, cx| remote::issue_certificate(cx))),
             ),
             remote::Certificate::Idle if certificate.is_none() => (t(cx, "remote.setup.cert_waiting").to_string(), None),
@@ -1231,6 +1251,11 @@ impl Workbench {
                         cx.open_url(TAILSCALE_ADMIN_DNS)
                     })))
                     .child(muted(t(cx, "remote.https_note").to_string()));
+            }
+            Phase::Failed(Problem::Other(said)) => {
+                if let Some(help) = super::remote_trouble::refusal_help(said, cx) {
+                    status = status.child(help);
+                }
             }
             Phase::Failed(Problem::NotInstalled | Problem::NotRunning) if prefs.enabled => {
                 if let Some(found) = tailscale.as_ref() {
