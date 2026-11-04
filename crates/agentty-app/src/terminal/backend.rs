@@ -137,6 +137,7 @@ impl Backend {
         }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
+        env.extend(spec.shell_account_env());
         // A plugin's capture proxy (`terminal/setProxy`): tabs opened while it is on go through it.
         env.extend(crate::plugins::terminal_proxy::pane_environment(options.pane_id));
         let mut socket_token = None;

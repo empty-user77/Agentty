@@ -6,7 +6,7 @@
 //! comes back as a new session (a branch) and the local one is left alone.
 
 use super::model::ParentRef;
-use super::{clone_dir, load_config, session, update_config, workspace_dir, Locate, Lock, SyncConfig, SyncError};
+use super::{clone_dir, load_config, session, update_config, workspace_dir, Locate, Lock, SyncConfig, SyncError, SyncProfile};
 use crate::model::Agent;
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -52,14 +52,14 @@ pub struct Restored {
 }
 
 /// Restores a session from the clone. Blocking; waits for a running sync to finish first.
-pub fn restore(request: &RestoreRequest) -> Result<Restored, SyncError> {
-    let _lock = Lock::wait(std::time::Duration::from_secs(60))?;
-    let config = load_config();
-    let restored = restore_in(&clone_dir(), &config, request, &Locate::agents())?;
+pub fn restore(profile: &SyncProfile, request: &RestoreRequest) -> Result<Restored, SyncError> {
+    let _lock = Lock::wait(profile, std::time::Duration::from_secs(60))?;
+    let config = load_config(profile);
+    let restored = restore_in(&clone_dir(profile), &config, request, &Locate::agents(profile))?;
     // Continuing another computer's session: the next sync records where it came from.
     if let Some(origin) = origin_of(&config, request, &restored) {
         let key = origin_key(restored.agent, &restored.id);
-        let _ = update_config(|c| {
+        let _ = update_config(profile, |c| {
             c.origins.insert(key, origin);
         });
     }
@@ -174,9 +174,9 @@ pub struct ContextRequest {
 
 /// Context merge: the synced session's conversation as a handoff document, and the prompt that
 /// asks an agent to read it. Nothing is merged into any transcript: the prompt carries it over.
-pub fn share_context(request: &ContextRequest) -> Result<String, SyncError> {
-    let _lock = Lock::wait(std::time::Duration::from_secs(60))?;
-    let (manifest, turns) = context_turns(&clone_dir(), &super::sync_dir().join("context"), request)?;
+pub fn share_context(profile: &SyncProfile, request: &ContextRequest) -> Result<String, SyncError> {
+    let _lock = Lock::wait(profile, std::time::Duration::from_secs(60))?;
+    let (manifest, turns) = context_turns(&clone_dir(profile), &profile.dir().join("context"), request)?;
     let handoff =
         crate::handoff::create_share(request.agent, &request.session, &manifest.title, request.to, Some(manifest.cwd.clone()), &turns)?;
     Ok(handoff.prompt)

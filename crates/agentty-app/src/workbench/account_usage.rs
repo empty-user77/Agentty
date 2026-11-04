@@ -2,6 +2,7 @@
 
 use super::Workbench;
 use crate::i18n::{t, tf};
+use agentty_bridge::agent_auth::AuthAgent;
 use agentty_bridge::limits::{time_left, AgentLimits};
 use agentty_bridge::model::Agent;
 use agentty_bridge::usage::UsageScanner;
@@ -26,6 +27,8 @@ pub struct SessionTotals {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountUsage {
     pub agent: Agent,
+    /// The account's name, for an account other than the agent's own login.
+    pub account: Option<String>,
     /// Spend over the last `DAYS` days (`None` when no request had a known price).
     pub cost: Option<f64>,
     /// Tokens over the last `DAYS` days: what an agent without a price table can still show.
@@ -36,12 +39,20 @@ pub struct AccountUsage {
 impl AccountUsage {
     /// "Claude Code  $661 · weekly 42% · resets in 2d 5h".
     pub fn menu_line(&self, cx: &App) -> String {
-        let mut parts = vec![format!("{}  {}", self.agent.display_name(), self.cost_label())];
+        let mut parts = vec![format!("{}  {}", self.display_name(), self.cost_label())];
         if let Some(limit) = self.limit() {
             parts.push(format!("{} {:.0}%", t(cx, limit.label), limit.used_percent));
             parts.push(limit.resets_in(cx));
         }
         parts.join(" · ")
+    }
+
+    /// "Claude Code", or "Claude Code · work@example.com" for another account.
+    pub fn display_name(&self) -> String {
+        match &self.account {
+            Some(account) => format!("{} · {account}", self.agent.display_name()),
+            None => self.agent.display_name().to_string(),
+        }
     }
 
     /// "$661"; tokens instead when no price is known for the models (Codex has none built in),
@@ -112,11 +123,18 @@ type Totals = std::collections::HashMap<String, SessionTotals>;
 fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> (Vec<AccountUsage>, Totals) {
     let since = now_ms as i64 - DAYS * 86_400_000;
     let mut totals = Totals::new();
-    let accounts = [Agent::Claude, Agent::Codex]
-        .into_iter()
-        .filter(|agent| agentty_bridge::usage::root_dir(*agent).is_dir())
-        .map(|agent| {
-            let usage = scanner.lock().map(|mut s| s.scan(agent)).unwrap_or_default();
+    let store = agentty_bridge::accounts::AccountStore::load();
+    let all = [(Agent::Claude, AuthAgent::Claude), (Agent::Codex, AuthAgent::Codex)].into_iter().flat_map(|(agent, auth)| {
+        let others = store.of(auth).iter().map(move |known| {
+            let name = known.email.clone().or_else(|| known.org.clone()).unwrap_or_else(|| known.id.clone());
+            (agent, Some(known.id.clone()), Some(name))
+        });
+        std::iter::once((agent, None, None)).chain(others)
+    });
+    let accounts = all
+        .filter(|(agent, id, _)| agentty_bridge::usage::root_of(*agent, id.as_deref()).is_dir())
+        .map(|(agent, id, account)| {
+            let usage = scanner.lock().map(|mut s| s.scan_of(agent, id.as_deref())).unwrap_or_default();
             for request in &usage.requests {
                 let total = totals.entry(request.session_id.clone()).or_default();
                 total.tokens += request.input + request.output + request.cache_read + request.cache_write;
@@ -128,7 +146,7 @@ fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> (Vec<AccountUsage>, To
             let priced: Vec<f64> = recent.iter().filter_map(|r| r.cost).collect();
             let cost = (!priced.is_empty()).then(|| priced.iter().sum());
             let tokens = recent.iter().map(|r| r.input + r.output + r.cache_read + r.cache_write).sum();
-            AccountUsage { agent, cost, tokens, limits: agentty_bridge::limits::latest(agent, now_ms) }
+            AccountUsage { agent, account, cost, tokens, limits: agentty_bridge::limits::latest(agent, id.as_deref(), now_ms) }
         })
         .filter(AccountUsage::worth_showing)
         .collect();
@@ -182,7 +200,7 @@ mod tests {
     /// signed-in user saw nothing at all.
     #[test]
     fn an_account_without_a_price_is_still_shown() {
-        let usage = |cost, tokens| AccountUsage { agent: Agent::Codex, cost, tokens, limits: None };
+        let usage = |cost, tokens| AccountUsage { agent: Agent::Codex, account: None, cost, tokens, limits: None };
         assert!(usage(None, 120_000).worth_showing());
         assert_eq!(usage(None, 120_000).cost_label(), "120.0K tok");
         assert!(usage(Some(4.2), 0).worth_showing());

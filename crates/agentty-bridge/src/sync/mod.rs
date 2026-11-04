@@ -19,6 +19,8 @@ pub mod sqlite;
 #[cfg(test)]
 mod tests;
 
+use crate::accounts::AccountChoice;
+use crate::agent_auth::AuthAgent;
 use crate::model::Agent;
 use anyhow::{Context, Result};
 use model::*;
@@ -69,29 +71,208 @@ impl SyncConfig {
 static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Loads the config, changes it and saves it, as one step.
-pub fn update_config<T>(change: impl FnOnce(&mut SyncConfig) -> T) -> Result<T> {
+pub fn update_config<T>(profile: &SyncProfile, change: impl FnOnce(&mut SyncConfig) -> T) -> Result<T> {
     let _guard = CONFIG_LOCK.lock().map_err(|_| anyhow::anyhow!("sync settings are locked"))?;
-    let mut config = load_config();
+    let mut config = load_config(profile);
     let out = change(&mut config);
-    save_config(&config)?;
+    save_config(profile, &config)?;
     Ok(out)
 }
 
-pub fn sync_dir() -> PathBuf {
-    crate::fsutil::data_dir().join("sync")
+/// Whose sync this is. Every account keeps its own repository, settings and clone, and sessions
+/// never leave for another account's repository. A window syncs for its Claude Code account, else
+/// its Codex account, else the agents' own logins: the sync there has always been.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncProfile {
+    account: Option<(AuthAgent, String)>,
 }
 
-fn config_path() -> PathBuf {
-    sync_dir().join("config.json")
+impl SyncProfile {
+    pub fn of_choice(choice: &AccountChoice) -> Self {
+        let account = match (&choice.claude, &choice.codex) {
+            (Some(id), _) => Some((AuthAgent::Claude, id.clone())),
+            (None, Some(id)) => Some((AuthAgent::Codex, id.clone())),
+            (None, None) => None,
+        };
+        Self { account }
+    }
+
+    pub fn of_account(agent: AuthAgent, id: &str) -> Self {
+        Self { account: Some((agent, id.to_string())) }
+    }
+
+    /// Where this profile's settings and clone live. An id that isn't one has no folder of its own
+    /// and an empty path, where nothing can be saved.
+    fn dir(&self) -> PathBuf {
+        let sync = crate::fsutil::data_dir().join("sync");
+        match &self.account {
+            None => sync,
+            Some((agent, id)) if crate::accounts::home(*agent, id).is_ok() => {
+                let agent = if *agent == AuthAgent::Claude { "claude" } else { "codex" };
+                sync.join(ACCOUNTS_DIR).join(format!("{agent}-{id}"))
+            }
+            Some(_) => PathBuf::new(),
+        }
+    }
+
+    /// Where the SQLite sync file goes. The agents' own logins keep theirs in the data folder
+    /// itself, where the user finds it; an account's stays with its sync.
+    pub fn default_sqlite_file(&self) -> PathBuf {
+        match &self.account {
+            None => crate::fsutil::data_dir().join("sessions.sqlite"),
+            Some(_) => self.dir().join("sessions.sqlite"),
+        }
+    }
+
+    /// Whether the session in `path` belongs in this profile's repository. Agents without accounts
+    /// follow the window; an account's agent only goes where that account is.
+    fn owns(&self, agent: Agent, path: &Path) -> bool {
+        let Some(auth) = auth_agent(agent) else { return true };
+        let owner = crate::accounts::owner_of(auth, path);
+        match &self.account {
+            None => owner.is_none(),
+            Some((account_agent, id)) => *account_agent == auth && owner.as_deref() == Some(id.as_str()),
+        }
+    }
+
+    /// `request` without the sessions of other accounts.
+    fn only_own(&self, request: &SyncRequest) -> SyncRequest {
+        let mut own = request.clone();
+        for workspace in &mut own.workspaces {
+            workspace.sessions.retain(|session| {
+                session.id.is_empty() || transcript_of(session.agent, &session.id).map_or(true, |path| self.owns(session.agent, &path))
+            });
+        }
+        own
+    }
+
+    /// Where a restored session of `agent` goes: this account's folder when it is this account's
+    /// agent, else the agent's own.
+    fn root(&self, agent: Agent) -> PathBuf {
+        match &self.account {
+            Some((account_agent, id)) if auth_agent(agent) == Some(*account_agent) => crate::usage::root_of(agent, Some(id)),
+            _ => agent_root(agent),
+        }
+    }
+
+    /// Forgets this account's sync on this computer: its settings, clone and SQLite file. The
+    /// repository itself is left as it is.
+    pub fn delete(&self) -> Result<()> {
+        if self.account.is_none() {
+            return Ok(());
+        }
+        let dir = self.dir();
+        anyhow::ensure!(dir.is_absolute(), "not an account's sync folder");
+        match fs::remove_dir_all(&dir) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.into()),
+            _ => Ok(()),
+        }
+    }
 }
 
-fn clone_dir() -> PathBuf {
-    sync_dir().join("repo")
+const ACCOUNTS_DIR: &str = "accounts";
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn choice(claude: Option<&str>, codex: Option<&str>) -> AccountChoice {
+        AccountChoice { claude: claude.map(str::to_string), codex: codex.map(str::to_string) }
+    }
+
+    #[test]
+    fn a_window_syncs_for_its_claude_account_then_its_codex_account() {
+        assert_eq!(SyncProfile::of_choice(&choice(None, None)), SyncProfile::default());
+        assert_eq!(SyncProfile::of_choice(&choice(Some("a1"), Some("a2"))), SyncProfile::of_account(AuthAgent::Claude, "a1"));
+        assert_eq!(SyncProfile::of_choice(&choice(None, Some("a2"))), SyncProfile::of_account(AuthAgent::Codex, "a2"));
+    }
+
+    #[test]
+    fn every_account_has_its_own_folder() {
+        let (own, work, side) =
+            (SyncProfile::default(), SyncProfile::of_account(AuthAgent::Claude, "a1"), SyncProfile::of_account(AuthAgent::Codex, "a1"));
+        assert_ne!(own.dir(), work.dir());
+        assert_ne!(work.dir(), side.dir());
+        assert_ne!(clone_dir(&own), clone_dir(&work));
+        assert_ne!(own.default_sqlite_file(), work.default_sqlite_file());
+        // The sync the app has always had stays where it is.
+        assert!(own.dir().ends_with("sync"));
+        assert!(own.default_sqlite_file().ends_with("sessions.sqlite"));
+    }
+
+    #[test]
+    fn a_bad_id_has_no_folder_to_write_into() {
+        let bad = SyncProfile::of_account(AuthAgent::Claude, "../..");
+        assert_eq!(bad.dir(), PathBuf::new());
+        assert!(save_config(&bad, &SyncConfig::default()).is_err());
+        assert!(bad.delete().is_err());
+    }
+
+    #[test]
+    fn a_session_goes_only_to_its_own_accounts_repository() {
+        let claude_home = crate::accounts::home(AuthAgent::Claude, "a1").unwrap().join("projects/x/s.jsonl");
+        let codex_home = crate::accounts::home(AuthAgent::Codex, "a2").unwrap().join("sessions/rollout.jsonl");
+        let own_login = Path::new("/home/example/.claude/projects/x/s.jsonl");
+        let (own, work, side) =
+            (SyncProfile::default(), SyncProfile::of_account(AuthAgent::Claude, "a1"), SyncProfile::of_account(AuthAgent::Codex, "a2"));
+
+        assert!(own.owns(Agent::Claude, own_login));
+        assert!(!own.owns(Agent::Claude, &claude_home));
+        assert!(!own.owns(Agent::Codex, &codex_home));
+
+        assert!(work.owns(Agent::Claude, &claude_home));
+        assert!(!work.owns(Agent::Claude, own_login));
+        assert!(!work.owns(Agent::Codex, &codex_home));
+        assert!(!work.owns(Agent::Codex, Path::new("/home/example/.codex/sessions/rollout.jsonl")));
+
+        assert!(side.owns(Agent::Codex, &codex_home));
+        assert!(!side.owns(Agent::Claude, own_login));
+
+        // Agents without accounts stay with the window they ran in.
+        assert!(work.owns(Agent::Gemini, Path::new("/home/example/.gemini/tmp/s.json")));
+    }
+
+    #[test]
+    fn the_same_repository_is_recognized_however_it_is_reached() {
+        let github = |repo: &str, ssh| Remote::Github { repo: repo.into(), ssh };
+        let git = |url: &str| Remote::Git { url: url.into() };
+        assert!(github("me/sync", false).same_place(&github("me/sync", true)));
+        assert!(github("me/sync", false).same_place(&github("ME/Sync", false)));
+        assert!(!github("me/sync", false).same_place(&github("me/other", false)));
+        assert!(git("git@example.com:me/sync.git").same_place(&git("git@example.com:me/sync")));
+        assert!(!git("git@example.com:me/sync").same_place(&Remote::Sqlite { path: "/x/sessions.sqlite".into() }));
+    }
 }
 
-/// Where the SQLite sync file goes: in the data folder itself, where the user finds it.
-pub fn default_sqlite_file() -> PathBuf {
-    crate::fsutil::data_dir().join("sessions.sqlite")
+fn auth_agent(agent: Agent) -> Option<AuthAgent> {
+    match agent {
+        Agent::Claude => Some(AuthAgent::Claude),
+        Agent::Codex => Some(AuthAgent::Codex),
+        _ => None,
+    }
+}
+
+/// The remotes other profiles are connected to.
+fn remotes_of_others(profile: &SyncProfile) -> Vec<Remote> {
+    let mut folders = vec![SyncProfile::default().dir()];
+    if let Ok(entries) = fs::read_dir(SyncProfile::default().dir().join(ACCOUNTS_DIR)) {
+        folders.extend(entries.flatten().map(|entry| entry.path()));
+    }
+    let own = profile.dir();
+    folders
+        .into_iter()
+        .filter(|folder| *folder != own)
+        .filter_map(|folder| fs::read_to_string(folder.join("config.json")).ok())
+        .filter_map(|text| serde_json::from_str::<SyncConfig>(&text).ok()?.remote)
+        .collect()
+}
+
+fn config_path(profile: &SyncProfile) -> PathBuf {
+    profile.dir().join("config.json")
+}
+
+fn clone_dir(profile: &SyncProfile) -> PathBuf {
+    profile.dir().join("repo")
 }
 
 /// What a sync writes into: a git repository's clone, or a SQLite file with its working tree. Both
@@ -162,16 +343,17 @@ impl Backend for sqlite::SqliteStore {
     }
 }
 
-fn backend_for(remote: &Remote, branch: &str) -> Box<dyn Backend> {
+fn backend_for(profile: &SyncProfile, remote: &Remote, branch: &str) -> Box<dyn Backend> {
     match remote {
-        Remote::Sqlite { path } => Box::new(sqlite::SqliteStore::new(clone_dir(), PathBuf::from(path))),
-        _ => Box::new(Repo::new(clone_dir(), remote.clone(), branch)),
+        Remote::Sqlite { path } => Box::new(sqlite::SqliteStore::new(clone_dir(profile), PathBuf::from(path))),
+        _ => Box::new(Repo::new(clone_dir(profile), remote.clone(), branch)),
     }
 }
 
 /// The saved settings, with a device id and name made up on first use.
-pub fn load_config() -> SyncConfig {
-    let mut config: SyncConfig = fs::read_to_string(config_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+pub fn load_config(profile: &SyncProfile) -> SyncConfig {
+    let mut config: SyncConfig =
+        fs::read_to_string(config_path(profile)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let mut dirty = false;
     if config.device_id.is_empty() {
         config.device_id = new_id();
@@ -186,15 +368,17 @@ pub fn load_config() -> SyncConfig {
     }
     // Nothing is written until a repository is connected: opening the app leaves no sync file.
     if dirty && config.connected() {
-        let _ = save_config(&config);
+        let _ = save_config(profile, &config);
     }
     config
 }
 
-pub fn save_config(config: &SyncConfig) -> Result<()> {
-    fs::create_dir_all(sync_dir())?;
-    repo::private_dir(&sync_dir());
-    crate::fsutil::write_private(&config_path(), serde_json::to_string_pretty(config)?.as_bytes())?;
+pub fn save_config(profile: &SyncProfile, config: &SyncConfig) -> Result<()> {
+    let dir = profile.dir();
+    anyhow::ensure!(dir.is_absolute(), "not an account's sync folder");
+    fs::create_dir_all(&dir)?;
+    repo::private_dir(&dir);
+    crate::fsutil::write_private(&config_path(profile), serde_json::to_string_pretty(config)?.as_bytes())?;
     Ok(())
 }
 
@@ -208,6 +392,8 @@ pub enum SyncError {
     Busy,
     /// The repository holds other things than Agentty's sync.
     NotSyncRepository,
+    /// Another account syncs into this repository: accounts don't share one.
+    UsedByAnotherAccount,
     Failed(String),
 }
 
@@ -218,6 +404,7 @@ impl std::fmt::Display for SyncError {
             SyncError::Public => f.write_str("the sync repository is public"),
             SyncError::Busy => f.write_str("another sync is running"),
             SyncError::NotSyncRepository => f.write_str("the repository is not empty and is not an Agentty sync repository"),
+            SyncError::UsedByAnotherAccount => f.write_str("another account already syncs into this repository"),
             SyncError::Failed(reason) => f.write_str(reason),
         }
     }
@@ -370,11 +557,11 @@ impl PruneItem {
 
 /// One sync pass: fetch, write this device's files, commit, push; again if another device pushed
 /// in between. Blocking; run it off the UI thread.
-pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
-    let mut config = load_config();
+pub fn sync(profile: &SyncProfile, request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
+    let mut config = load_config(profile);
     let remote = config.remote.clone().ok_or(SyncError::NotConnected)?;
-    let _lock = Lock::take()?;
-    let repo = backend_for(&remote, &config.branch);
+    let _lock = Lock::take(profile)?;
+    let repo = backend_for(profile, &remote, &config.branch);
     if !repo.is_cloned() {
         repo.ensure_clone()?;
     }
@@ -382,14 +569,15 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     if repo::visibility(&remote) == Visibility::Public {
         return Err(SyncError::Public);
     }
+    let own = profile.only_own(request);
     let with_settings;
-    let mut request = request;
+    let mut request = &own;
     if config.settings && request.settings.is_none() {
         let settings = crate::backup::collect(crate::backup::Scope::Sync, None, &request.app_version).ok();
         with_settings = SyncRequest { settings, ..request.clone() };
         request = &with_settings;
     }
-    let outcome = run(repo.as_ref(), &mut config, request, &Locate::agents());
+    let outcome = run(repo.as_ref(), &mut config, request, &Locate::agents(profile));
     // Ids given out in this pass are kept even when the push failed: the next pass reuses them.
     let assigned: Vec<(String, String)> =
         request.workspaces.iter().filter_map(|w| config.workspaces.get(&w.local_key).map(|id| (w.local_key.clone(), id.clone()))).collect();
@@ -398,7 +586,7 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     // too, still under the lock. Checked by size and time, so an unchanged clone costs little.
     let outcome = outcome.map(|o| match config.sqlite_copy && !remote.is_sqlite() {
         true => {
-            let copy = sqlite::SqliteStore::new(clone_dir(), default_sqlite_file());
+            let copy = sqlite::SqliteStore::new(clone_dir(profile), profile.default_sqlite_file());
             SyncOutcome { sqlite_copy_error: copy.commit_all().err().map(|e| format!("{e:#}")), ..o }
         }
         false => o,
@@ -406,7 +594,7 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
     let (fingerprint, changed_at) = (config.settings_fingerprint.clone(), config.settings_changed_at.clone());
     let plugin_marks = config.plugin_settings.clone();
-    let _ = update_config(|c| {
+    let _ = update_config(profile, |c| {
         if c.settings {
             c.settings_fingerprint = fingerprint;
             c.settings_changed_at = changed_at;
@@ -444,10 +632,11 @@ pub struct Locate {
 }
 
 impl Locate {
-    pub fn agents() -> Self {
+    pub fn agents(profile: &SyncProfile) -> Self {
+        let profile = profile.clone();
         Self {
             transcript: Box::new(transcript_of),
-            root: Box::new(agent_root),
+            root: Box::new(move |agent| profile.root(agent)),
             knows_folder: Box::new(agent_knows_folder),
             machine: machine_key(),
             data: crate::fsutil::data_dir(),
@@ -579,8 +768,8 @@ fn run(repo: &dyn Backend, config: &mut SyncConfig, request: &SyncRequest, locat
 }
 
 /// What the clone holds now, without contacting the remote.
-pub fn overview() -> Overview {
-    read_overview(&clone_dir())
+pub fn overview(profile: &SyncProfile) -> Overview {
+    read_overview(&clone_dir(profile))
 }
 
 /// What this computer keeps in the repository (every Agentty on it), for Settings → Sync.
@@ -594,9 +783,9 @@ pub struct ComputerStats {
 }
 
 /// Counted in the clone, no network.
-pub fn computer_stats() -> ComputerStats {
-    let root = clone_dir();
-    stats_in(&root, &this_computer_devices(&read_overview(&root), &load_config()))
+pub fn computer_stats(profile: &SyncProfile) -> ComputerStats {
+    let root = clone_dir(profile);
+    stats_in(&root, &this_computer_devices(&read_overview(&root), &load_config(profile)))
 }
 
 /// This app's device and the others on this computer.
@@ -665,7 +854,10 @@ pub enum Connected {
 }
 
 /// Connects this computer to `remote`: must be private, and empty or already a sync repository.
-pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
+pub fn connect(profile: &SyncProfile, remote: Remote) -> Result<Connected, SyncError> {
+    if remotes_of_others(profile).iter().any(|other| other.same_place(&remote)) {
+        return Err(SyncError::UsedByAnotherAccount);
+    }
     match repo::visibility(&remote) {
         Visibility::Public => return Err(SyncError::Public),
         // A GitHub repository gh cannot even see: wrong name, or no access.
@@ -674,8 +866,8 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
         }
         _ => {}
     }
-    let _lock = Lock::take()?;
-    let dir = clone_dir();
+    let _lock = Lock::take(profile)?;
+    let dir = clone_dir(profile);
     let _ = fs::remove_dir_all(&dir);
     // A SQLite file already there (an earlier backup, or one copied from another computer) is
     // joined like a repository other devices use: its sessions come back into the tree.
@@ -691,7 +883,7 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
     };
     repo.ensure_clone()?;
     // Saved now, so the device id written into the repository is the one this computer keeps.
-    let config = update_config(|c| c.clone())?;
+    let config = update_config(profile, |c| c.clone())?;
     let outcome = if repo.dir().join(MARKER_FILE).is_file() {
         Connected::Joined { devices: read_overview(repo.dir()).computers().len() }
     } else if repo.is_empty_or_readme_only() {
@@ -706,7 +898,7 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
         let _ = fs::remove_dir_all(repo.dir());
         return Err(SyncError::NotSyncRepository);
     };
-    update_config(|c| {
+    update_config(profile, |c| {
         c.remote = Some(remote);
         c.branch = branch;
         c.paused = false;
@@ -715,28 +907,28 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
 }
 
 /// Switches a GitHub repository between `gh` (HTTPS) and `git` (SSH). The clone follows.
-pub fn set_github_ssh(ssh: bool) -> Result<()> {
-    let _lock = Lock::take().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let config = load_config();
+pub fn set_github_ssh(profile: &SyncProfile, ssh: bool) -> Result<()> {
+    let _lock = Lock::take(profile).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let config = load_config(profile);
     let Some(Remote::Github { repo, .. }) = config.remote.clone() else { anyhow::bail!("not a GitHub repository") };
     let remote = Remote::Github { repo, ssh };
-    let clone = Repo::new(clone_dir(), remote.clone(), config.branch.clone());
+    let clone = Repo::new(clone_dir(profile), remote.clone(), config.branch.clone());
     if clone.is_cloned() {
         clone.set_origin(&remote.url())?;
     }
-    update_config(|c| c.remote = Some(remote))?;
+    update_config(profile, |c| c.remote = Some(remote))?;
     Ok(())
 }
 
 /// Forgets the repository on this computer. Nothing is deleted from the repository (a SQLite file
 /// stays where it is, to be connected again).
-pub fn disconnect() -> Result<()> {
-    let _lock = Lock::take().map_err(|e| anyhow::anyhow!("{e}"))?;
-    update_config(|c| {
+pub fn disconnect(profile: &SyncProfile) -> Result<()> {
+    let _lock = Lock::take(profile).map_err(|e| anyhow::anyhow!("{e}"))?;
+    update_config(profile, |c| {
         c.remote = None;
         c.last_sync_at = None;
     })?;
-    let _ = fs::remove_dir_all(clone_dir());
+    let _ = fs::remove_dir_all(clone_dir(profile));
     Ok(())
 }
 
@@ -1003,7 +1195,12 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
             let found;
             let session = if session.id.is_empty() {
                 let cwd = session.cwd.as_ref().unwrap_or(&input.cwd);
-                let Some(id) = session.started_ms.and_then(|since| crate::find_recent(session.agent, cwd, since)) else { continue };
+                let Some(id) = session
+                    .started_ms
+                    .and_then(|since| crate::find_recent(session.agent, cwd, since, &crate::accounts::AccountChoice::default()))
+                else {
+                    continue;
+                };
                 found = SessionInput { id, ..session.clone() };
                 &found
             } else {
@@ -1248,11 +1445,15 @@ fn transcript_of(agent: Agent, id: &str) -> Result<PathBuf> {
 struct Lock(PathBuf);
 
 impl Lock {
-    fn take() -> Result<Self, SyncError> {
+    fn take(profile: &SyncProfile) -> Result<Self, SyncError> {
         static IN_PROCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = IN_PROCESS.lock().map_err(|_| SyncError::Busy)?;
-        fs::create_dir_all(sync_dir()).map_err(|e| SyncError::Failed(e.to_string()))?;
-        let path = sync_dir().join("sync.lock");
+        let dir = profile.dir();
+        if !dir.is_absolute() {
+            return Err(SyncError::NotConnected);
+        }
+        fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(e.to_string()))?;
+        let path = dir.join("sync.lock");
         // A lock left by a crash goes at once when the app that took it is gone (its pid is in
         // the file), and in any case after ten minutes: no sync takes that long.
         let holder = fs::read_to_string(&path).ok().and_then(|t| t.trim().parse::<u32>().ok());
@@ -1274,10 +1475,10 @@ impl Lock {
 
 impl Lock {
     /// Waits up to `timeout` for a running sync to finish.
-    fn wait(timeout: std::time::Duration) -> Result<Self, SyncError> {
+    fn wait(profile: &SyncProfile, timeout: std::time::Duration) -> Result<Self, SyncError> {
         let started = std::time::Instant::now();
         loop {
-            match Self::take() {
+            match Self::take(profile) {
                 Err(SyncError::Busy) if started.elapsed() < timeout => std::thread::sleep(std::time::Duration::from_millis(500)),
                 other => return other,
             }
@@ -1362,7 +1563,14 @@ pub fn present_locally(sessions: &[(Agent, String)]) -> std::collections::HashSe
 }
 
 /// Reads a manifest from the clone (used by the app to show a session's details).
-pub fn manifest(plugin: Option<&str>, sync_id: &str, device: &str, agent: Agent, session: &str) -> Result<SessionManifest> {
-    let dir = workspace_dir(&clone_dir(), plugin, sync_id).context("bad workspace id")?;
+pub fn manifest(
+    profile: &SyncProfile,
+    plugin: Option<&str>,
+    sync_id: &str,
+    device: &str,
+    agent: Agent,
+    session: &str,
+) -> Result<SessionManifest> {
+    let dir = workspace_dir(&clone_dir(profile), plugin, sync_id).context("bad workspace id")?;
     session::read_manifest(&dir.join("devices").join(device).join(agent.id()).join(session))
 }

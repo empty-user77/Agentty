@@ -32,6 +32,8 @@ pub enum AskAction {
     ContinueSynced(Box<super::sync::SyncedSession>),
     /// Delete Agentty window `slot` and the workspaces in it (Settings → Workspaces).
     DeleteWindow(usize),
+    /// Sign out of an account and delete its folder.
+    RemoveAccount(agentty_bridge::agent_auth::AuthAgent, String),
     /// Stop orchestration `0` and its whole team.
     StopOrchestration(u64),
     /// Take orchestration `id` off the list and close its terminal (its workspace, when its own).
@@ -109,6 +111,7 @@ impl Workbench {
             AskAction::OpenTree(tree) => self.open_tree_tab(None, tree, window, cx),
             AskAction::SwitchTree { pane, tree } => self.switch_pane_to_tree(pane, tree, window, cx),
             AskAction::DeleteWindow(slot) => self.delete_window(slot, window, cx),
+            AskAction::RemoveAccount(agent, id) => self.remove_account(agent, id, cx),
             AskAction::StopOrchestration(id) => self.stop_orchestration(id, cx),
             AskAction::DeleteOrchestration(id) => self.delete_orchestration(id, window, cx),
         }

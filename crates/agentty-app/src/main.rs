@@ -1072,6 +1072,29 @@ pub fn new_window(cx: &mut App) {
     }
 }
 
+/// Brings forward the window running `id` for `agent` (`None`: the agent's own login), or opens one.
+pub fn open_account_window(agent: agentty_bridge::agent_auth::AuthAgent, id: Option<String>, cx: &mut App) {
+    cx.defer(move |cx| {
+        let open = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.accounts.get(agent) == id.as_deref()));
+        if let Some(window) = open {
+            let _ = window.update(cx, |_, window, _| window.activate_window());
+            return;
+        }
+        let slot = NEXT_WINDOW_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Err(err) = workbench::prepare_account_window(slot, agent, id) {
+            eprintln!("agentty: could not lay out window {slot}: {err:#}");
+            return;
+        }
+        match open_window(slot, cx) {
+            Some(window) => {
+                metrics::track(cx, "window_opened", serde_json::json!({}));
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+            }
+            None => eprintln!("agentty: could not open window {slot}"),
+        }
+    });
+}
+
 /// Opens another Agentty window with `plugin`'s workspace in front, as if its icon was pressed
 /// there: the plugin on its own, in a window the user places where they like.
 pub fn open_plugin_window(plugin: String, cx: &mut App) {

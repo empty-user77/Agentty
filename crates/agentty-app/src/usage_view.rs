@@ -4,8 +4,9 @@ use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use crate::ui::{action_button, chip, compact_number, money, popover};
+use agentty_bridge::accounts::AccountChoice;
 use agentty_bridge::model::Agent;
-use agentty_bridge::usage::{root_dir, FileUsage, NamedUsage, UsageReport, UsageScanner};
+use agentty_bridge::usage::{root_of, FileUsage, NamedUsage, UsageReport, UsageScanner};
 use chrono::Local;
 use gpui::{canvas, div, point, prelude::*, px, relative, ClickEvent, Context, Div, PathBuilder, Pixels, Point, Window};
 use std::collections::HashMap;
@@ -15,6 +16,8 @@ const PERIODS: [u32; 4] = [1, 7, 30, 90];
 
 pub struct UsageView {
     agent: Agent,
+    /// The window's accounts: this page reports theirs.
+    accounts: AccountChoice,
     days: u32,
     scanner: Arc<Mutex<UsageScanner>>,
     data: HashMap<Agent, FileUsage>,
@@ -32,9 +35,10 @@ pub struct UsageView {
 }
 
 impl UsageView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(accounts: AccountChoice, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             agent: Agent::Claude,
+            accounts,
             days: 7,
             scanner: Arc::default(),
             data: HashMap::new(),
@@ -57,7 +61,8 @@ impl UsageView {
         self.loading = true;
         let agent = self.agent;
         let scanner = self.scanner.clone();
-        let task = cx.background_spawn(async move { scanner.lock().map(|mut s| s.scan(agent)).unwrap_or_default() });
+        let account = self.accounts.of_agent(agent).map(str::to_string);
+        let task = cx.background_spawn(async move { scanner.lock().map(|mut s| s.scan_of(agent, account.as_deref())).unwrap_or_default() });
         cx.spawn(async move |this, cx| {
             let usage = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -251,7 +256,7 @@ impl Render for UsageView {
                     .bg(hex(0x2a2a2a))
                     .t_small()
                     .text_color(hex(Chrome::MUTED))
-                    .child(crate::ui::tilde(&root_dir(self.agent))),
+                    .child(crate::ui::tilde(&root_of(self.agent, self.accounts.of_agent(self.agent)))),
             )
             .child(
                 action_button("usage-refresh", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx)))

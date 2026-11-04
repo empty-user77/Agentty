@@ -28,7 +28,7 @@ const STRINGS = {
     nothingWaiting: "Nothing is waiting for you.", nothingWorking: "No agent is working right now.", noPlugins: "No plugins installed.",
     wake: "Wake up", waking: "Waking…", newTab: "New tab", newIn: "New tab in {ws}", cancel: "Cancel",
     terminal: "Terminal", claude: "Claude Code", codex: "Codex", tooManyTabs: "Too many new tabs at once. Wait a minute.",
-    newWorkspace: "New workspace", openHere: "Open this folder with", newFolder: "New folder", folderName: "Folder name", create: "Create", up: "Up", noFolders: "No folders here yet.", folderExists: "A folder with this name is already here.", badFolderName: "Use a plain folder name (no / or leading dot).", folderHint: "Workspaces opened from here live in {root} on the Mac.",
+    defaultLogin: "Default login", newWorkspace: "New workspace", openHere: "Open this folder with", newFolder: "New folder", folderName: "Folder name", create: "Create", up: "Up", noFolders: "No folders here yet.", folderExists: "A folder with this name is already here.", badFolderName: "Use a plain folder name (no / or leading dot).", folderHint: "Workspaces opened from here live in {root} on the Mac.",
     open: "{n} open", asleep: "Asleep", running: "{n} running",
     files: "Open files", closeFile: "Close", closeViewer: "Close the viewer", openPdf: "Open the PDF", fileCut: "Only the first 2 MB is shown.", fileLoading: "Opening…",
     fileError: { 403: "This file can't be opened from here.", 404: "Not found in this terminal's folder.", 413: "Too large to show here.", 415: "This kind of file can't be shown.", 0: "Couldn't open this file." },
@@ -55,7 +55,7 @@ const STRINGS = {
     nothingWaiting: "기다리는 요청이 없습니다.", nothingWorking: "지금 작업 중인 에이전트가 없습니다.", noPlugins: "설치된 플러그인이 없습니다.",
     wake: "깨우기", waking: "깨우는 중…", newTab: "새 탭", newIn: "{ws}에 새 탭", cancel: "취소",
     terminal: "터미널", claude: "Claude Code", codex: "Codex", tooManyTabs: "새 탭을 너무 많이 열었습니다. 1분 뒤에 다시 시도하세요.",
-    newWorkspace: "새 작업공간", openHere: "이 폴더를 열 도구", newFolder: "새 폴더", folderName: "폴더 이름", create: "만들기", up: "위로", noFolders: "아직 폴더가 없습니다.", folderExists: "같은 이름의 폴더가 이미 있습니다.", badFolderName: "/나 점(.)으로 시작하지 않는 폴더 이름을 쓰세요.", folderHint: "여기서 여는 작업공간은 Mac의 {root} 폴더 안에 있습니다.",
+    defaultLogin: "기본 로그인", newWorkspace: "새 작업공간", openHere: "이 폴더를 열 도구", newFolder: "새 폴더", folderName: "폴더 이름", create: "만들기", up: "위로", noFolders: "아직 폴더가 없습니다.", folderExists: "같은 이름의 폴더가 이미 있습니다.", badFolderName: "/나 점(.)으로 시작하지 않는 폴더 이름을 쓰세요.", folderHint: "여기서 여는 작업공간은 Mac의 {root} 폴더 안에 있습니다.",
     open: "{n}개 열림", asleep: "쉬는 중", running: "{n}개 실행 중",
     files: "열린 파일", closeFile: "닫기", closeViewer: "뷰어 닫기", openPdf: "PDF 열기", fileCut: "앞의 2MB만 보여 줍니다.", fileLoading: "여는 중…",
     fileError: { 403: "여기서는 열 수 없는 파일입니다.", 404: "이 터미널의 폴더에서 찾을 수 없습니다.", 413: "너무 커서 여기서 보여 줄 수 없습니다.", 415: "보여 줄 수 없는 종류의 파일입니다.", 0: "파일을 열지 못했습니다." },
@@ -82,7 +82,7 @@ const STRINGS = {
     nothingWaiting: "待っている質問はありません。", nothingWorking: "いま作業中のエージェントはありません。", noPlugins: "インストール済みのプラグインはありません。",
     wake: "起こす", waking: "起こしています…", newTab: "新しいタブ", newIn: "{ws} に新しいタブ", cancel: "キャンセル",
     terminal: "ターミナル", claude: "Claude Code", codex: "Codex", tooManyTabs: "新しいタブを開きすぎました。1 分後にもう一度お試しください。",
-    newWorkspace: "新しいワークスペース", openHere: "このフォルダを開くツール", newFolder: "新しいフォルダ", folderName: "フォルダ名", create: "作成", up: "上へ", noFolders: "まだフォルダがありません。", folderExists: "同じ名前のフォルダがすでにあります。", badFolderName: "/ やドット(.)で始まらないフォルダ名にしてください。", folderHint: "ここで開くワークスペースは Mac の {root} フォルダの中にあります。",
+    defaultLogin: "デフォルトのログイン", newWorkspace: "新しいワークスペース", openHere: "このフォルダを開くツール", newFolder: "新しいフォルダ", folderName: "フォルダ名", create: "作成", up: "上へ", noFolders: "まだフォルダがありません。", folderExists: "同じ名前のフォルダがすでにあります。", badFolderName: "/ やドット(.)で始まらないフォルダ名にしてください。", folderHint: "ここで開くワークスペースは Mac の {root} フォルダの中にあります。",
     open: "{n} 件 開いています", asleep: "休止中", running: "{n} 件 実行中",
     files: "開いたファイル", closeFile: "閉じる", closeViewer: "ビューアを閉じる", openPdf: "PDF を開く", fileCut: "先頭の 2 MB だけを表示しています。", fileLoading: "開いています…",
     fileError: { 403: "ここからは開けないファイルです。", 404: "このターミナルのフォルダに見つかりません。", 413: "大きすぎて表示できません。", 415: "表示できない種類のファイルです。", 0: "ファイルを開けませんでした。" },
@@ -109,7 +109,7 @@ const STRINGS = {
     nothingWaiting: "没有等待你的请求。", nothingWorking: "现在没有正在工作的代理。", noPlugins: "没有安装插件。",
     wake: "唤醒", waking: "正在唤醒…", newTab: "新标签页", newIn: "在 {ws} 中新建标签页", cancel: "取消",
     terminal: "终端", claude: "Claude Code", codex: "Codex", tooManyTabs: "新建的标签页太多了，请一分钟后再试。",
-    newWorkspace: "新建工作区", openHere: "用以下工具打开此文件夹", newFolder: "新建文件夹", folderName: "文件夹名称", create: "创建", up: "上一级", noFolders: "这里还没有文件夹。", folderExists: "已有同名文件夹。", badFolderName: "请使用不含 / 且不以点(.)开头的文件夹名。", folderHint: "在这里打开的工作区位于 Mac 的 {root} 文件夹中。",
+    defaultLogin: "默认登录", newWorkspace: "新建工作区", openHere: "用以下工具打开此文件夹", newFolder: "新建文件夹", folderName: "文件夹名称", create: "创建", up: "上一级", noFolders: "这里还没有文件夹。", folderExists: "已有同名文件夹。", badFolderName: "请使用不含 / 且不以点(.)开头的文件夹名。", folderHint: "在这里打开的工作区位于 Mac 的 {root} 文件夹中。",
     open: "{n} 个已打开", asleep: "休眠中", running: "{n} 个运行中",
     files: "已打开的文件", closeFile: "关闭", closeViewer: "关闭查看器", openPdf: "打开 PDF", fileCut: "只显示前 2 MB。", fileLoading: "正在打开…",
     fileError: { 403: "无法从这里打开此文件。", 404: "在此终端的文件夹中找不到。", 413: "文件太大，无法在此显示。", 415: "无法显示此类文件。", 0: "无法打开此文件。" },
@@ -136,7 +136,7 @@ const STRINGS = {
     nothingWaiting: "Nichts wartet auf dich.", nothingWorking: "Gerade arbeitet kein Agent.", noPlugins: "Keine Plug-ins installiert.",
     wake: "Aufwecken", waking: "Wird aufgeweckt …", newTab: "Neuer Tab", newIn: "Neuer Tab in {ws}", cancel: "Abbrechen",
     terminal: "Terminal", claude: "Claude Code", codex: "Codex", tooManyTabs: "Zu viele neue Tabs auf einmal. Warte eine Minute.",
-    newWorkspace: "Neuer Arbeitsbereich", openHere: "Diesen Ordner öffnen mit", newFolder: "Neuer Ordner", folderName: "Ordnername", create: "Erstellen", up: "Nach oben", noFolders: "Hier gibt es noch keine Ordner.", folderExists: "Ein Ordner mit diesem Namen ist schon da.", badFolderName: "Verwende einen einfachen Ordnernamen (ohne / und ohne Punkt am Anfang).", folderHint: "Von hier geöffnete Arbeitsbereiche liegen auf dem Mac in {root}.",
+    defaultLogin: "Standardanmeldung", newWorkspace: "Neuer Arbeitsbereich", openHere: "Diesen Ordner öffnen mit", newFolder: "Neuer Ordner", folderName: "Ordnername", create: "Erstellen", up: "Nach oben", noFolders: "Hier gibt es noch keine Ordner.", folderExists: "Ein Ordner mit diesem Namen ist schon da.", badFolderName: "Verwende einen einfachen Ordnernamen (ohne / und ohne Punkt am Anfang).", folderHint: "Von hier geöffnete Arbeitsbereiche liegen auf dem Mac in {root}.",
     open: "{n} offen", asleep: "Ruht", running: "{n} laufen",
     files: "Geöffnete Dateien", closeFile: "Schließen", closeViewer: "Ansicht schließen", openPdf: "PDF öffnen", fileCut: "Nur die ersten 2 MB werden angezeigt.", fileLoading: "Wird geöffnet …",
     fileError: { 403: "Diese Datei kann von hier aus nicht geöffnet werden.", 404: "Im Ordner dieses Terminals nicht gefunden.", 413: "Zu groß, um hier angezeigt zu werden.", 415: "Diese Art von Datei kann nicht angezeigt werden.", 0: "Diese Datei konnte nicht geöffnet werden." },
@@ -468,6 +468,7 @@ function onOverview(data) {
   const sessions = data.sessions || [];
   notifyChanges(sessions);
   state.workspaces = data.workspaces || [];
+  state.windows = data.windows || [];
   state.sessions = sessions;
   state.plugins = data.plugins || [];
   state.voice = !!data.voice;
@@ -676,7 +677,7 @@ function workspaceCard(ws) {
   card.type = "button";
   if (color) card.style.background = color;
   card.append(el("div", "name", ws.name));
-  const sub = [ws.branch, ws.folder].filter(Boolean).join(" · ");
+  const sub = [ws.account, ws.branch, ws.folder].filter(Boolean).join(" · ");
   if (sub) card.append(el("div", "sub", sub));
   const mine = state.sessions.filter((s) => s.workspace_id === ws.id);
   const needs = mine.filter((s) => s.needs_user).length;
@@ -694,7 +695,7 @@ function renderHeader() {
   const dot = $("ws-dot");
   dot.hidden = !ws;
   dot.style.background = (ws && safeColor(ws.color)) || "var(--muted)";
-  $("ws-sub").textContent = ws ? [ws.branch, ws.folder].filter(Boolean).join(" · ") : "";
+  $("ws-sub").textContent = ws ? [ws.account, ws.branch, ws.folder].filter(Boolean).join(" · ") : "";
   const s = session(state.pane);
   const chip = $("pane-status");
   chip.hidden = !s;
@@ -1388,6 +1389,7 @@ function renderFolderSheet() {
   $("folder-new-name").setAttribute("aria-label", T.newFolder);
   $("folder-create").textContent = T.create;
   $("folder-error").textContent = "";
+  renderFolderAccounts();
   $("folder-open-label").textContent = T.openHere;
   const choices = $("folder-choices");
   choices.replaceChildren();
@@ -1400,6 +1402,31 @@ function renderFolderSheet() {
   }
   $("folder-hint").textContent = T.folderHint.replace("{root}", "~/" + sheet.root);
   $("folder-cancel").textContent = T.cancel;
+}
+
+// A window runs its accounts: with more than one open, the new workspace picks where it goes.
+function renderFolderAccounts() {
+  const label = $("folder-open-label");
+  let row = $("folder-accounts");
+  if (!row) {
+    row = el("div", "folder-accounts");
+    row.id = "folder-accounts";
+    label.parentNode.insertBefore(row, label);
+  }
+  row.replaceChildren();
+  const windows = state.windows || [];
+  row.hidden = windows.length < 2;
+  if (row.hidden) return;
+  if (!windows.some((w) => w.slot === state.folderWindow)) state.folderWindow = windows[0].slot;
+  for (const w of windows) {
+    const chip = el("button", "account-chip" + (w.slot === state.folderWindow ? " on" : ""), w.account || T.defaultLogin);
+    chip.type = "button";
+    chip.addEventListener("click", () => {
+      state.folderWindow = w.slot;
+      renderFolderAccounts();
+    });
+    row.append(chip);
+  }
 }
 
 function closeFolderSheet() {
@@ -1441,7 +1468,9 @@ async function openFolder(path, tool) {
   for (const w of state.workspaces) tabs[w.id] = w.sleeping ? 0 : w.tabs.length;
   state.pendingFolder = { ids: state.workspaces.map((w) => w.id), tabs };
   try {
-    const { status } = await api("/api/workspace", { action: "open", path, tool });
+    const body = { action: "open", path, tool };
+    if ((state.windows || []).length > 1 && state.folderWindow != null) body.window = state.folderWindow;
+    const { status } = await api("/api/workspace", body);
     if (status === 401) showLogin();
     else if (status === 429) alert(T.tooManyTabs);
     else if (status !== 200) alert(T.failed);

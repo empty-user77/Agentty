@@ -422,7 +422,12 @@ fn user_codex_home_from(value: Option<std::ffi::OsString>) -> PathBuf {
     let private = [codex_home(), codex_api_key_home()];
     value
         .map(PathBuf::from)
-        .filter(|p| p.is_absolute() && p.is_dir() && !private.iter().any(|home| same_path(home, p)))
+        .filter(|p| {
+            p.is_absolute()
+                && p.is_dir()
+                && !private.iter().any(|home| same_path(home, p))
+                && !crate::accounts::is_account_path(AuthAgent::Codex, p)
+        })
         .unwrap_or_else(|| fsutil::home().join(".codex"))
 }
 
@@ -464,9 +469,26 @@ pub fn prepare_codex_home(home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Environment for a pane on the account in `folder`: that folder, and nothing a shell profile
+/// exports for another sign-in method.
+pub(crate) fn account_environment(agent: AuthAgent, folder: String) -> Vec<EnvChange> {
+    match agent {
+        AuthAgent::Claude => {
+            let mut all = CLAUDE_VARIABLES.to_vec();
+            all.push("CLAUDE_CONFIG_DIR");
+            changes(&all, vec![("CLAUDE_CONFIG_DIR", folder)])
+        }
+        AuthAgent::Codex => {
+            let mut all = CODEX_VARIABLES.to_vec();
+            all.push("CODEX_HOME");
+            changes(&all, vec![("CODEX_HOME", folder)])
+        }
+    }
+}
+
 /// Removes what an earlier, failed link left where a link belongs: a link that leads nowhere, or an
 /// empty folder. Anything holding files stays. Returns whether the place is free now.
-fn clear_dead_link(link: &Path) -> bool {
+pub(crate) fn clear_dead_link(link: &Path) -> bool {
     let Ok(meta) = std::fs::symlink_metadata(link) else { return true };
     let dangling = !link.exists();
     let empty = meta.is_dir() && std::fs::read_dir(link).is_ok_and(|mut entries| entries.next().is_none());
@@ -488,13 +510,13 @@ pub fn codex_home_sessions() -> Vec<PathBuf> {
 }
 
 #[cfg(unix)]
-fn link_dir(source: &Path, link: &Path) -> Result<()> {
+pub(crate) fn link_dir(source: &Path, link: &Path) -> Result<()> {
     std::os::unix::fs::symlink(source, link)?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn link_dir(source: &Path, link: &Path) -> Result<()> {
+pub(crate) fn link_dir(source: &Path, link: &Path) -> Result<()> {
     // Symbolic links need Developer Mode; directory junctions work for every user.
     if std::os::windows::fs::symlink_dir(source, link).is_err() {
         create_junction(source, link)?;
@@ -597,14 +619,14 @@ fn mount_point_buffer(target: &str) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-fn refresh_file_link(source: &Path, link: &Path) {
+pub(crate) fn refresh_file_link(source: &Path, link: &Path) {
     if std::fs::symlink_metadata(link).is_err() {
         let _ = std::os::unix::fs::symlink(source, link);
     }
 }
 
 #[cfg(windows)]
-fn refresh_file_link(source: &Path, link: &Path) {
+pub(crate) fn refresh_file_link(source: &Path, link: &Path) {
     let is_link = std::fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink());
     if is_link {
         return;
@@ -700,7 +722,7 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn restrict_dir(_dir: &Path) -> Result<()> {
+pub(crate) fn restrict_dir(_dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

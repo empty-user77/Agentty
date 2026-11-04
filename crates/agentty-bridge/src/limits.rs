@@ -2,6 +2,7 @@
 //! Claude Code reports them to statusline commands (saved by `agentty statusline`); Codex writes
 //! them into its rollouts.
 
+use crate::agent_auth::AuthAgent;
 use crate::fsutil;
 use crate::model::Agent;
 use serde::{Deserialize, Serialize};
@@ -30,8 +31,16 @@ fn window(value: &Value, percent_key: &str) -> Option<LimitWindow> {
     Some(LimitWindow { used_percent, resets_at })
 }
 
-fn claude_file() -> PathBuf {
-    fsutil::data_dir().join("limits").join("claude.json")
+/// Limits of the user's own login, or of an account. An id that isn't one has no file.
+fn claude_file(account: Option<&str>) -> PathBuf {
+    let dir = fsutil::data_dir().join("limits");
+    match account {
+        None => dir.join("claude.json"),
+        Some(id) => match crate::accounts::home(AuthAgent::Claude, id) {
+            Ok(_) => dir.join(format!("claude-{id}.json")),
+            Err(_) => PathBuf::new(),
+        },
+    }
 }
 
 /// `rate_limits` from Claude Code's statusline input.
@@ -44,10 +53,10 @@ pub fn parse_claude(rate_limits: &Value, now_ms: u64) -> Option<AgentLimits> {
     (limits.session.is_some() || limits.weekly.is_some()).then_some(limits)
 }
 
-pub fn save_claude(limits: &AgentLimits) {
+pub fn save_claude(limits: &AgentLimits, account: Option<&str>) {
     // Private file in a private folder (0600 / 0700), written through a temporary name.
     if let Ok(json) = serde_json::to_vec(limits) {
-        let _ = fsutil::write_private(&claude_file(), &json);
+        let _ = fsutil::write_private(&claude_file(account), &json);
     }
 }
 
@@ -66,10 +75,10 @@ pub fn parse_codex(rate_limits: &Value, now_ms: u64) -> Option<AgentLimits> {
 }
 
 /// Latest known limits of an agent; windows that already reset are dropped.
-pub fn latest(agent: Agent, now_ms: u64) -> Option<AgentLimits> {
+pub fn latest(agent: Agent, account: Option<&str>, now_ms: u64) -> Option<AgentLimits> {
     let mut limits = match agent {
-        Agent::Claude => serde_json::from_slice::<AgentLimits>(&std::fs::read(claude_file()).ok()?).ok()?,
-        Agent::Codex => codex_latest()?,
+        Agent::Claude => serde_json::from_slice::<AgentLimits>(&std::fs::read(claude_file(account)).ok()?).ok()?,
+        Agent::Codex => codex_latest(account)?,
         _ => return None,
     };
     let now = (now_ms / 1000) as i64;
@@ -78,9 +87,9 @@ pub fn latest(agent: Agent, now_ms: u64) -> Option<AgentLimits> {
     Some(limits)
 }
 
-fn codex_latest() -> Option<AgentLimits> {
+fn codex_latest(account: Option<&str>) -> Option<AgentLimits> {
     let mut files = Vec::new();
-    fsutil::jsonl_files(&fsutil::home().join(".codex").join("sessions"), 4, &mut files);
+    fsutil::jsonl_files(&crate::codex::sessions_of(account), 4, &mut files);
     for (path, mtime) in fsutil::newest(files, 5) {
         for line in fsutil::tail_lines_rev(&path, 512 * 1024) {
             if !line.contains("\"rate_limits\"") {

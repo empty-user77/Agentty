@@ -325,6 +325,10 @@ button:disabled { opacity: .5; cursor: default; }
 .folder-new input { flex: 1; min-width: 0; font-size: 16px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .folder-error { color: var(--error); font-size: 13px; min-height: 0; }
 .folder-error:empty { display: none; }
+.folder-accounts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.folder-accounts[hidden] { display: none; }
+.account-chip { max-width: 100%; overflow-wrap: anywhere; text-align: left; font: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--muted); }
+.account-chip.on { color: var(--text); border-color: var(--text); }
 .folder-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .folder-hint { font-size: 12px; color: var(--muted); }
 

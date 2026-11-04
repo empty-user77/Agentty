@@ -286,9 +286,7 @@ impl TrayPopover {
                     .items_center()
                     .gap_2()
                     .child(crate::brand::avatar(account.agent.id(), 20.))
-                    .child(
-                        div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(account.agent.display_name()),
-                    )
+                    .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(account.display_name()))
                     .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(account.cost_label())),
             );
             // Limits are only written while an agent works: say so instead of passing off old numbers.

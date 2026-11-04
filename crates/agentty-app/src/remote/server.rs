@@ -23,7 +23,7 @@ use super::board::Board;
 use super::chat::{self, ChatLive, ChatState, Follow};
 use super::conn::{Conn, Endpoint, Listener};
 use super::http::{self, percent_encode, HttpError, Request, Response};
-use super::snapshot::{screen_update, PluginInfo, Screen, SessionInfo, WorkspaceInfo};
+use super::snapshot::{screen_update, PluginInfo, Screen, SessionInfo, WindowInfo, WorkspaceInfo};
 use crate::launch::PaneKind;
 use serde::Deserialize;
 use serde_json::json;
@@ -162,7 +162,8 @@ pub enum Command {
     CloseTab { workspace: u64, pane: u64 },
     /// A new workspace in a folder under the remote folder (checked), with a shell or an agent,
     /// listed under `group` (made if there is none) when one is given, and named `title` when one is given.
-    OpenFolder { folder: std::path::PathBuf, kind: PaneKind, group: Option<String>, title: Option<String> },
+    /// In window `window` when the page chose one, else the first that takes it.
+    OpenFolder { folder: std::path::PathBuf, kind: PaneKind, group: Option<String>, title: Option<String>, window: Option<usize> },
     /// A local dev server a terminal runs (`port`, checked against the overview) shown on the
     /// tailnet through Agentty's proxy (`devproxy`).
     OpenPort { port: u16 },
@@ -273,6 +274,7 @@ struct AuthState {
 struct View {
     version: u64,
     workspaces: Vec<WorkspaceInfo>,
+    windows: Vec<WindowInfo>,
     sessions: Vec<SessionInfo>,
     sessions_version: u64,
     plugins: Vec<PluginInfo>,
@@ -362,6 +364,9 @@ struct WorkspaceBody {
     /// For `open`: the name the new workspace is shown with, instead of the tool's.
     #[serde(default)]
     title: Option<String>,
+    /// For `open`: the window it opens in, which is the account it runs on.
+    #[serde(default)]
+    window: Option<usize>,
     /// For `close`: a pane of the tab to close.
     #[serde(default)]
     pane: Option<u64>,
@@ -708,6 +713,17 @@ impl Hub {
             drop(view);
             // A pane gone, or left out of remote access: what was read of it goes as well.
             self.follows.lock().unwrap_or_else(|e| e.into_inner()).retain(|pane, _| watched.contains(pane));
+            self.changed.notify_all();
+        }
+    }
+
+    /// The open windows and the accounts they run on.
+    pub fn publish_windows(&self, windows: Vec<WindowInfo>) {
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        if view.windows != windows {
+            view.windows = windows;
+            view.version += 1;
+            drop(view);
             self.changed.notify_all();
         }
     }
@@ -1557,6 +1573,14 @@ impl Hub {
             if body.title.as_deref().is_some_and(|title| !title_ok(title) || body.action != "open") {
                 return Response::json(400, &json!({ "error": "bad request" }));
             }
+            // A window that isn't open is not one to open in; only ever one the page was told of.
+            if let Some(slot) = body.window {
+                let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+                if body.action != "open" || !view.windows.iter().any(|window| window.slot == slot) {
+                    return Response::json(400, &json!({ "error": "bad request" }));
+                }
+            }
+            let window = body.window;
             let group = body.group.clone();
             let title = body.title.clone();
             if body.action == "open" && kind.is_none() || body.action == "mkdir" && !body.tool.is_empty() {
@@ -1588,7 +1612,7 @@ impl Hub {
                 Err(_) => return Response::json(500, &json!({ "error": "couldn't make the folder" })),
             };
             return match kind {
-                Some(kind) => self.queue(Command::OpenFolder { folder, kind, group, title }),
+                Some(kind) => self.queue(Command::OpenFolder { folder, kind, group, title, window }),
                 None => Response::json(200, &json!({ "ok": true })),
             };
         }
@@ -1829,7 +1853,7 @@ impl Hub {
 /// What the page lists: workspaces, terminals and plugins.
 fn overview(view: &View, voice: bool) -> serde_json::Value {
     // `manage`: this Mac takes `sleep`, `close` and `trash`, so an app shows them only where they work.
-    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins, "voice": voice, "manage": true })
+    json!({ "workspaces": view.workspaces, "windows": view.windows, "sessions": view.sessions, "plugins": view.plugins, "voice": voice, "manage": true })
 }
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
@@ -2502,6 +2526,7 @@ mod tests {
         WorkspaceInfo {
             id,
             name: "repo".into(),
+            account: None,
             group: None,
             group_color: None,
             color: None,
@@ -2647,14 +2672,25 @@ mod tests {
         assert_eq!(
             hub.take_commands(),
             vec![
-                Command::OpenFolder { folder: made.clone(), kind: PaneKind::Claude, group: None, title: None },
+                Command::OpenFolder { folder: made.clone(), kind: PaneKind::Claude, group: None, title: None, window: None },
                 Command::OpenFolder {
                     folder: made.join("web"),
                     kind: PaneKind::Codex,
                     group: Some("Phone".into()),
                     title: Some("phone-test".into()),
+                    window: None,
                 }
             ]
+        );
+        // A new workspace goes to a window the page was told of, and that window is its account.
+        assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "shell", "window": 7 })), 400, "no such window");
+        hub.publish_windows(vec![WindowInfo { slot: 7, account: Some("work@example.com".into()) }]);
+        assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "shell", "window": 8 })), 400, "another window");
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "w", "window": 7 })), 400, "a window is for opening");
+        assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "shell", "window": 7 })), 200);
+        assert_eq!(
+            hub.take_commands(),
+            vec![Command::OpenFolder { folder: made.clone(), kind: PaneKind::Shell, group: None, title: None, window: Some(7) }]
         );
         let anonymous = send(&hub, &Req::get("/api/folders").raw()).0;
         assert_eq!(anonymous, 401, "needs a session");
