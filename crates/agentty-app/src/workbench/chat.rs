@@ -507,10 +507,22 @@ fn pending_message(pending: Vec<Pending>, echo: &mut Vec<String>) -> String {
 }
 
 /// Drops the echoes the transcript's newest entries show. An entry that holds several sent texts
-/// (Claude Code merged messages typed close together) clears every echo it contains.
+/// (Claude Code merged messages typed close together) clears every echo it contains. Compared in one
+/// Unicode form: macOS names files decomposed and the transcript holds a dropped file's path composed.
 fn clear_echo(echo: &mut Vec<String>, items: &[ChatItem]) {
+    use unicode_normalization::UnicodeNormalization as _;
+    let newest: Vec<String> = items
+        .iter()
+        .rev()
+        .take(8)
+        .filter_map(|item| match item {
+            ChatItem::User(text) => Some(text.nfc().collect()),
+            _ => None,
+        })
+        .collect();
     echo.retain(|sent| {
-        !items.iter().rev().take(8).any(|item| matches!(item, ChatItem::User(text) if text == sent || text.contains(sent.as_str())))
+        let sent: String = sent.nfc().collect();
+        !newest.iter().any(|text| text.contains(&sent))
     });
 }
 
@@ -3144,6 +3156,16 @@ mod tests {
         let other = "<cross-session-messages>hi</cross-session-messages>";
         let (items, _) = chat_items(&[turn(Role::User, other)]);
         assert_eq!(items, vec![ChatItem::User(other.into())]);
+    }
+
+    #[test]
+    fn a_decomposed_file_name_clears_its_composed_echo() {
+        use unicode_normalization::UnicodeNormalization as _;
+        let composed = "'/tmp/스크린샷 오후.png' 왜?".to_string();
+        let mut echo = vec![composed.nfd().collect::<String>()];
+        assert_ne!(echo[0], composed);
+        clear_echo(&mut echo, &[ChatItem::User(composed)]);
+        assert!(echo.is_empty(), "stale echoes: {echo:?}");
     }
 
     #[test]

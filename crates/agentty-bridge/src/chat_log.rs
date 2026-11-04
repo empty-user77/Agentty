@@ -419,6 +419,11 @@ fn ended_task_ids(text: &str) -> Vec<String> {
 
 /// Keeps the background list up to date from one line of the transcript.
 fn claude_background(b: &mut Builder, v: &Value) {
+    // Only the conversation's own lines: newer Claude Code versions also keep copies of what went to
+    // the API, written after the result of the call they hold, with no time on them.
+    if !matches!(v["type"].as_str(), Some("user" | "assistant" | "attachment")) {
+        return;
+    }
     let started_ms = v["timestamp"].as_str().and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.timestamp_millis());
     let mut texts: Vec<&str> = Vec::new();
     for value in [&v["message"]["content"], &v["attachment"]["prompt"]] {
@@ -896,6 +901,13 @@ mod tests {
         assert!(background_of(&format!("{log}\n{killed}"), 0).is_empty(), "stopped by the agent");
         let failed = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"no"}]}}"#;
         assert!(background_of(&format!("{STARTED}\n{failed}"), 0).is_empty(), "never started");
+    }
+
+    #[test]
+    fn a_copy_of_an_api_request_starts_no_background_task() {
+        let failed = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"no"}]}}"#;
+        let copy = r#"{"type":"api-request-blob","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 4","run_in_background":true}}]}}"#;
+        assert!(background_of(&format!("{STARTED}\n{failed}\n{copy}"), 0).is_empty(), "refused, then copied");
     }
 
     #[test]
