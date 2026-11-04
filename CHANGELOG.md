@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Chat view and team chat: after a click in the conversation or on the pane's bar, typing went nowhere until the input box was
+  clicked. The keyboard now stays with the input box, and typing with text selected goes there too. A click on a
+  terminal pane's bar no longer takes the keyboard from the terminal either.
+
 ### Added
 - Diffs (a changed file's, and AgentGit's): drag over the code to select it, without the line numbers or the `+` and
   `-`. Copy and Ask AI come up where the selection ends, as in the file editor (⌘C, ⌘K, ⌘A). Asked from a changed

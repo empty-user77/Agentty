@@ -946,14 +946,30 @@ impl Workbench {
 
     /// A chat in front whose hidden terminal still has the keyboard: switching to a chat leaves its
     /// terminal up until the conversation is read, the keyboard goes there meanwhile, and what is
-    /// typed next would land in a terminal nobody sees.
+    /// typed next would land in a terminal nobody sees. The same for the chat itself, which takes
+    /// the keyboard on any click in it but only has a use for it while text is selected (⌘C).
     fn keyboard_to_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
         for state in self.chats.values().filter(|state| state.plain) {
-            if gpui::Focusable::focus_handle(state.lead.read(cx), cx).is_focused(window) {
+            let idle = state.reading.is_focused(window) && !selectable::has_selection();
+            if idle || gpui::Focusable::focus_handle(state.lead.read(cx), cx).is_focused(window) {
                 if let Some(input) = self.chat_input_for(&state.lead, cx) {
                     window.focus(&gpui::Focusable::focus_handle(&input, cx));
                 }
             }
+        }
+    }
+
+    /// Typing with text selected in the chat went to the composer: the keyboard follows it there,
+    /// so the keys after it (Return, the arrows, ⌫) do too.
+    fn typed_over_selection(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.get(&id) else { return };
+        if state.reading.is_focused(window) {
+            if let Some((input, _)) = state.input.as_ref() {
+                window.focus(&gpui::Focusable::focus_handle(input, cx));
+            }
+            selectable::clear();
+            self.chat_select = None;
+            cx.notify();
         }
     }
 
@@ -1018,7 +1034,10 @@ impl Workbench {
                 }
                 match event {
                     TextInputEvent::Confirmed => this.send_chat_message(id, window, cx),
-                    TextInputEvent::Changed => this.slash_text_changed(id, cx),
+                    TextInputEvent::Changed => {
+                        this.slash_text_changed(id, cx);
+                        this.typed_over_selection(id, window, cx);
+                    }
                     _ => {}
                 }
             });
@@ -2235,6 +2254,20 @@ impl Workbench {
                 eprintln!(
                     "chat-slash: {}",
                     serde_json::json!({ "text": text, "rows": rows, "pick": state.slash.picked(), "background": tasks })
+                );
+            }
+            // Where the keyboard is, as far as a chat goes.
+            ("focus", _) => {
+                let Some(pane) = self.active_pane() else { return };
+                let Some(state) = self.chats.get(&pane.entity_id()) else { return };
+                let composer = state.input.as_ref().is_some_and(|(input, _)| gpui::Focusable::focus_handle(input, cx).is_focused(window));
+                eprintln!(
+                    "chat-focus: composer={composer} reading={} terminal={} workbench={} nothing={} selection={:?}",
+                    state.reading.is_focused(window),
+                    gpui::Focusable::focus_handle(state.lead.read(cx), cx).is_focused(window),
+                    self.focus_handle.is_focused(window),
+                    window.focused(cx).is_none(),
+                    selectable::selected_text(),
                 );
             }
             ("info", _) => {

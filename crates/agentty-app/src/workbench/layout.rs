@@ -35,7 +35,26 @@ impl Workbench {
         match node {
             // A chat's lead is drawn as the chat.
             PaneNode::Leaf(pane) => {
-                self.render_chat(pane, split, pane == active, cx).unwrap_or_else(|| self.render_pane(pane, split, pane == active, cx))
+                let clicked = pane.clone();
+                div()
+                    .size_full()
+                    // A click on what can't take the keyboard (a bar, a team chat's messages) leaves
+                    // it with the window, where typing goes nowhere: it comes back to the pane, or
+                    // to its chat's composer.
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &gpui::MouseUpEvent, window, cx| {
+                            if this.focus_handle.is_focused(window) {
+                                this.mark_active(&clicked, cx);
+                                this.focus_pane(&clicked, window, cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        self.render_chat(pane, split, pane == active, cx)
+                            .unwrap_or_else(|| self.render_pane(pane, split, pane == active, cx)),
+                    )
+                    .into_any_element()
             }
             PaneNode::Split { axis, children, sizes } => {
                 let axis = *axis;
