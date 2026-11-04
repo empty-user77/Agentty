@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Chat view and team chat: a message with an attached file whose name isn't plain ASCII (a Korean macOS screenshot, say)
+  stayed at the bottom of the conversation a second time. It was only shown twice, and sent once.
+- A background task the agent's tool refused to start could show as running for the rest of the session.
+
 ## [0.3.12] - 2026-11-04
 
 ### Added

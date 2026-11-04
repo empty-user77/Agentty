@@ -55,6 +55,7 @@ dependencies = [
  "syntect",
  "toml 1.1.6+spec-1.1.0",
  "two-face",
+ "unicode-normalization",
  "unicode-segmentation",
  "uuid",
  "wasmi",
