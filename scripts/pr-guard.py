@@ -186,7 +186,9 @@ WORKFLOW = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 WORKFLOW_RULES = [
     (r"^\s*(pull_request_target|workflow_run|issue_comment|pull_request_review_comment)\s*:", "a trigger that runs with the base repository's rights on a stranger's event"),
     (r"permissions:\s*write-all|^\s*[a-z-]+:\s*write\b", "write access for a workflow"),
-    (r"\$\{\{\s*secrets\.", "a secret handed to a workflow (this repository keeps none)"),
+    # Anywhere in the expression, in any case (GitHub ignores it): only added lines are read, so the
+    # release packages' two approved values stay, and a new use needs someone to decide on it.
+    (r"(?i)\$\{\{(?:(?!\}\}).)*\bsecrets\b|^\s*secrets:\s*inherit\b", "a secret handed to a workflow"),
     (r"runs-on:[^\n]*self-hosted", "a self-hosted runner: somebody's own machine"),
     (r"uses:\s*(?!\./)(?!docker://)[^@\s]+@(?![0-9a-f]{40}\b)", "an action not pinned to a full commit SHA"),
     (r"\$\{\{\s*github\.(head_ref|event\.(pull_request\.(title|body|head\.ref|head\.label)|issue\.(title|body)|comment\.body|review\.body))",
@@ -431,6 +433,15 @@ def self_test():
         ([], {".github/workflows/x.yml": [(1, "      - uses: actions/checkout@v4")]}, {}, False, {("block", "PG05")}),
         ([], {".github/workflows/x.yml": [(1, "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4")]}, {}, False, set()),
         ([], {".github/workflows/x.yml": [(1, "        run: echo ${{ github.event.pull_request.title }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ secrets.A }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ github.event_name != 'pull_request' && secrets.A || '' }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ SECRETS.A }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ secrets['A'] }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ toJSON(secrets) }}")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "    secrets: inherit")]}, {}, False, {("block", "PG05")}),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ github.sha }} # secrets.A")]}, {}, False, set()),
+        ([], {".github/workflows/x.yml": [(1, "          A: ${{ inputs.secrets_note }}")]}, {}, False, set()),
+        ([], {".github/workflows/x.yml": [(1, "        run: python3 scripts/check-secrets.py --all")]}, {}, False, set()),
         ([], {".github/workflows/x.yml": [(1, "    runs-on: [self-hosted, macOS]")]}, {}, False, {("block", "PG05")}),
         ([], {".github/workflows/x.yml": [(1, "  contents: write")]}, {}, False, {("block", "PG05")}),
         ([("M", ".github/workflows/ci.yml", "100644", "100644")], {}, {".github/workflows/ci.yml": b"name: CI\n"}, False, {("warn", "PG06")}),
