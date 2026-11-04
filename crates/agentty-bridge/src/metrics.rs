@@ -65,21 +65,39 @@ static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 
 /// Random per-install id (GA `client_id`), created on first use.
 pub fn install_id() -> String {
-    if let Ok(id) = std::fs::read_to_string(id_path()) {
-        if !id.trim().is_empty() {
-            return id.trim().to_string();
-        }
-    }
-    let mut bytes = [0u8; 16];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        let _ = std::io::Read::read_exact(&mut file, &mut bytes);
-    }
-    let id = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    let _ = std::fs::create_dir_all(fsutil::data_dir());
-    if std::fs::write(id_path(), &id).is_ok() {
+    let (id, first) = id_at(&id_path());
+    if first {
         FIRST.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     id
+}
+
+/// The id kept at `path`, made when there is none, and whether that made this the first launch. An
+/// id of only zeros came from a copy that found no random source (`/dev/urandom` on Windows): every
+/// such install shares it, so it is replaced, on an install that isn't new.
+fn id_at(path: &std::path::Path) -> (String, bool) {
+    let saved = std::fs::read_to_string(path).unwrap_or_default();
+    let saved = saved.trim();
+    if !saved.is_empty() && saved.chars().any(|c| c != '0') {
+        return (saved.to_string(), false);
+    }
+    let id = new_id();
+    if let Some(folder) = path.parent() {
+        let _ = std::fs::create_dir_all(folder);
+    }
+    let written = std::fs::write(path, &id).is_ok();
+    (id, written && saved.is_empty())
+}
+
+/// 32 hex digits from the system's random source, on every platform.
+fn new_id() -> String {
+    let mut bytes = [0u8; 16];
+    if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes).is_err() {
+        // Never a value another install could share.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        bytes = (now ^ (u128::from(std::process::id()) << 96)).to_le_bytes();
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// GA `session_id`: one session per run of the app, its launch time in seconds. Without it GA
@@ -249,6 +267,34 @@ mod tests {
         let other = event("pane_opened", &json!({}), "0.2.0", "15.1").unwrap();
         assert_eq!(other["params"]["engagement_time_msec"], 1);
         assert_eq!(running["params"]["session_id"], other["params"]["session_id"]);
+    }
+
+    #[test]
+    fn an_install_id_is_random_on_every_platform() {
+        let (one, two) = (new_id(), new_id());
+        assert_eq!(one.len(), 32);
+        assert!(one.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(one.chars().any(|c| c != '0'));
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn an_install_id_is_kept_and_one_of_only_zeros_is_replaced() {
+        let folder = std::env::temp_dir().join(format!("agentty-install-id-{}", new_id()));
+        let path = folder.join("install_id");
+
+        let (made, first) = id_at(&path);
+        assert!(first, "no id yet: the first launch");
+        assert_eq!(id_at(&path), (made, false), "kept, and no first launch again");
+
+        let zeros = "0".repeat(32);
+        std::fs::write(&path, &zeros).unwrap();
+        let (replaced, first) = id_at(&path);
+        assert_ne!(replaced, zeros);
+        assert!(!first, "an install that isn't new");
+        assert_eq!(id_at(&path), (replaced, false), "the new id is what stays");
+
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]
