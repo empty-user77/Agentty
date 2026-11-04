@@ -20,7 +20,9 @@ unsigned `.exe` downloads), `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linu
 `Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. After publishing, the Homebrew cask in the tap
 `empty-user77/homebrew-agentty` is pointed at the new app zip (`brew install --cask empty-user77/agentty/agentty`). The Windows and Linux files are built by the **Release packages**
 workflow (`.github/workflows/release-packages.yml`) that the tag push starts on GitHub's hosted runners; the
-workflow holds no write token, so they are downloaded here and uploaded with the DMG.
+workflow holds no write token, so they are downloaded here and uploaded with the DMG. Its only secrets are
+`AGENTTY_GA_MEASUREMENT_ID` and `AGENTTY_GA_API_SECRET` in the repository's Actions secrets; a tag or a run by hand fails
+when they are missing or not in the binary, as `build-dmg.sh` does.
 
 ## Rules
 

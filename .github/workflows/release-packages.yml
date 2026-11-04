@@ -3,7 +3,8 @@ name: Release packages
 # Builds the Windows installer and the Linux packages for a release. Runs when a vX.Y.Z tag is pushed (the release
 # skill pushes it) and by hand for any ref. Nothing is published from here and the workflow holds no token for
 # the release: the release skill downloads the artifacts (scripts/fetch-release-packages.sh) and uploads them
-# with the DMG from the maintainer's Mac.
+# with the DMG from the maintainer's Mac. The only secrets are the analytics ids compiled into every copy of the app
+# (as in the DMG), and a pull request's build goes without them.
 on:
   push:
     tags: ['v*']
@@ -33,8 +34,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # GitHub's hosted runners, like CI: a fresh machine per job, so a pull request from anybody can run here. No job holds
-  # a secret.
+  # GitHub's hosted runners, like CI: a fresh machine per job, so a pull request from anybody can run here. GitHub gives
+  # a fork's pull request no secrets at all.
   windows:
     runs-on: windows-2025
     timeout-minutes: 120
@@ -67,12 +68,28 @@ jobs:
             Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
           }
       - name: Build installer and zips
+        env:
+          AGENTTY_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_MEASUREMENT_ID || '' }}
+          AGENTTY_GA_API_SECRET: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_API_SECRET || '' }}
         run: |
           ./scripts/package-windows.ps1 -Installer
           $info = (Get-Item "target\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
           Get-ChildItem dist | Where-Object { $_.Name -like '*-windows-*' } | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name
+          }
+      # What goes to users has analytics in it, like the DMG (build-dmg.sh refuses otherwise). Names only in the errors.
+      - name: Analytics are compiled in
+        if: github.event_name != 'pull_request'
+        env:
+          AGENTTY_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_MEASUREMENT_ID || '' }}
+          AGENTTY_GA_API_SECRET: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_API_SECRET || '' }}
+        run: |
+          $binary = [Text.Encoding]::Latin1.GetString([IO.File]::ReadAllBytes("target\release\agentty.exe"))
+          foreach ($name in 'AGENTTY_GA_MEASUREMENT_ID', 'AGENTTY_GA_API_SECRET') {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if (-not $value) { throw "$name is not set in the repository's secrets" }
+            if (-not $binary.Contains($value)) { throw "$name is not in the binary" }
           }
       # A pull request only checks that the packages build; a tag or a run by hand keeps them for
       # scripts/fetch-release-packages.sh.
@@ -104,7 +121,22 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           [[ "v$version" == "$TAG" ]] || { echo "::error::Cargo.toml has $version, the tag is $TAG"; exit 1; }
       - name: Build .deb and .rpm, install each in a clean container
+        env:
+          AGENTTY_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_MEASUREMENT_ID || '' }}
+          AGENTTY_GA_API_SECRET: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_API_SECRET || '' }}
         run: scripts/build-linux-packages.sh --check
+      - name: Analytics are compiled in
+        if: github.event_name != 'pull_request'
+        env:
+          AGENTTY_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_MEASUREMENT_ID || '' }}
+          AGENTTY_GA_API_SECRET: ${{ github.event_name != 'pull_request' && secrets.AGENTTY_GA_API_SECRET || '' }}
+        run: |
+          unpacked=$(mktemp -d)
+          dpkg-deb -x dist/Agentty-*-linux-amd64.deb "$unpacked"
+          for name in AGENTTY_GA_MEASUREMENT_ID AGENTTY_GA_API_SECRET; do
+            [[ -n "${!name}" ]] || { echo "::error::$name is not set in the repository's secrets"; exit 1; }
+            LC_ALL=C grep -r -a -q -F -- "${!name}" "$unpacked" || { echo "::error::$name is not in the binary"; exit 1; }
+          done
       # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
       # scripts/fetch-release-packages.sh.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

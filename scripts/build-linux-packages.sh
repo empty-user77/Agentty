@@ -64,6 +64,12 @@ build_env=(-e CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-auto}" -e AGENTTY_SOURCE_COM
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
   build_env+=(-e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH")
 fi
+# Analytics ids for a release build: by name, so their values stay out of the command line.
+for name in AGENTTY_GA_MEASUREMENT_ID AGENTTY_GA_API_SECRET; do
+  if [[ -n "${!name:-}" ]]; then
+    build_env+=(-e "$name")
+  fi
+done
 docker run --rm --platform "$PLATFORM" \
   -v "$PWD:/src" -w /src \
   -v agentty-linux-amd64-cargo:/root/.cargo \
