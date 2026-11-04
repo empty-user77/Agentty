@@ -107,6 +107,10 @@ pub struct Remote {
     parked: Vec<Arc<Hub>>,
     pub phase: Phase,
     pub tailscale: Option<tailscale::Status>,
+    /// `refresh_tailscale` is asking, and whether it was asked for again meanwhile: what it finds
+    /// may be from before what the user just did.
+    refreshing: bool,
+    refresh_again: bool,
     /// The tailnet port `serve` was turned on for and its target, to turn off again.
     served: Option<(u16, String)>,
     keep_awake: Option<std::process::Child>,
@@ -281,11 +285,33 @@ pub fn set_feature(on: bool, cx: &mut App) {
 }
 
 pub fn refresh_tailscale(cx: &mut App) {
+    let remote = cx.global_mut::<Remote>();
+    if std::mem::replace(&mut remote.refreshing, true) {
+        remote.refresh_again = true;
+        return;
+    }
     cx.spawn(async move |cx| {
         let status = cx.background_executor().spawn(async { tailscale::status() }).await;
         let _ = cx.update(|cx| {
-            cx.global_mut::<Remote>().tailscale = Some(status);
+            let enabled = settings(cx).remote.enabled;
+            let remote = cx.global_mut::<Remote>();
+            remote.refreshing = false;
+            // What was wrong when it was last turned on has been put right.
+            let fixed = match &remote.phase {
+                Phase::Failed(Problem::NotInstalled) => status.installed,
+                Phase::Failed(Problem::NotRunning) => status.installed && status.trouble.is_none(),
+                Phase::Failed(Problem::NoHttps) => status.https,
+                _ => false,
+            };
+            if fixed && !enabled {
+                remote.phase = Phase::Off;
+            }
+            remote.tailscale = Some(status);
+            let again = std::mem::take(&mut remote.refresh_again);
             cx.refresh_windows();
+            if again {
+                refresh_tailscale(cx);
+            }
         });
     })
     .detach();
@@ -762,6 +788,10 @@ fn watch_tailscale(cx: &mut App) {
             if waiting {
                 if connected && status.https {
                     start(cx);
+                } else if cx.global::<Remote>().tailscale.as_ref() != Some(&status) {
+                    // The page says why it is still waiting: that can change while it does.
+                    cx.global_mut::<Remote>().tailscale = Some(status);
+                    cx.refresh_windows();
                 }
                 return;
             }

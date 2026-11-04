@@ -26,23 +26,160 @@ pub struct Status {
     pub login: Option<String>,
     /// The tailnet can issue HTTPS certificates (MagicDNS and HTTPS on).
     pub https: bool,
+    /// Why it can't be used yet, when it is installed.
+    pub trouble: Option<Trouble>,
+    /// What Tailscale calls its own state (`Running`, `NeedsLogin`, ...), for a problem report.
+    pub state: Option<String>,
+    /// Which of the tools found was asked: `app`, `homebrew` or `other`, never a path.
+    pub tool: Option<&'static str>,
+    pub version: Option<String>,
 }
 
-/// Where the tool is: on PATH, or inside the app that installs it.
-pub fn binary() -> Option<PathBuf> {
-    let candidates: &[&str] = if cfg!(target_os = "macos") {
-        &["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
-    } else if cfg!(windows) {
-        &["C:\\Program Files\\Tailscale\\tailscale.exe"]
-    } else {
-        &["/usr/bin/tailscale", "/usr/local/bin/tailscale", "/usr/sbin/tailscale"]
-    };
-    candidates.iter().map(PathBuf::from).find(|p| p.is_file()).or_else(|| agentty_bridge::process::which("tailscale"))
+/// Why an installed Tailscale can't be used yet: each has its own way out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Trouble {
+    /// The Mac's Tailscale VPN is off, or hasn't come up yet.
+    VpnOff,
+    /// Signed out, with Tailscale's own sign-in address when it gave one.
+    NeedsLogin(Option<String>),
+    /// Signed in; the tailnet's admin has to approve this device.
+    NeedsApproval,
+    /// On its way up.
+    Starting,
+    /// Switched off in Tailscale (`tailscale down`).
+    Stopped,
+    /// The tool can't reach Tailscale's background service: (what it said).
+    NoService(String),
+    /// The tool failed some other way: (what it said).
+    Tool(String),
+    /// Connected, without a name or an account for this machine.
+    NoIdentity,
 }
+
+/// The tools a machine may have, in the order they are tried. A Mac can hold more than one (a
+/// Homebrew `tailscale` beside the app, which talks to a daemon that isn't running), and the one
+/// that belongs to a VPN macOS lists comes first.
+fn candidate_paths(vpn_listed: bool) -> Vec<&'static str> {
+    if cfg!(target_os = "macos") {
+        const APP: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+        let others = ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale"];
+        return if vpn_listed {
+            std::iter::once(APP).chain(others).collect()
+        } else {
+            others.into_iter().chain(std::iter::once(APP)).collect()
+        };
+    }
+    if cfg!(windows) {
+        return vec!["C:\\Program Files\\Tailscale\\tailscale.exe"];
+    }
+    vec!["/usr/bin/tailscale", "/usr/local/bin/tailscale", "/usr/sbin/tailscale", "/snap/bin/tailscale"]
+}
+
+/// The tool that last answered with something readable, used from then on: `cert` and `serve` must
+/// reach the same Tailscale `status` did.
+static TOOL: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// For the debug driver: a test's own tools, and what macOS says about the VPN.
+#[cfg(debug_assertions)]
+pub mod test_override {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    pub static TOOLS: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+    pub static VPN: Mutex<Option<String>> = Mutex::new(None);
+}
+
+/// Every tool there is, in the order to try them.
+fn candidates() -> Vec<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(tools) = test_override::TOOLS.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return tools;
+    }
+    let mut tools: Vec<PathBuf> = candidate_paths(vpn_listed()).into_iter().map(PathBuf::from).filter(|path| path.is_file()).collect();
+    // The app dragged into the user's own Applications folder, or anywhere else Spotlight knows of.
+    if cfg!(target_os = "macos") {
+        let own = dirs::home_dir().map(|home| home.join("Applications/Tailscale.app"));
+        tools.extend(own.filter(|app| signed_by_tailscale(app)).map(|app| app.join(APP_TOOL)));
+        if tools.is_empty() {
+            tools.extend(apps_spotlight_knows());
+        }
+    }
+    // Windows installed on another drive.
+    if cfg!(windows) {
+        let other = std::env::var_os("ProgramFiles").map(|folder| PathBuf::from(folder).join("Tailscale").join("tailscale.exe"));
+        tools.extend(other.filter(|path| path.is_file() && !tools.contains(path)));
+    }
+    if let Some(found) = agentty_bridge::process::which("tailscale") {
+        if !tools.contains(&found) {
+            tools.push(found);
+        }
+    }
+    tools
+}
+
+/// The Tailscale apps Spotlight has seen on this Mac, wherever they are: the App Store's build and
+/// the one from Tailscale's site.
+fn apps_spotlight_knows() -> Vec<PathBuf> {
+    let query = "kMDItemCFBundleIdentifier == 'io.tailscale.ipn.macos' || kMDItemCFBundleIdentifier == 'io.tailscale.ipn.macsys'";
+    let Ok(output) = Command::new("/usr/bin/mdfind").arg(query).stdin(Stdio::null()).output() else { return Vec::new() };
+    tools_in_apps(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The tool inside the app.
+const APP_TOOL: &str = "Contents/MacOS/Tailscale";
+
+/// The tool in each app `mdfind` listed that really is Tailscale's.
+fn tools_in_apps(listed: &str) -> Vec<PathBuf> {
+    listed
+        .lines()
+        .filter(|line| line.ends_with(".app"))
+        .map(PathBuf::from)
+        .filter(|app| signed_by_tailscale(app))
+        .map(|app| app.join(APP_TOOL))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// Whether macOS confirms `app` is signed by Tailscale's developer account. An app found in a place
+/// anything can write to gets run without the user choosing it, and a bundle id proves nothing: any
+/// download can claim one.
+fn signed_by_tailscale(app: &std::path::Path) -> bool {
+    const REQUIREMENT: &str = "-R=anchor apple generic and certificate leaf[subject.OU] = \"W5364U7YZB\"";
+    app.is_dir()
+        && Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", REQUIREMENT])
+            .arg(app)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+}
+
+/// Where the tool is: the one that answered last, else the first there is.
+pub fn binary() -> Option<PathBuf> {
+    let known = TOOL.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|path| path.is_file());
+    known.or_else(|| candidates().into_iter().next())
+}
+
+/// A tool's kind, for a problem report: a path would hold the user's name.
+fn tool_kind(path: &std::path::Path) -> &'static str {
+    let text = path.to_string_lossy();
+    if text.contains("Tailscale.app") || text.contains("Program Files") {
+        "app"
+    } else if text.contains("homebrew") {
+        "homebrew"
+    } else {
+        "other"
+    }
+}
+
+/// How long a tool's output may take to end once the tool has.
+const PIPES_CLOSE: Duration = Duration::from_secs(1);
 
 /// What the tool printed: `out` is stdout alone (JSON, when asked for), `all` both streams.
 struct Output {
     ok: bool,
+    timed_out: bool,
     out: String,
     all: String,
 }
@@ -59,49 +196,72 @@ fn run_with(args: &[&str], timeout: Duration, keep_out: bool) -> Option<Output> 
     if vpn_off() {
         return None;
     }
+    run_tool(&binary()?, args, timeout, keep_out)
+}
+
+fn run_tool(tool: &std::path::Path, args: &[&str], timeout: Duration, keep_out: bool) -> Option<Output> {
     let stdout = if keep_out { Stdio::piped() } else { Stdio::null() };
     // Without a console window: on Windows one would flash up on every status check.
     let mut child =
-        agentty_bridge::process::command(binary()?).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().ok()?;
+        agentty_bridge::process::command(tool).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().ok()?;
     let stdout = child.stdout.take();
     let mut stderr = child.stderr.take()?;
-    let out = std::thread::spawn(move || {
+    let (out_done, out) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
         if let Some(mut stdout) = stdout {
             let _ = stdout.read_to_string(&mut text);
         }
-        text
+        let _ = out_done.send(text);
     });
-    let err = std::thread::spawn(move || {
+    let (err_done, err) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
         let _ = stderr.read_to_string(&mut text);
-        text
+        let _ = err_done.send(text);
     });
     let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
     let ok = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                timed_out = true;
                 let _ = child.kill();
                 let _ = child.wait();
                 break false;
             }
         }
     };
-    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
-    Some(Output { ok, all: format!("{out}{err}"), out })
+    // `/usr/local/bin/tailscale` is a shell script: killing it leaves the real tool running, holding
+    // these pipes. What it said by now is all there will be, or a stuck tool would stop every check.
+    let (out, err) = (out.recv_timeout(PIPES_CLOSE).unwrap_or_default(), err.recv_timeout(PIPES_CLOSE).unwrap_or_default());
+    Some(Output { ok, timed_out, all: format!("{out}{err}"), out })
 }
 
 /// Whether the Mac's Tailscale VPN (the app's network extension) is off, as macOS itself tells:
 /// asking the system does not wake it, asking Tailscale does. `false` where Tailscale runs
 /// without one (its open-source daemon) or on other systems.
 pub fn vpn_off() -> bool {
-    if !cfg!(target_os = "macos") {
-        return false;
+    vpn_list().is_some_and(|list| vpn_off_in(&list))
+}
+
+/// Whether macOS has a Tailscale VPN at all: the app has been set up here.
+fn vpn_listed() -> bool {
+    vpn_list().is_some_and(|list| list.contains("io.tailscale.ipn"))
+}
+
+fn vpn_list() -> Option<String> {
+    #[cfg(debug_assertions)]
+    if let Some(list) = test_override::VPN.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Some(list);
     }
-    let Ok(output) = Command::new("/usr/sbin/scutil").args(["--nc", "list"]).stdin(Stdio::null()).output() else { return false };
-    vpn_off_in(&String::from_utf8_lossy(&output.stdout))
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = Command::new("/usr/sbin/scutil").args(["--nc", "list"]).stdin(Stdio::null()).output().ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// `scutil --nc list`'s answer: a Tailscale VPN listed, and not connected.
@@ -111,28 +271,136 @@ pub fn vpn_off_in(list: &str) -> bool {
 }
 
 pub fn status() -> Status {
-    if binary().is_none() {
-        return Status::default();
-    }
+    let tools = candidates();
+    let Some(first) = tools.first() else {
+        // No tool to be found, but macOS has its VPN: it is installed, whatever is in the way.
+        return if vpn_listed() {
+            let trouble = if vpn_off() { Trouble::VpnOff } else { Trouble::Tool("the tailscale tool wasn't found".into()) };
+            Status { installed: true, trouble: Some(trouble), ..Default::default() }
+        } else {
+            Status::default()
+        };
+    };
     if vpn_off() {
-        return Status { installed: true, ..Default::default() };
+        return Status { installed: true, trouble: Some(Trouble::VpnOff), tool: Some(tool_kind(first)), ..Default::default() };
     }
-    match run(&["status", "--json"], Duration::from_secs(8)) {
-        Some(output) => parse_status(&output.out),
-        None => Status { installed: true, ..Default::default() },
+    // The first one connected, else the first that answered at all, else what the first one said.
+    let mut answered: Option<(Status, &PathBuf)> = None;
+    let mut failure = None;
+    for (index, tool) in tools.iter().enumerate() {
+        let wait = Duration::from_secs(if index == 0 { 8 } else { 4 });
+        let Some(output) = run_tool(tool, &["status", "--json"], wait, true) else {
+            failure.get_or_insert_with(|| Trouble::Tool("tailscale did not run".into()));
+            continue;
+        };
+        let mut status = parse_status(&output.out);
+        status.tool = Some(tool_kind(tool));
+        if matches!(status.trouble, Some(Trouble::Tool(_))) {
+            failure.get_or_insert_with(|| failed(&output));
+        } else if status.running {
+            answered = Some((status, tool));
+            break;
+        } else if answered.is_none() {
+            answered = Some((status, tool));
+        }
+    }
+    match answered {
+        Some((status, tool)) => {
+            *TOOL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tool.clone());
+            status
+        }
+        None => Status { installed: true, trouble: failure, tool: Some(tool_kind(first)), ..Default::default() },
     }
 }
 
+/// What a tool that gave no status said, without secret paths or the user's home.
+fn failed(output: &Output) -> Trouble {
+    if output.timed_out {
+        return Trouble::Tool("timed out".into());
+    }
+    let line = output.all.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("no answer");
+    let mut said = redact(line);
+    if let Some(home) = std::env::var_os("HOME").and_then(|home| home.into_string().ok()).filter(|home| !home.is_empty()) {
+        said = said.replace(&home, "~");
+    }
+    let said: String = said.chars().take(200).collect();
+    let lower = said.to_lowercase();
+    let unreachable = ["tailscaled", "is tailscale running", "connection refused", "failed to connect", "service"];
+    if unreachable.iter().any(|word| lower.contains(word)) {
+        Trouble::NoService(said)
+    } else {
+        Trouble::Tool(said)
+    }
+}
+
+/// A status, from the first `{` on: a tool out of step with its service warns before the JSON.
 pub fn parse_status(json: &str) -> Status {
     let mut status = Status { installed: true, ..Default::default() };
-    let Ok(value) = serde_json::from_str::<Value>(json) else { return status };
-    status.running = value["BackendState"] == "Running";
+    let Some(Ok(value)) = json.find('{').map(|at| serde_json::from_str::<Value>(&json[at..])) else {
+        status.trouble = Some(Trouble::Tool(String::new()));
+        return status;
+    };
+    let state = value["BackendState"].as_str().unwrap_or_default();
+    status.state = Some(state.to_string()).filter(|state| !state.is_empty());
+    status.version = value["Version"].as_str().map(str::to_string);
+    status.running = state == "Running";
     let me = &value["Self"];
     status.dns_name = me["DNSName"].as_str().map(|n| n.trim_end_matches('.').to_string()).filter(|n| !n.is_empty());
     let user_id = me["UserID"].as_u64().map(|id| id.to_string());
     status.login = user_id.and_then(|id| value["User"][&id]["LoginName"].as_str().map(str::to_string)).filter(|l| !l.is_empty());
     status.https = value["CertDomains"].as_array().is_some_and(|d| !d.is_empty());
+    status.trouble = match state {
+        "Running" if status.login.is_some() && status.dns_name.is_some() => None,
+        "Running" => Some(Trouble::NoIdentity),
+        "NeedsLogin" => Some(Trouble::NeedsLogin(value["AuthURL"].as_str().and_then(sign_in_url))),
+        "NeedsMachineAuth" => Some(Trouble::NeedsApproval),
+        "Stopped" => Some(Trouble::Stopped),
+        _ => Some(Trouble::Starting),
+    };
     status
+}
+
+/// A sign-in address, if it is Tailscale's own: nothing else is ever opened from what the tool says.
+fn sign_in_url(url: &str) -> Option<String> {
+    url.starts_with("https://login.tailscale.com/").then(|| url.to_string())
+}
+
+/// Brings the Tailscale app to the front, where there is one to open.
+pub fn open_app() {
+    if cfg!(target_os = "macos") {
+        let _ = Command::new("/usr/bin/open").args(["-a", "Tailscale"]).stdin(Stdio::null()).spawn();
+    } else if cfg!(windows) {
+        let _ = agentty_bridge::process::command("C:\\Program Files\\Tailscale\\tailscale-ipn.exe").spawn();
+    }
+}
+
+/// What was found, to paste into a question or hand to an agent. No account, machine or tailnet
+/// name, and no path: what the tool said has been cleaned already (`failed`).
+pub fn report(status: &Status, app_version: &str) -> String {
+    let trouble = match &status.trouble {
+        Some(Trouble::VpnOff) => "the macOS Tailscale VPN is not connected".to_string(),
+        Some(Trouble::NeedsLogin(_)) => "signed out".to_string(),
+        Some(Trouble::NeedsApproval) => "waiting for the tailnet admin to approve this device".to_string(),
+        Some(Trouble::Starting) => "starting".to_string(),
+        Some(Trouble::Stopped) => "switched off in Tailscale".to_string(),
+        Some(Trouble::NoService(said)) => format!("the tool can't reach the background service: {said}"),
+        Some(Trouble::Tool(said)) => format!("the tool failed: {said}"),
+        Some(Trouble::NoIdentity) => "connected, but no machine name or account".to_string(),
+        None if !status.installed => "not installed".to_string(),
+        None => "none".to_string(),
+    };
+    [
+        format!("Agentty: {app_version}"),
+        format!("System: {}", std::env::consts::OS),
+        format!("Installed: {}", status.installed),
+        format!("Tool: {}", status.tool.unwrap_or("none")),
+        format!("Tailscale version: {}", status.version.as_deref().unwrap_or("unknown")),
+        format!("State: {}", status.state.as_deref().unwrap_or("unknown")),
+        format!("Connected: {}", status.running),
+        format!("HTTPS certificates: {}", status.https),
+        format!("Problem: {trouble}"),
+    ]
+    .join("\n")
 }
 
 /// Has Tailscale get this machine's HTTPS certificate for `domain` now, rather than on the first
@@ -715,12 +983,82 @@ mod tests {
                 running: true,
                 dns_name: Some("mac.tail1234.ts.net".into()),
                 login: Some("me@example.com".into()),
-                https: true
+                https: true,
+                state: Some("Running".into()),
+                ..Default::default()
             }
         );
         let stopped = parse_status(r#"{ "BackendState": "Stopped", "Self": null, "User": null, "CertDomains": null }"#);
         assert!(!stopped.running && stopped.dns_name.is_none() && stopped.login.is_none() && !stopped.https);
-        assert_eq!(parse_status("not json"), Status { installed: true, ..Default::default() });
+        assert_eq!(parse_status("not json").trouble, Some(Trouble::Tool(String::new())));
+    }
+
+    #[test]
+    fn each_state_has_its_own_trouble() {
+        let state = |s: &str| parse_status(&format!(r#"{{ "BackendState": "{s}" }}"#)).trouble;
+        assert_eq!(state("NeedsLogin"), Some(Trouble::NeedsLogin(None)));
+        assert_eq!(state("NeedsMachineAuth"), Some(Trouble::NeedsApproval));
+        assert_eq!(state("Stopped"), Some(Trouble::Stopped));
+        assert_eq!(state("Starting"), Some(Trouble::Starting));
+        assert_eq!(state("NoState"), Some(Trouble::Starting));
+        assert_eq!(state("Running"), Some(Trouble::NoIdentity), "connected, with no name or account");
+    }
+
+    #[test]
+    fn only_tailscales_own_sign_in_address_is_kept() {
+        let login = |url: &str| parse_status(&format!(r#"{{ "BackendState": "NeedsLogin", "AuthURL": "{url}" }}"#)).trouble;
+        assert_eq!(login("https://login.tailscale.com/a/abc"), Some(Trouble::NeedsLogin(Some("https://login.tailscale.com/a/abc".into()))));
+        assert_eq!(login("https://login.tailscale.com.evil.example/a"), Some(Trouble::NeedsLogin(None)));
+        assert_eq!(login("file:///etc/passwd"), Some(Trouble::NeedsLogin(None)));
+    }
+
+    #[test]
+    fn a_warning_before_the_status_does_not_hide_it() {
+        let text = "Warning: client version \"1.2\" != tailscaled server version \"1.3\"\n{ \"BackendState\": \"Stopped\" }";
+        assert_eq!(parse_status(text).trouble, Some(Trouble::Stopped));
+    }
+
+    #[test]
+    fn says_why_a_tool_gave_no_status() {
+        let output = |all: &str| Output { ok: false, timed_out: false, out: String::new(), all: all.to_string() };
+        assert!(matches!(failed(&output("failed to connect to local tailscaled; it doesn't appear to be running")), Trouble::NoService(_)));
+        assert!(matches!(failed(&output("The Tailscale CLI failed to start: Failed to load preferences.")), Trouble::Tool(_)));
+        assert_eq!(failed(&Output { timed_out: true, ..output("") }), Trouble::Tool("timed out".into()));
+        let secret = "ab".repeat(32);
+        assert!(!format!("{:?}", failed(&output(&format!("bad http://127.0.0.1:1/{secret}")))).contains(&secret));
+    }
+
+    #[test]
+    fn the_report_names_no_account_or_machine() {
+        let status = parse_status(
+            r#"{ "BackendState": "Running", "Version": "1.104.4", "Self": { "DNSName": "mac.tail1234.ts.net.", "UserID": 42 },
+                 "User": { "42": { "LoginName": "me@example.com" } }, "CertDomains": ["mac.tail1234.ts.net"] }"#,
+        );
+        let report = report(&status, "0.3.11");
+        assert!(report.contains("Tailscale version: 1.104.4") && report.contains("State: Running"));
+        assert!(!report.contains("example.com") && !report.contains("tail1234"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_app_that_only_claims_to_be_tailscale_is_not_run() {
+        let folder = std::env::temp_dir().join(format!("agentty-fake-tailscale-{}", std::process::id()));
+        let app = folder.join("Tailscale.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join(APP_TOOL), "#!/bin/sh\n").unwrap();
+        assert!(tools_in_apps(&format!("{}\n", app.display())).is_empty());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_app_comes_first_where_macos_lists_its_vpn() {
+        if cfg!(target_os = "macos") {
+            assert!(candidate_paths(true)[0].contains("Tailscale.app"));
+            assert!(!candidate_paths(false)[0].contains("Tailscale.app"));
+        }
+        assert!(tools_in_apps("/nowhere/Tailscale.app\n/nowhere/Tailscale.app/Contents\n").is_empty(), "only a tool that is there");
+        assert_eq!(tool_kind(std::path::Path::new("/opt/homebrew/bin/tailscale")), "homebrew");
+        assert_eq!(tool_kind(std::path::Path::new("/Applications/Tailscale.app/Contents/MacOS/Tailscale")), "app");
     }
 
     #[test]
