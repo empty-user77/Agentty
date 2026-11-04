@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Windows: `agentty` commands in PowerShell and cmd now wait until they finish and report their exit code. Before,
+  the next command ran ahead of them, `wait-load` waited for nothing, and their output could not be captured.
+- Windows: the AI processes page lists running agents with their CPU, memory and disk use. It was always empty.
+- The chat's Stop button did nothing in the first seconds of a turn.
+- Windows: a shell in an Agentty started as administrator is named after its folder, not `Administrator: C:\…\pwsh.exe`.
+- File editor: table headers are no longer cut off (`name` read `nam`).
+
 ## [0.3.13] - 2026-11-05
 
 ### Fixed

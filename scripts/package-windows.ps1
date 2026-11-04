@@ -67,11 +67,13 @@ if ($Installer) {
     cargo clean --release -p whisper-rs-sys
     if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed' }
 }
-cargo build --release -p agentty-app
+cargo build --release -p agentty-app -p agentty-console
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $target 'release\agentty.exe'), LICENSE, THIRD_PARTY_NOTICES.md, packaging\windows\README.txt, packaging\windows\install.ps1, packaging\windows\install.cmd $stage
+# What a terminal runs for a bare `agentty`: .com comes before .exe (see crates/agentty-console).
+Copy-Item (Join-Path $target 'release\agentty-console.exe') (Join-Path $stage 'agentty.com')
 
 New-Item -ItemType Directory -Force dist | Out-Null
 $zip = "dist\$name.zip"

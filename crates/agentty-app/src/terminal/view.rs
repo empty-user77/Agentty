@@ -312,6 +312,11 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
         if spinner && hint && (lower.contains('·') || lower.contains('•')) {
             state.busy = true;
         }
+        // The first seconds of a turn have no tokens to count yet: "· Discombobulating…" and then
+        // "✻ Discombobulating… (9s)". Only at the start of its row: a reply's text is indented.
+        if spinner && !line.starts_with(char::is_whitespace) && is_bare_spinner(glyph) {
+            state.busy = true;
+        }
         if has_yes_option && state.permission.is_none() {
             let trimmed = line.trim();
             let asks = [
@@ -340,6 +345,24 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
         state.question = true;
     }
     state
+}
+
+/// A spinner's row with nothing but its verb, and perhaps the time so far: `✻ Thinking…`,
+/// `✻ Thinking… (9s)`, `· Thinking… (1m 2s)`.
+fn is_bare_spinner(row: &str) -> bool {
+    let mut chars = row.chars();
+    chars.next();
+    let Some((verb, rest)) = chars.as_str().trim_start().split_once('…') else { return false };
+    if verb.is_empty() || verb.contains(char::is_whitespace) {
+        return false;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(time) = rest.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) else { return false };
+    !time.is_empty()
+        && time.split_whitespace().all(|part| part.ends_with(['s', 'm', 'h']) && part[..part.len() - 1].bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Cell metrics and origin captured during prepaint, used for mouse and IME hit testing.
@@ -3445,6 +3468,14 @@ mod tests {
         assert_eq!(console_image_title(r"C:\Program Files\nodejs\node.exe").as_deref(), Some("node"));
         assert_eq!(console_image_title("vim main.rs"), None);
         assert_eq!(console_image_title("setup.exe"), None, "not a path");
+        for prefix in ["Administrator: ", "관리자: ", "管理者: "] {
+            assert_eq!(
+                console_image_title(&format!(r"{prefix}C:\Program Files\PowerShell\7\pwsh.exe")).as_deref(),
+                Some("pwsh"),
+                "{prefix}"
+            );
+        }
+        assert_eq!(console_image_title("Note: run setup.exe"), None);
     }
 
     #[test]
@@ -3505,6 +3536,13 @@ mod screen_tests {
         }
         // A finished spinner line is not a running turn, and neither is ordinary prose.
         assert!(!classify_screen(&lines("✻ Baked for 3s · done 9:19 AM\n>")).busy);
+        // A turn's first seconds: no token count yet.
+        for row in ["· Discombobulating…", "✻ Thinking…", "✢ Thinking… (9s)", "* Thinking… (1m 2s)"] {
+            assert!(classify_screen(&lines(&format!("> fix it\n\n{row}\n\n> "))).busy, "{row}");
+        }
+        for row in ["  * Loading…", "* Now loading…", "* Loading… please wait", "* Loading… (see below)", "· …"] {
+            assert!(!classify_screen(&lines(&format!("{row}\n> "))).busy, "{row}");
+        }
         assert!(!classify_screen(&lines("* the reply used 5k tokens (roughly · half)\n>")).busy);
         assert!(!classify_screen(&lines("* the reply used (5k tokens · half)\n>")).busy);
         assert!(!classify_screen(&lines("· the reply used (5k tokens · half)\n>")).busy);
@@ -3608,7 +3646,9 @@ pub fn program_of_command_line(title: &str) -> Option<&str> {
 /// The program of a title that is a Windows executable's path (`C:\…\pwsh.exe` → `pwsh`), the
 /// title a console gets from the program it started until that program sets one.
 pub fn console_image_title(title: &str) -> Option<String> {
-    let lower = title.to_ascii_lowercase();
+    // An elevated console puts a word of its language first (`Administrator: C:\…`).
+    let path = title.rsplit_once(": ").map_or(title, |(_, path)| path);
+    let lower = path.to_ascii_lowercase();
     let path_like = lower.as_bytes().get(1..3) == Some(b":\\") || lower.starts_with(r"\\");
     let file = lower.strip_suffix(".exe").filter(|_| path_like)?.rsplit('\\').next()?;
     (!file.is_empty()).then(|| file.to_string())

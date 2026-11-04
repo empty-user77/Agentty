@@ -98,6 +98,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentty-console"
+version = "0.3.13"
+
+[[package]]
 name = "agentty-db"
 version = "0.3.13"
 dependencies = [

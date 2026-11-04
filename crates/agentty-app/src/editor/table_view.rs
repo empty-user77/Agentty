@@ -53,6 +53,8 @@ actions!(
 const CONTEXT: &str = "TableGrid";
 const ROW_HEIGHT: f32 = 26.;
 const NUMBER_WIDTH: f32 = 52.;
+/// A header's room besides its name: the cell's padding and border, and the sort arrow's place.
+const HEADER_EXTRA: f32 = 40.;
 const COLUMN_MIN: f32 = 56.;
 const COLUMN_MAX: f32 = 360.;
 const COLUMN_DRAG_MAX: f32 = 1200.;
@@ -370,10 +372,17 @@ impl Document {
             let columns = if self.editable() { table.width + 1 } else { table.width.max(1) };
             let widths: Vec<f32> = (0..columns)
                 .map(|col| {
-                    let name = if self.grid.names(table) { 0 } else { column_name(col).len() };
+                    // With names in the first row, that row is the header.
+                    let name = if self.grid.names(table) {
+                        table.rows.first().map_or(0, |r| text_width(r.cells.get(col).map_or("", |c| &c.value)))
+                    } else {
+                        column_name(col).len()
+                    };
                     let longest =
                         table.rows.iter().take(MEASURED_ROWS).map(|r| text_width(r.cells.get(col).map_or("", |c| &c.value))).max();
-                    ((longest.unwrap_or(0).max(name) as f32) * CHAR_WIDTH + 24.).clamp(COLUMN_MIN, COLUMN_MAX)
+                    let cells = (longest.unwrap_or(0) as f32) * CHAR_WIDTH + 24.;
+                    let header = (name as f32) * CHAR_WIDTH + HEADER_EXTRA;
+                    cells.max(header).clamp(COLUMN_MIN, COLUMN_MAX)
                 })
                 .collect();
             let widths = Rc::new(widths);

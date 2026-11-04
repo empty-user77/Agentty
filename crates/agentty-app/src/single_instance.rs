@@ -244,6 +244,15 @@ mod macos {
 mod tests {
     use super::*;
 
+    /// `agentty.com` must wait for every command, or that command runs into the race it exists to end.
+    #[test]
+    fn the_console_program_knows_every_command() {
+        let console = include_str!("../../agentty-console/src/main.rs");
+        for command in CLI_COMMANDS {
+            assert!(console.contains(&format!("\"{command}\",")), "{command} is missing from crates/agentty-console");
+        }
+    }
+
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }

@@ -190,7 +190,8 @@ impl Workbench {
             .collect();
 
         // Totals.
-        let cpu: f32 = rows.iter().map(|(p, _, _)| p.cpu).sum();
+        // A fold from 0: an empty `sum` of floats is -0.0, which prints as "-0.0%".
+        let cpu = rows.iter().fold(0.0_f32, |total, (p, _, _)| total + p.cpu);
         let rss: u64 = rows.iter().map(|(p, _, _)| p.rss_kb).sum();
         let count: usize = rows.iter().map(|(p, _, _)| p.tree.len()).sum();
         let (read_rate, write_rate) = rows.iter().fold((0.0, 0.0), |(r, w), (p, _, _)| {
