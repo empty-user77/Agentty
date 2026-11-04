@@ -37,6 +37,8 @@ pub(super) struct RemotePageState {
     dialog_error: Option<String>,
     input_events: Vec<gpui::Subscription>,
     looked_up: bool,
+    /// Keeps looking at Tailscale while the page is open.
+    pub(super) tailscale_watch: Option<gpui::Task<()>>,
     /// A voice model being downloaded in the setup flow, if any.
     voice_dl: Option<VoiceDl>,
     /// The last voice-setup error to show (a failed or corrupt download).
@@ -493,6 +495,41 @@ impl Workbench {
                 remote::set_password(password.to_string(), cx, saved)
             }
             ("forget", _) if dev => remote::remove_password(cx),
+            // A test's own `tailscale` tools (`:` between them, `-` for the real ones, nothing for none).
+            #[cfg(debug_assertions)]
+            ("tool", paths) => {
+                *remote::tailscale::test_override::TOOLS.lock().unwrap_or_else(|e| e.into_inner()) = match paths {
+                    "-" => None,
+                    _ => Some(paths.split(':').filter(|p| !p.is_empty()).map(std::path::PathBuf::from).collect()),
+                };
+                remote::refresh_tailscale(cx);
+            }
+            // What macOS says about the extension, in a test (`-` for what it really says).
+            #[cfg(debug_assertions)]
+            ("ext", list) => {
+                *remote::tailscale::test_override::EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()) =
+                    (list != "-").then(|| list.to_string());
+                remote::refresh_tailscale(cx);
+            }
+            // This account can't read Tailscale's access file, in a test.
+            #[cfg(debug_assertions)]
+            ("notadmin", on) => {
+                *remote::tailscale::test_override::NOT_ADMIN.lock().unwrap_or_else(|e| e.into_inner()) = on == "1";
+                remote::refresh_tailscale(cx);
+            }
+            // A start that Tailscale refused, in a test: only what the page shows, nothing is started.
+            #[cfg(debug_assertions)]
+            ("refused", said) => {
+                cx.global_mut::<remote::Remote>().phase = Phase::Failed(Problem::Other(said.to_string()));
+                cx.refresh_windows();
+            }
+            // What macOS says about the VPN, in a test (`-` for what it really says, `\\n` between lines).
+            #[cfg(debug_assertions)]
+            ("vpn", list) => {
+                *remote::tailscale::test_override::VPN.lock().unwrap_or_else(|e| e.into_inner()) =
+                    (list != "-").then(|| list.replace("\\n", "\n"));
+                remote::refresh_tailscale(cx);
+            }
             // What the page's "Disable remote access" button does, from inside a workbench update as it is.
             ("disable", _) => {
                 remote::set_feature(false, cx);
@@ -1050,16 +1087,9 @@ impl Workbench {
                         .when_some(action.filter(|_| done == Some(false)), |d, action| d.child(div().flex().child(action))),
                 )
         };
-        let tailscale_sub = match tailscale {
-            _ if connected == Some(true) => host.clone(),
-            Some(s) if s.installed => t(cx, "remote.setup.tailscale_connect").to_string(),
-            Some(_) => t(cx, "remote.setup.tailscale_install").to_string(),
-            None => String::new(),
-        };
-        let install = tailscale.filter(|s| !s.installed).map(|_| {
-            action_button("remote-setup-install", t(cx, "remote.install_tailscale"), |_, _, cx| cx.open_url(TAILSCALE_DOWNLOAD))
-                .into_any_element()
-        });
+        let tailscale_sub = if connected == Some(true) { host.clone() } else { String::new() };
+        // Not connected: what is wrong and what helps, in place of the step's line.
+        let help = tailscale.filter(|_| connected == Some(false)).map(|s| self.render_tailscale_help(s, false, cx).into_any_element());
         let admin = action_button("remote-setup-dns", t(cx, "remote.open_admin_dns"), |_, _, cx| cx.open_url(TAILSCALE_ADMIN_DNS));
         let password = action_button(
             "remote-setup-password",
@@ -1069,7 +1099,7 @@ impl Workbench {
         let (certificate_sub, issue) = match &job {
             remote::Certificate::Issuing => (t(cx, "remote.setup.cert_issuing").to_string(), None),
             remote::Certificate::Failed(why) => (
-                tf(cx, "remote.setup.cert_failed", &[("reason", why)]),
+                super::remote_trouble::with_refusal_help(tf(cx, "remote.setup.cert_failed", &[("reason", why)]), why, cx),
                 Some(action_button("remote-setup-cert", t(cx, "remote.setup.issue_cert"), |_, _, cx| remote::issue_certificate(cx))),
             ),
             remote::Certificate::Idle if certificate.is_none() => (t(cx, "remote.setup.cert_waiting").to_string(), None),
@@ -1095,7 +1125,7 @@ impl Workbench {
                     .child(div().flex_1().t_body().font_weight(gpui::FontWeight::SEMIBOLD).child(t(cx, "remote.setup.title")))
                     .child(action_button("remote-setup-recheck", t(cx, "remote.setup.recheck"), |_, _, cx| remote::refresh_tailscale(cx))),
             )
-            .child(step(1, connected, t(cx, "remote.setup.tailscale").to_string(), tailscale_sub, install))
+            .child(step(1, connected, t(cx, "remote.setup.tailscale").to_string(), tailscale_sub, help))
             .child(step(
                 2,
                 https,
@@ -1117,6 +1147,7 @@ impl Workbench {
         if !self.remote_page.looked_up {
             self.remote_page.looked_up = true;
             remote::refresh_tailscale(cx);
+            self.watch_tailscale_from_page(cx);
         }
         let prefs = settings(cx).remote.clone();
         let state = cx.global::<remote::Remote>();
@@ -1140,6 +1171,8 @@ impl Workbench {
             Phase::Starting => t(cx, "remote.starting").to_string(),
             Phase::On { .. } => t(cx, "remote.on").to_string(),
             Phase::Failed(problem) => match problem {
+                // The help below says it, and says why.
+                Problem::NotInstalled | Problem::NotRunning if prefs.enabled && tailscale.is_some() => String::new(),
                 Problem::NotInstalled => t(cx, "remote.problem_not_installed").to_string(),
                 Problem::NotRunning => t(cx, "remote.problem_not_running").to_string(),
                 Problem::NoHttps => t(cx, "remote.problem_no_https").to_string(),
@@ -1174,7 +1207,7 @@ impl Workbench {
                         .child(word),
                 ),
             )
-            .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(detail));
+            .when(!detail.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(detail)));
         if let Phase::On { url } = &phase {
             let (copy, open) = (url.clone(), url.clone());
             status = status.child(
@@ -1219,11 +1252,15 @@ impl Workbench {
                     })))
                     .child(muted(t(cx, "remote.https_note").to_string()));
             }
-            Phase::Failed(Problem::NotInstalled) => {
-                status =
-                    status.child(div().child(action_button("remote-install", t(cx, "remote.install_tailscale"), |_, _, cx| {
-                        cx.open_url(TAILSCALE_DOWNLOAD)
-                    })));
+            Phase::Failed(Problem::Other(said)) => {
+                if let Some(help) = super::remote_trouble::refusal_help(said, cx) {
+                    status = status.child(help);
+                }
+            }
+            Phase::Failed(Problem::NotInstalled | Problem::NotRunning) if prefs.enabled => {
+                if let Some(found) = tailscale.as_ref() {
+                    status = status.child(self.render_tailscale_help(found, true, cx));
+                }
             }
             _ => {}
         }

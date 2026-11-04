@@ -54,6 +54,27 @@ description: 在 Tailscale 网络上的另一个设备的浏览器中打开 Agen
 
 完成。你的会话现在可在该设备上看到。
 
+## 检测不到 Tailscale 时
+
+**开启前的准备**的第一步会说明问题所在，并提供解决按钮。页面会自动重新检查，问题解决后无需再按任何按钮。
+
+| 显示内容 | 怎么做 |
+|---|---|
+| 未安装 | **获取 Tailscale**。如果刚安装，请先打开一次应用。 |
+| 这台 Mac 上已关闭 | 按**打开 Tailscale** 并开启 **Connect**。如果 macOS 询问是否添加 VPN 或允许系统扩展，请允许。 |
+| 尚未登录 | **登录**，使用手机上也会用的账号。 |
+| 等待批准 | 在 Machines 页面批准这台设备，或请 tailnet 管理员批准。 |
+| 后台服务没有响应 | 打开 Tailscale 并完成首次设置。Mac 上在系统设置 → 通用 → 登录项与扩展中允许系统扩展；Windows 上重启电脑；Linux 上运行 `sudo systemctl enable --now tailscaled` 和 `sudo tailscale up`。 |
+| macOS 正在等待允许 | 在系统设置 → 通用 → 登录项与扩展 → 网络扩展中开启 Tailscale。 |
+| 其他 VPN 可能阻止了它 | 断开页面上显示的 VPN，然后在 Tailscale 中开启 **Connect**。 |
+| 此 Mac 账户没有权限 | 只有管理员账户才能读取 Tailscale 的访问文件。请使用管理员账户，或在系统设置 → 用户与群组中授予管理员权限。 |
+| Tailscale 拒绝了此账户 | Linux 上运行一次 `sudo tailscale set --operator=$USER`。Windows 上可能有其他账户正在使用 Tailscale。公司管理的 Mac 可能被策略阻止。 |
+| 无法读取响应 | 退出并重新打开 Tailscale，或更新它。Tailscale 给出的错误信息会显示在说明下方。 |
+
+仍然不行时，按**交给智能体**。智能体会在新标签页中收到检查结果，先只做检查，修改任何内容前都会询问。**复制诊断信息**会复制同样的摘要，其中只有版本和状态，不包含账号、设备或 tailnet 名称。
+
+**需要哪个账号？** 任何 Tailscale 账号都可以，不需要与 Apple 账号或电脑用户账户相同。需要相同的是这台电脑和要连接的设备上的 Tailscale 账号。
+
 ## 安全性
 
 远程访问只能在 Tailscale 网络内到达 — 永不在公共互联网上。如果为其端口启用了 Funnel，Agentty 会拒绝运行。进入需要同时通过以下两项：

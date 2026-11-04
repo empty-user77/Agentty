@@ -6,9 +6,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- Chat view and team chat: after a click in the conversation or on the pane's bar, typing went nowhere until the input box was
-  clicked. The keyboard now stays with the input box, and typing with text selected goes there too. A click on a
-  terminal pane's bar no longer takes the keyboard from the terminal either.
+- Remote access could say Tailscale wasn't running while it was: only the first `tailscale` tool found was asked (a
+  Homebrew one beside the app, say), a tool that hung stopped every later check, and an app outside `/Applications`
+  counted as not installed.
+
+### Changed
+- Remote access says what is actually wrong with Tailscale (switched off, signed out, waiting for approval, its service
+  not answering, an extension macOS hasn't been allowed to run, a Mac account without administrator rights, another VPN
+  in the way, an account Tailscale refuses) with a button for what fixes it, a progress line, a copyable diagnosis and a way to hand it to an agent.
+  The page checks again by itself while it is open.
 
 ### Added
 - Diffs (a changed file's, and AgentGit's): drag over the code to select it, without the line numbers or the `+` and
@@ -17,6 +23,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - An instruction from the file editor sent with no session linked was lost. It now waits for the session you pick.
+- Chat view and team chat: after a click in the conversation or on the pane's bar, typing went nowhere until the input box was
+  clicked. The keyboard now stays with the input box, and typing with text selected goes there too. A click on a
+  terminal pane's bar no longer takes the keyboard from the terminal either.
 
 ## [0.3.11] - 2026-11-03
 
