@@ -31,6 +31,14 @@ pub enum Remote {
 }
 
 impl Remote {
+    /// Whether both lead to the same repository, however it is reached.
+    pub fn same_place(&self, other: &Remote) -> bool {
+        match (self, other) {
+            (Remote::Github { repo: a, .. }, Remote::Github { repo: b, .. }) => a.eq_ignore_ascii_case(b),
+            _ => self.url().trim_end_matches('/').trim_end_matches(".git") == other.url().trim_end_matches('/').trim_end_matches(".git"),
+        }
+    }
+
     pub fn url(&self) -> String {
         match self {
             Remote::Github { repo, ssh: false } => format!("https://github.com/{repo}.git"),

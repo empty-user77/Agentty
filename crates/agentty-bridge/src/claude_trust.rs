@@ -12,6 +12,10 @@ use std::path::Path;
 
 /// Marks `tree` trusted when `project` (or a folder above it) is. Returns whether it did.
 pub fn inherit_trust(project: &Path, tree: &Path) -> Result<bool> {
+    // Every account keeps its own list of trusted folders.
+    for config in crate::accounts::claude_configs() {
+        let _ = inherit_trust_in(&config, project, tree);
+    }
     inherit_trust_in(&crate::fsutil::home().join(".claude.json"), project, tree)
 }
 

@@ -10,6 +10,7 @@
 //! afterwards, like the Unix fallback shell.
 
 use crate::settings::AdvisorChoice;
+use agentty_bridge::accounts::AccountChoice;
 use agentty_bridge::agent_auth::{AuthAgent, EnvChange};
 use agentty_bridge::model::Agent;
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,8 @@ pub struct LaunchSpec {
     /// A reviewer: it reads and runs what it needs to judge the work, but does not edit files
     /// (Claude Code without its editing tools, Codex in a read-only sandbox).
     pub read_only: bool,
+    /// Which logins this pane runs on. Set once when the window spawns it.
+    pub accounts: AccountChoice,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
@@ -194,6 +197,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -210,6 +214,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -230,6 +235,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -261,10 +267,30 @@ impl LaunchSpec {
             PaneKind::Claude => AuthAgent::Claude,
             PaneKind::Codex => AuthAgent::Codex,
         };
-        match agentty_bridge::agent_auth::environment(agent) {
+        let environment = match self.accounts.get(agent) {
+            Some(id) => agentty_bridge::accounts::environment(agent, id),
+            None => agentty_bridge::agent_auth::environment(agent),
+        };
+        match environment {
             Ok(changes) => AuthSetup { changes, warning: None },
             Err(err) => AuthSetup { changes: Vec::new(), warning: Some(format!("{err:#}")) },
         }
+    }
+
+    /// A shell pane's account folders, so an agent typed there runs on its window's accounts.
+    pub fn shell_account_env(&self) -> Vec<(String, String)> {
+        if self.kind != PaneKind::Shell {
+            return Vec::new();
+        }
+        [AuthAgent::Claude, AuthAgent::Codex]
+            .into_iter()
+            .filter_map(|agent| agentty_bridge::accounts::environment(agent, self.accounts.get(agent)?).ok())
+            .flatten()
+            .filter_map(|change| match change {
+                EnvChange::Set(name, value) => Some((name, value)),
+                EnvChange::Unset(_) => None,
+            })
+            .collect()
     }
 
     /// The agent command line, including activity hooks.

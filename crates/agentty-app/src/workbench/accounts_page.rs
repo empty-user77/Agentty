@@ -94,6 +94,10 @@ impl CodexMethod {
     }
 }
 
+fn agent_auth_store() -> agentty_bridge::accounts::AccountStore {
+    agentty_bridge::accounts::AccountStore::load()
+}
+
 /// Result line under a form: success or error text.
 type Status = Option<(bool, String)>;
 
@@ -368,6 +372,48 @@ impl Workbench {
         .detach();
     }
 
+    /// The logins added beside the agents' own, each of which runs in a window of its own.
+    fn render_logins(&mut self, cx: &mut Context<Self>) -> Div {
+        let store = agent_auth_store();
+        let mut card = section(t(cx, "accounts.logins"));
+        for agent in [AuthAgent::Claude, AuthAgent::Codex] {
+            for account in store.of(agent) {
+                let name = account.email.clone().or_else(|| account.org.clone()).unwrap_or_else(|| account.id.clone());
+                let brand = if agent == AuthAgent::Claude { "Claude Code" } else { "Codex" };
+                let (id, label) = (account.id.clone(), name.clone());
+                card = card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name))
+                        .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(brand))
+                        .child(action_button(
+                            SharedString::from(format!("account-remove-{}", account.id)),
+                            t(cx, "account.remove"),
+                            cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_account(agent, id.clone(), label.clone(), cx)),
+                        )),
+                );
+            }
+        }
+        card.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .child(action_button(
+                    "account-settings-add-claude",
+                    t(cx, "account.add_claude"),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.add_account(AuthAgent::Claude, window, cx)),
+                ))
+                .child(action_button(
+                    "account-settings-add-codex",
+                    t(cx, "account.add_codex"),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.add_account(AuthAgent::Codex, window, cx)),
+                )),
+        )
+    }
+
     pub(super) fn render_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.accounts_form(window, cx);
         let form = self.accounts_form.as_ref().expect("accounts form exists");
@@ -554,7 +600,8 @@ impl Workbench {
             )
             .children(status_line(&form.codex_status));
 
-        div().flex().flex_col().child(claude).child(codex).child(
+        let logins = self.render_logins(cx);
+        div().flex().flex_col().child(logins).child(claude).child(codex).child(
             section(t(cx, "accounts.security"))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(cx, "accounts.security_body", &[("store", store)])))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "accounts.applies"))),

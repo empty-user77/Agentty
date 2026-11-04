@@ -121,9 +121,14 @@ fn fingerprint(path: &Path, offset: u64) -> Option<Fingerprint> {
 }
 
 pub fn root_dir(agent: Agent) -> PathBuf {
+    root_of(agent, None)
+}
+
+/// Where one account of `agent` keeps its transcripts; `None` is the user's own login.
+pub fn root_of(agent: Agent, account: Option<&str>) -> PathBuf {
     match agent {
-        Agent::Claude => fsutil::home().join(".claude").join("projects"),
-        Agent::Codex => fsutil::home().join(".codex").join("sessions"),
+        Agent::Claude => crate::claude::projects_of(account),
+        Agent::Codex => crate::codex::sessions_of(account),
         // No local token accounting for the other CLIs.
         _ => PathBuf::new(),
     }
@@ -131,7 +136,12 @@ pub fn root_dir(agent: Agent) -> PathBuf {
 
 impl UsageScanner {
     pub fn scan(&mut self, agent: Agent) -> FileUsage {
-        self.scan_in(agent, &root_dir(agent), &PriceTable::load())
+        self.scan_of(agent, None)
+    }
+
+    /// [`scan`](Self::scan) for one account.
+    pub fn scan_of(&mut self, agent: Agent, account: Option<&str>) -> FileUsage {
+        self.scan_in(agent, &root_of(agent, account), &PriceTable::load())
     }
 
     /// `scan` over the transcripts under `root` (empty: an agent without local accounting).

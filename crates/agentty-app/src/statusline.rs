@@ -68,7 +68,10 @@ pub fn run() -> i32 {
     // Remember plan limits and reset times for the menu bar.
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     if let Some(limits) = agentty_bridge::limits::parse_claude(&json["rate_limits"], now_ms) {
-        agentty_bridge::limits::save_claude(&limits);
+        // A pane on another account says so through its config folder.
+        let account = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .and_then(|dir| agentty_bridge::accounts::owner_of(agentty_bridge::agent_auth::AuthAgent::Claude, std::path::Path::new(&dir)));
+        agentty_bridge::limits::save_claude(&limits, account.as_deref());
     }
 
     let cwd = json["workspace"]["current_dir"].as_str().or(json["cwd"].as_str()).map(PathBuf::from);

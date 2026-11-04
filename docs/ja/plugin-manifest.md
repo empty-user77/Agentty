@@ -174,7 +174,7 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 ```
 app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bell bell-dot
 blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right
-chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud
+chevron-up circle-check circle-dot circle-user circle-pause circle-x clipboard clipboard-paste clock cloud
 code columns-2 command container copy database download ellipsis external-link eye file-input
 file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round

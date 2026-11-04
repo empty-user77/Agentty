@@ -449,6 +449,7 @@ mod tests {
         let workspace = WorkspaceInfo {
             id: 1,
             name: "app".into(),
+            account: None,
             group: None,
             group_color: None,
             color: None,

@@ -18,7 +18,9 @@ use agentty_bridge::model::Agent;
 use agentty_bridge::sync::model::{ParentRef, ProjectRef, TreeNode, WorkspaceState};
 use agentty_bridge::sync::repo::{GithubRepo, Remote};
 use agentty_bridge::sync::restore::{ContextRequest, RestoreOutcome, RestoreRequest};
-use agentty_bridge::sync::{self as bridge, Connected, Overview, SessionInput, SyncConfig, SyncError, SyncRequest, WorkspaceInput};
+use agentty_bridge::sync::{
+    self as bridge, Connected, Overview, SessionInput, SyncConfig, SyncError, SyncProfile, SyncRequest, WorkspaceInput,
+};
 use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, SharedString, Subscription, Task, Window};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -54,6 +56,8 @@ enum Method {
 }
 
 pub(super) struct SyncUi {
+    /// Whose sync this window runs (see `SyncProfile`).
+    profile: SyncProfile,
     config: SyncConfig,
     status: Status,
     running: bool,
@@ -112,7 +116,13 @@ pub(super) struct SyncUi {
 
 impl Default for SyncUi {
     fn default() -> Self {
-        let config = bridge::load_config();
+        Self::for_profile(SyncProfile::default())
+    }
+}
+
+impl SyncUi {
+    fn for_profile(profile: SyncProfile) -> Self {
+        let config = bridge::load_config(&profile);
         let status = if !config.connected() {
             Status::Off
         } else if config.paused {
@@ -121,8 +131,9 @@ impl Default for SyncUi {
             Status::Ready
         };
         Self {
-            overview: if config.connected() { bridge::overview() } else { Overview::default() },
-            computer: if config.connected() { bridge::computer_stats() } else { Default::default() },
+            overview: if config.connected() { bridge::overview(&profile) } else { Overview::default() },
+            computer: if config.connected() { bridge::computer_stats(&profile) } else { Default::default() },
+            profile,
             config,
             status,
             running: false,
@@ -244,6 +255,17 @@ impl Workbench {
             }
         })
         .detach();
+    }
+
+    /// A window syncs for its account: the repository, its settings and what it lists go with it.
+    pub(super) fn sync_follow_accounts(&mut self, cx: &mut Context<Self>) {
+        let profile = SyncProfile::of_choice(&self.accounts);
+        if profile != self.sync.profile {
+            let started = self.sync.started;
+            self.sync = SyncUi::for_profile(profile);
+            self.sync.started = started;
+            cx.notify();
+        }
     }
 
     fn sync_tick(&mut self, cx: &mut Context<Self>) {
@@ -398,7 +420,7 @@ impl Workbench {
         let input = WorkspaceInput { sync_id: Some(sync_id), ..self.sync_input(ws, WorkspaceState::Deleted, cx) };
         self.sync.removed.push(input);
         self.sync.pending.remove(&id);
-        let _ = bridge::update_config(|c| {
+        let _ = bridge::update_config(&self.sync.profile, |c| {
             c.workspaces.remove(&key);
         });
         self.sync.config.workspaces.remove(&key);
@@ -419,7 +441,7 @@ impl Workbench {
     pub(super) fn sync_workspace_restored(&mut self, id: u64, sync_id: String, cx: &mut Context<Self>) {
         let key = self.sync_key(id);
         let stored = (key.clone(), sync_id.clone());
-        let _ = bridge::update_config(move |c| {
+        let _ = bridge::update_config(&self.sync.profile, move |c| {
             c.workspaces.insert(stored.0.clone(), stored.1.clone());
         });
         self.sync.config.workspaces.insert(key, sync_id);
@@ -493,7 +515,7 @@ impl Workbench {
     /// Syncs a workspace deleted elsewhere again, under a new id in the repository.
     fn sync_again(&mut self, id: u64, cx: &mut Context<Self>) {
         let key = self.sync_key(id);
-        let _ = bridge::update_config(|c| {
+        let _ = bridge::update_config(&self.sync.profile, |c| {
             c.workspaces.remove(&key);
         });
         self.sync.config.workspaces.remove(&key);
@@ -557,11 +579,17 @@ impl Workbench {
         self.sync.running = true;
         self.sync.status = Status::Syncing;
         cx.notify();
+        let profile = self.sync.profile.clone();
         let retry =
             (request.workspaces.iter().filter(|w| w.state == WorkspaceState::Deleted).cloned().collect::<Vec<_>>(), request.purge.clone());
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { bridge::sync(&request) }).await;
+            let synced = profile.clone();
+            let result = cx.background_spawn(async move { bridge::sync(&synced, &request) }).await;
             let _ = this.update(cx, |this, cx| {
+                // The window moved to another account meanwhile: this says nothing about that one.
+                if this.sync.profile != profile {
+                    return;
+                }
                 this.sync.running = false;
                 match result {
                     Ok(outcome) => {
@@ -585,7 +613,7 @@ impl Workbench {
                             this.sync.message = Some((tf(cx, "sync.sqlite_copy_failed", &[("reason", &reason)]), true));
                         }
                         // With the ids handed out in this pass.
-                        this.sync.config = bridge::load_config();
+                        this.sync.config = bridge::load_config(&this.sync.profile);
                         this.sync.status = Status::Synced;
                         this.sync.backoff_ms = 0;
                         this.sync.retry = None;
@@ -647,7 +675,7 @@ impl Workbench {
 
     /// Turns the SQLite copy of a git sync on (filled by a sync right away) or off (the file stays).
     fn set_sqlite_copy(&mut self, on: bool, cx: &mut Context<Self>) {
-        let _ = bridge::update_config(|c| c.sqlite_copy = on);
+        let _ = bridge::update_config(&self.sync.profile, |c| c.sqlite_copy = on);
         self.sync.config.sqlite_copy = on;
         if on {
             self.sync_now(cx);
@@ -656,7 +684,7 @@ impl Workbench {
     }
 
     fn set_sync_settings(&mut self, on: bool, cx: &mut Context<Self>) {
-        let _ = bridge::update_config(|c| c.settings = on);
+        let _ = bridge::update_config(&self.sync.profile, |c| c.settings = on);
         self.sync.config.settings = on;
         if on {
             self.sync_now(cx);
@@ -693,11 +721,13 @@ impl Workbench {
             // again on the next sync instead of being taken for done.
             if applied {
                 let changed_at = incoming.changed_at;
-                let _ = cx.background_spawn(async move { bridge::settings::applied(&changed_at, env!("CARGO_PKG_VERSION")) }).await;
+                let profile = this.update(cx, |this, _| this.sync.profile.clone()).unwrap_or_default();
+                let _ =
+                    cx.background_spawn(async move { bridge::settings::applied(&profile, &changed_at, env!("CARGO_PKG_VERSION")) }).await;
             }
             let _ = this.update(cx, |this, cx| {
                 this.sync.applying_settings = false;
-                this.sync.config = bridge::load_config();
+                this.sync.config = bridge::load_config(&this.sync.profile);
                 if let Some(scope) = this.sync.again.take() {
                     this.run_sync(scope, cx);
                 }
@@ -807,8 +837,9 @@ impl Workbench {
             session: entry.id,
             to,
         };
+        let profile = self.sync.profile.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { agentty_bridge::sync::restore::share_context(&request) }).await;
+            let result = cx.background_spawn(async move { agentty_bridge::sync::restore::share_context(&profile, &request) }).await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(prompt) => {
                     pane.update(cx, |view, _| view.insert_text(&prompt));
@@ -914,8 +945,9 @@ impl Workbench {
         };
         self.sync.popover_open = false;
         self.show_toast(t(cx, "sync.restoring"), cx);
+        let profile = self.sync.profile.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { agentty_bridge::sync::restore::restore(&request) }).await;
+            let result = cx.background_spawn(async move { agentty_bridge::sync::restore::restore(&profile, &request) }).await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(restored) => {
                     let spec = LaunchSpec::resume(restored.agent, restored.id.clone(), restored.title.clone(), restored.cwd.clone());
@@ -935,10 +967,10 @@ impl Workbench {
                                 let key = format!("{}:{}", this.slot, ws.id);
                                 if entry.plugin.is_none() {
                                     let sync_id = entry.sync_id.clone();
-                                    let _ = bridge::update_config(move |c| {
+                                    let _ = bridge::update_config(&this.sync.profile, move |c| {
                                         c.workspaces.insert(key, sync_id);
                                     });
-                                    this.sync.config = bridge::load_config();
+                                    this.sync.config = bridge::load_config(&this.sync.profile);
                                 }
                             }
                             this.persist(cx);
@@ -1540,13 +1572,14 @@ impl Workbench {
         self.sync.connecting = true;
         self.sync.message = None;
         cx.notify();
+        let profile = self.sync.profile.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { bridge::connect(remote) }).await;
+            let result = cx.background_spawn(async move { bridge::connect(&profile, remote) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.sync.connecting = false;
                 match result {
                     Ok(outcome) => {
-                        this.sync.config = bridge::load_config();
+                        this.sync.config = bridge::load_config(&this.sync.profile);
                         this.sync.status = Status::Ready;
                         this.sync.message = Some((
                             match outcome {
@@ -1576,11 +1609,12 @@ impl Workbench {
 
     fn set_transport(&mut self, ssh: bool, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { bridge::set_github_ssh(ssh) }).await;
+            let profile = this.update(cx, |this, _| this.sync.profile.clone()).unwrap_or_default();
+            let result = cx.background_spawn(async move { bridge::set_github_ssh(&profile, ssh) }).await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
-                        this.sync.config = bridge::load_config();
+                        this.sync.config = bridge::load_config(&this.sync.profile);
                         this.sync.message = None;
                     }
                     Err(err) => this.sync.message = Some((format!("{err:#}"), true)),
@@ -1617,7 +1651,7 @@ impl Workbench {
     }
 
     fn set_sync_paused(&mut self, paused: bool, cx: &mut Context<Self>) {
-        let _ = bridge::update_config(|c| c.paused = paused);
+        let _ = bridge::update_config(&self.sync.profile, |c| c.paused = paused);
         self.sync.config.paused = paused;
         self.sync.status = if paused { Status::Paused } else { Status::Ready };
         if !paused {
@@ -1628,11 +1662,12 @@ impl Workbench {
 
     fn disconnect_sync(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { bridge::disconnect() }).await;
+            let profile = this.update(cx, |this, _| this.sync.profile.clone()).unwrap_or_default();
+            let result = cx.background_spawn(async move { bridge::disconnect(&profile) }).await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
-                        this.sync.config = bridge::load_config();
+                        this.sync.config = bridge::load_config(&this.sync.profile);
                         this.sync.overview = Overview::default();
                         this.sync.computer = Default::default();
                         this.sync.status = Status::Off;
@@ -1666,7 +1701,7 @@ impl Workbench {
                 let name = input.read(cx).text().trim().to_string();
                 if !name.is_empty() {
                     let saved = name.clone();
-                    let _ = bridge::update_config(move |c| c.device_name = saved);
+                    let _ = bridge::update_config(&this.sync.profile, move |c| c.device_name = saved);
                     this.sync.config.device_name = name;
                 }
             }
@@ -1676,6 +1711,14 @@ impl Workbench {
     }
 
     pub(super) fn render_sync_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let account = self
+            .window_account_label()
+            .map(|name| div().mb_3().t_small().text_color(hex(Chrome::MUTED)).child(tf(cx, "sync.account_only", &[("name", &name)])));
+        let body = self.render_sync_settings_body(window, cx);
+        div().flex().flex_col().children(account).child(body)
+    }
+
+    fn render_sync_settings_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         // As wide as the box it is put in (not as wide as its text), clipped to it: a long URL
         // stays in its field instead of running over the button beside it.
         let field = |input: Entity<TextInput>| {
@@ -1771,7 +1814,7 @@ impl Workbench {
                 // A git repository can also leave a copy of everything in the SQLite file.
                 _ => {
                     let copy = self.sync.config.sqlite_copy;
-                    let file = agentty_bridge::sync::default_sqlite_file();
+                    let file = self.sync.profile.default_sqlite_file();
                     let size = std::fs::metadata(&file).map(|m| m.len()).ok();
                     let hint = match size {
                         Some(size) => tf(cx, "sync.sqlite_copy_hint_size", &[("file", &sqlite_label(&file)), ("size", &human_size(size))]),
@@ -2002,7 +2045,7 @@ impl Workbench {
         let busy = self.sync.connecting;
         match method {
             Method::Sqlite => {
-                let file = agentty_bridge::sync::default_sqlite_file();
+                let file = self.sync.profile.default_sqlite_file();
                 let remote = Remote::Sqlite { path: file.to_string_lossy().into_owned() };
                 let exists = file.is_file();
                 setup = setup.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.sqlite_body"))).child(row_with_hint(
@@ -2203,6 +2246,7 @@ fn sync_error_text(err: &SyncError, cx: &gpui::App) -> String {
         SyncError::Public => t(cx, "sync.status.public").to_string(),
         SyncError::Busy => t(cx, "sync.busy").to_string(),
         SyncError::NotSyncRepository => t(cx, "sync.not_sync_repo").to_string(),
+        SyncError::UsedByAnotherAccount => t(cx, "sync.used_by_another_account").to_string(),
         SyncError::Failed(reason) => reason.clone(),
     }
 }

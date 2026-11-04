@@ -745,12 +745,13 @@ impl Workbench {
         let known_id = if view.spec.kind == crate::launch::PaneKind::Shell { None } else { view.spec.session_id.clone() };
         let cwd = view.display_cwd();
         let launched = view.launched_at_ms;
+        let accounts = view.spec.accounts.clone();
         let title = view.display_title();
         let no_transcript = t(cx, "flow.no_transcript").to_string();
         let task = cx.background_spawn(async move {
             let id = match from_agent {
-                Agent::Claude => known_id.or_else(|| agentty_bridge::claude::find_recent(&cwd, launched)),
-                Agent::Codex => known_id.or_else(|| agentty_bridge::codex::find_recent(&cwd, launched)),
+                Agent::Claude => known_id.or_else(|| agentty_bridge::claude::find_recent(&cwd, launched, accounts.claude.as_deref())),
+                Agent::Codex => known_id.or_else(|| agentty_bridge::codex::find_recent(&cwd, launched, accounts.codex.as_deref())),
                 _ => None,
             }
             .ok_or_else(|| anyhow::anyhow!(no_transcript.clone()))?;

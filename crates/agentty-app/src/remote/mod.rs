@@ -1091,9 +1091,11 @@ fn tick(cx: &mut App) {
     let chats = if overview { hub.chats_asked() } else { Vec::new() };
     let mut board = board_due.then(board::Board::default);
     let (mut workspaces, mut sessions, mut automations) = (Vec::new(), Vec::new(), Vec::new());
+    let mut open_windows = Vec::new();
     for window in &windows {
         let _ = window.update(cx, |wb, _, cx| {
             if overview {
+                open_windows.push(wb.remote_window());
                 let (w, s) = wb.remote_overview(cx);
                 workspaces.extend(w);
                 sessions.extend(s);
@@ -1117,6 +1119,7 @@ fn tick(cx: &mut App) {
     if overview {
         fill_dev_servers(&mut workspaces, cx);
         hub.publish(workspaces, sessions, plugin_overview(&automations, cx));
+        hub.publish_windows(open_windows);
     }
     if let Some(board) = board {
         hub.publish_board(board);

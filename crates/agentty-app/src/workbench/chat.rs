@@ -1089,12 +1089,13 @@ impl Workbench {
             return;
         }
         state.usage_loading = true;
+        let accounts = self.accounts.clone();
         let task = cx.background_spawn(async move {
             let now = crate::ui::now_ms();
             agents
                 .into_iter()
                 .filter_map(|agent| {
-                    let limits = agentty_bridge::limits::latest(agent.agent(), now)?;
+                    let limits = agentty_bridge::limits::latest(agent.agent(), accounts.of_agent(agent.agent()), now)?;
                     let (label, window) = tightest(&limits)?;
                     Some((agent, Limit { label, used_percent: window.used_percent, resets_at: window.resets_at }))
                 })
@@ -1176,7 +1177,8 @@ impl Workbench {
         if look_up {
             state.finding_session = true;
             let (cwd, since) = (view.display_cwd(), view.agent_since_ms.unwrap_or(view.launched_at_ms));
-            let find = cx.background_spawn(async move { agentty_bridge::find_recent_except(agent, &cwd, since, &taken) });
+            let accounts = view.spec.accounts.clone();
+            let find = cx.background_spawn(async move { agentty_bridge::find_recent_except(agent, &cwd, since, &taken, &accounts) });
             cx.spawn(async move |this, cx| {
                 let found = find.await;
                 let _ = this.update(cx, |this, _| {
