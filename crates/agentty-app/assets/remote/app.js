@@ -34,6 +34,7 @@ const STRINGS = {
     fileError: { 403: "This file can't be opened from here.", 404: "Not found in this terminal's folder.", 413: "Too large to show here.", 415: "This kind of file can't be shown.", 0: "Couldn't open this file." },
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
+    chatSummary: "Summary", chatSummaryHint: "The earlier conversation, summarized for the agent to carry on. You didn't send this.",
     backgroundRunning: "{name}: running in the background…", backgroundMore: "+{n} more", chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
     devServers: "Dev servers", portOpen: "Open the server on port {port}", portOpening: "Opening…", portSlow: "The server didn't open in time. Try again.", portGone: "This server isn't running any more.", portFailed: "Couldn't open this server. Try again.",
     portErrors: { taken: "Tailscale already serves port {port} for something else.", funnel: "Port {port} is shared publicly with Tailscale Funnel, so Agentty won't open it.", enable: "Turn on HTTPS for your tailnet in the Tailscale admin console first.", failed: "Couldn't open this server. Try again." },
@@ -60,6 +61,7 @@ const STRINGS = {
     fileError: { 403: "여기서는 열 수 없는 파일입니다.", 404: "이 터미널의 폴더에서 찾을 수 없습니다.", 413: "너무 커서 여기서 보여 줄 수 없습니다.", 415: "보여 줄 수 없는 종류의 파일입니다.", 0: "파일을 열지 못했습니다." },
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
+    chatSummary: "요약", chatSummaryHint: "에이전트가 이어서 일하도록 이전 대화를 자동으로 요약한 내용입니다. 직접 보낸 메시지가 아닙니다.",
     backgroundRunning: "{name} 백그라운드 작업 처리 중…", backgroundMore: "외 {n}개", chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
     devServers: "개발 서버", portOpen: "{port} 포트 서버 열기", portOpening: "여는 중…", portSlow: "서버가 제때 열리지 않았습니다. 다시 시도해 주세요.", portGone: "이 서버는 더 이상 실행 중이 아닙니다.", portFailed: "이 서버를 열지 못했습니다. 다시 시도해 주세요.",
     portErrors: { taken: "Tailscale이 {port} 포트를 이미 다른 용도로 쓰고 있습니다.", funnel: "{port} 포트가 Tailscale Funnel로 공개되어 있어 Agentty가 열지 않습니다.", enable: "먼저 Tailscale 관리 콘솔에서 tailnet의 HTTPS를 켜 주세요.", failed: "이 서버를 열지 못했습니다. 다시 시도해 주세요." },
@@ -86,6 +88,7 @@ const STRINGS = {
     fileError: { 403: "ここからは開けないファイルです。", 404: "このターミナルのフォルダに見つかりません。", 413: "大きすぎて表示できません。", 415: "表示できない種類のファイルです。", 0: "ファイルを開けませんでした。" },
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
+    chatSummary: "要約", chatSummaryHint: "エージェントが作業を続けられるよう、これまでの会話を自動で要約したものです。あなたが送ったメッセージではありません。",
     backgroundRunning: "{name}: バックグラウンドで処理中…", backgroundMore: "他 {n} 件", chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
     devServers: "開発サーバー", portOpen: "ポート {port} のサーバーを開く", portOpening: "開いています…", portSlow: "サーバーが時間内に開きませんでした。もう一度お試しください。", portGone: "このサーバーはもう動いていません。", portFailed: "このサーバーを開けませんでした。もう一度お試しください。",
     portErrors: { taken: "Tailscale はポート {port} を既に別の用途で使っています。", funnel: "ポート {port} は Tailscale Funnel で公開されているため、Agentty は開きません。", enable: "先に Tailscale の管理コンソールで tailnet の HTTPS をオンにしてください。", failed: "このサーバーを開けませんでした。もう一度お試しください。" },
@@ -112,6 +115,7 @@ const STRINGS = {
     fileError: { 403: "无法从这里打开此文件。", 404: "在此终端的文件夹中找不到。", 413: "文件太大，无法在此显示。", 415: "无法显示此类文件。", 0: "无法打开此文件。" },
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
+    chatSummary: "摘要", chatSummaryHint: "为了让智能体继续工作而自动生成的此前对话摘要，并非你发送的消息。",
     backgroundRunning: "{name}：后台处理中…", backgroundMore: "另外 {n} 个", chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
     devServers: "开发服务器", portOpen: "打开端口 {port} 上的服务器", portOpening: "正在打开…", portSlow: "服务器未能及时打开，请重试。", portGone: "这个服务器已不再运行。", portFailed: "无法打开这个服务器，请重试。",
     portErrors: { taken: "Tailscale 已将端口 {port} 用于其他用途。", funnel: "端口 {port} 已通过 Tailscale Funnel 公开，Agentty 不会打开它。", enable: "请先在 Tailscale 管理控制台中为 tailnet 开启 HTTPS。", failed: "无法打开这个服务器，请重试。" },
@@ -138,6 +142,7 @@ const STRINGS = {
     fileError: { 403: "Diese Datei kann von hier aus nicht geöffnet werden.", 404: "Im Ordner dieses Terminals nicht gefunden.", 413: "Zu groß, um hier angezeigt zu werden.", 415: "Diese Art von Datei kann nicht angezeigt werden.", 0: "Diese Datei konnte nicht geöffnet werden." },
     pstate: { running: "Läuft", starting: "Startet", stopped: "Gestoppt", failed: "Mit Fehler gestoppt", consent: "Wartet auf dein OK", off: "Aus" },
     astate: { working: "Arbeitet", idle: "Bereit", error: "Fehler" },
+    chatSummary: "Zusammenfassung", chatSummaryHint: "Das bisherige Gespräch, automatisch zusammengefasst, damit der Agent weitermachen kann. Du hast das nicht gesendet.",
     backgroundRunning: "{name}: läuft im Hintergrund …", backgroundMore: "+{n} weitere", chat: "Chat", chatHint: "Nachricht an den leitenden Agenten …", chatEmpty: "Schreib dem leitenden Agenten. Er plant die Arbeit und startet Helfer auf dem Mac; ihre Terminals stehen in der Liste der Bereiche.", leadWaits: "Der leitende Agent wartet in seinem Terminal auf dich.",
     devServers: "Entwicklungsserver", portOpen: "Server auf Port {port} öffnen", portOpening: "Wird geöffnet …", portSlow: "Der Server hat sich nicht rechtzeitig geöffnet. Versuche es erneut.", portGone: "Dieser Server läuft nicht mehr.", portFailed: "Dieser Server konnte nicht geöffnet werden. Versuche es erneut.",
     portErrors: { taken: "Tailscale stellt Port {port} schon für etwas anderes bereit.", funnel: "Port {port} wird mit Tailscale Funnel öffentlich geteilt, deshalb öffnet Agentty ihn nicht.", enable: "Schalte zuerst HTTPS für dein Tailnet in der Tailscale-Verwaltungskonsole ein.", failed: "Dieser Server konnte nicht geöffnet werden. Versuche es erneut." },
@@ -1031,9 +1036,21 @@ function renderChat() {
   if (following) log.scrollTop = log.scrollHeight;
 }
 
+/// What the agent carried on from when its context filled up: nobody sent it, so it stays closed.
+function summaryEntry(entry) {
+  const box = el("details", "msg summary");
+  const head = el("summary", "");
+  head.append(el("b", "", T.chatSummary), el("span", "", T.chatSummaryHint));
+  const text = el("div", "text");
+  appendLinked(text, entry.text || "");
+  box.append(head, text);
+  return box;
+}
+
 /// One entry: the user's bubble, the lead's reply (tool steps folded to a few muted lines), or a
 /// worker's report.
 function chatEntry(entry) {
+  if (entry.role === "summary") return summaryEntry(entry);
   const role = ["user", "lead", "report"].includes(entry.role) ? entry.role : "lead";
   const box = el("div", "msg " + role);
   const textBox = (text) => {

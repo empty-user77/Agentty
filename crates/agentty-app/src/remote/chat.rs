@@ -129,6 +129,7 @@ impl Follow {
                     self.said = turns[turns.len().saturating_sub(MAX_ENTRIES)..]
                         .iter()
                         .map(|turn| match turn.role {
+                            Role::Summary => Entry { role: Role::Summary, text: turn.text.clone(), blocks: Vec::new() },
                             Role::User => Entry { role: Role::User, text: turn.text.clone(), blocks: Vec::new() },
                             Role::Assistant => {
                                 Entry { role: Role::Assistant, text: String::new(), blocks: vec![Block::Text(turn.text.clone())] }
@@ -252,6 +253,7 @@ fn entry_rows(entry: &Entry) -> Vec<Value> {
             .into_iter()
             .map(|(role, text)| json!({ "role": role, "text": truncate_chars(&text, MAX_TEXT) }))
             .collect(),
+        Role::Summary => vec![json!({ "role": "summary", "text": truncate_chars(&entry.text, MAX_TEXT) })],
         Role::Assistant if entry.blocks.is_empty() => Vec::new(),
         Role::Assistant => vec![json!({ "role": "assistant", "blocks": entry.blocks.iter().map(block_json).collect::<Vec<_>>() })],
     }

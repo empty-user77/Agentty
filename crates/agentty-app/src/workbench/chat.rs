@@ -82,8 +82,8 @@ const REMOTE_ENTRIES: usize = 40;
 const REMOTE_TEXT: usize = 3_000;
 /// Tool steps of one reply shown before the rest fold into a count.
 const TOOL_STEPS_SHOWN: usize = 3;
-/// The widest the conversation runs in a wide pane: lines stay readable, as in a chat app.
-const CHAT_COLUMN: f32 = 920.;
+/// The widest the conversation runs in a wide pane. Narrower panes use all they have.
+const CHAT_COLUMN: f32 = 1400.;
 
 /// What the lead is told before the user's first message. English, like every prompt Agentty
 /// ships; the last line names the language to talk in.
@@ -128,6 +128,8 @@ pub enum ChatItem {
     },
     /// A reply with its steps apart (chat view's plain chats).
     Reply(Arc<Vec<agentty_bridge::chat_log::Block>>),
+    /// What the agent carried on from when its context filled up. Nobody sent it: closed until asked.
+    Summary(String),
 }
 
 pub struct ChatState {
@@ -297,6 +299,7 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
                 items.extend(user_entries(text));
             }
             Role::Assistant => items.push(ChatItem::Lead(turn.text.clone())),
+            Role::Summary => items.push(ChatItem::Summary(turn.text.trim().to_string())),
         }
     }
     (items, briefed)
@@ -318,6 +321,7 @@ fn entry_rows(entry: agentty_bridge::chat_log::Entry) -> Vec<ChatItem> {
         }
         Role::Assistant if !entry.blocks.is_empty() => vec![ChatItem::Reply(Arc::new(entry.blocks))],
         Role::Assistant => Vec::new(),
+        Role::Summary => vec![ChatItem::Summary(entry.text.trim().to_string())],
     }
 }
 
@@ -1878,6 +1882,7 @@ impl Workbench {
                     ChatEntry { role: "report", text: truncate(&text, REMOTE_TEXT) }
                 }
                 ChatItem::Reply(blocks) => ChatEntry { role: "lead", text: truncate(&reply_text(blocks), REMOTE_TEXT) },
+                ChatItem::Summary(text) => ChatEntry { role: "summary", text: truncate(text, REMOTE_TEXT) },
             })
             .collect();
         Some(ChatInfo {
@@ -2530,6 +2535,7 @@ fn said_rows(turns: &[Turn]) -> Vec<ChatItem> {
                 rows.push(ChatItem::Reply(Arc::new(vec![agentty_bridge::chat_log::Block::Text(turn.text.trim().to_string())])))
             }
             Role::Assistant => {}
+            Role::Summary => rows.push(ChatItem::Summary(turn.text.trim().to_string())),
         }
     }
     rows
@@ -2698,6 +2704,47 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
             .child(div().flex_1().min_w_0().pt_0p5().child(lead_block(text, cx)))
             .into_any_element(),
         ChatItem::Reply(blocks) => chat_view::render_reply(index, blocks, rows, cx),
+        // Not something the user wrote, and long: a labelled row that opens to it.
+        ChatItem::Summary(text) => {
+            let key = format!("summary:{index}");
+            let open = rows.is_open(&key);
+            let toggle = rows.clone();
+            let header = div()
+                .id(SharedString::from(format!("chat-summary-{index}")))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .child(icon("scroll-text", 14., hex(Chrome::MUTED)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .t_small()
+                        .font_weight(crate::theme::EMPHASIS)
+                        .text_color(hex(Chrome::FOREGROUND))
+                        .child(t(cx, "chat.summary")),
+                )
+                .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "chat.summary_hint")))
+                .child(icon(if open { "chevron-down" } else { "chevron-right" }, 12., hex(Chrome::MUTED)))
+                .on_click(move |event, window, cx| toggle.toggle(index, &key, event.position().y, window, cx));
+            row.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(header)
+                    .when(open, |d| d.child(div().px_3().pb_3().t_small().text_color(hex(Chrome::FOREGROUND)).child(lead_block(text, cx)))),
+            )
+            .into_any_element()
+        }
         // Not something the user wrote: on the reply's side, saying who sent it.
         ChatItem::Peer { from, text } => {
             let title = match from {
@@ -2853,6 +2900,21 @@ mod tests {
 
     fn turn(role: Role, text: &str) -> Turn {
         Turn { role, text: text.into() }
+    }
+
+    #[test]
+    fn a_compaction_summary_is_its_own_row() {
+        let (items, _) =
+            chat_items(&[turn(Role::User, "hello"), turn(Role::Summary, " This session is being continued. "), turn(Role::User, "thanks")]);
+        assert_eq!(
+            items,
+            vec![
+                ChatItem::User("hello".into()),
+                ChatItem::Summary("This session is being continued.".into()),
+                ChatItem::User("thanks".into())
+            ]
+        );
+        assert_eq!(said_rows(&[turn(Role::Summary, "s")]), vec![ChatItem::Summary("s".into())]);
     }
 
     #[test]

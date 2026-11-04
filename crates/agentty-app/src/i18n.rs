@@ -758,6 +758,8 @@ strings! {
     "chat.menu_copy_message" => ["Copy message", "메시지 복사", "メッセージをコピー", "复制消息", "Nachricht kopieren"],
     "chat.menu_copy_markdown" => ["Copy message as Markdown", "메시지를 마크다운으로 복사", "メッセージを Markdown でコピー", "以 Markdown 复制消息", "Nachricht als Markdown kopieren"],
     "status.mcp_reconnect_none" => ["Bring a Claude Code pane to the front to reconnect", "다시 연결하려면 Claude Code 창을 앞에 두세요", "再接続するには Claude Code のペインを前面にしてください", "要重新连接，请将 Claude Code 窗格置于前台", "Zum Neuverbinden einen Claude-Code-Bereich nach vorn holen"],
+    "chat.summary" => ["Summary", "요약", "要約", "摘要", "Zusammenfassung"],
+    "chat.summary_hint" => ["The earlier conversation, summarized for the agent to carry on. You didn't send this.", "에이전트가 이어서 일하도록 이전 대화를 자동으로 요약한 내용입니다. 직접 보낸 메시지가 아닙니다.", "エージェントが作業を続けられるよう、これまでの会話を自動で要約したものです。あなたが送ったメッセージではありません。", "为了让智能体继续工作而自动生成的此前对话摘要，并非你发送的消息。", "Das bisherige Gespräch, automatisch zusammengefasst, damit der Agent weitermachen kann. Du hast das nicht gesendet."],
     "chat.copied" => ["Copied", "복사되었습니다", "コピーしました", "已复制", "Kopiert"],
     "chat.steps_more" => ["{n} earlier steps", "이전 단계 {n}개", "それ以前の {n} ステップ", "之前的 {n} 个步骤", "{n} frühere Schritte"],
     "chat.show_chat" => ["Chat", "채팅", "チャット", "聊天", "Chat"],

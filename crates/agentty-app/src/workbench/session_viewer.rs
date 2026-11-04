@@ -195,6 +195,24 @@ impl Workbench {
 }
 
 fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, cx: &App) -> AnyElement {
+    // Nobody wrote it, and it repeats the conversation: a line that says what stands here.
+    if turn.role == Role::Summary {
+        return div()
+            .id(SharedString::from(format!("turn-{index}")))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .t_small()
+            .text_color(hex(Chrome::MUTED))
+            .child(icon("scroll-text", 14., hex(Chrome::MUTED)))
+            .child(
+                div().flex_shrink_0().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(t(cx, "chat.summary")),
+            )
+            .child(div().min_w_0().truncate().child(t(cx, "chat.summary_hint")))
+            .into_any_element();
+    }
     let user = turn.role == Role::User;
     let mut text = div().flex().flex_col().gap_0p5().t_body().text_color(hex(if user { Chrome::BRIGHT } else { Chrome::FOREGROUND }));
     for line in turn.text.lines().take(400) {

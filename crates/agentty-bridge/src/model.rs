@@ -103,6 +103,9 @@ pub struct SessionInfo {
 pub enum Role {
     User,
     Assistant,
+    /// What the agent wrote to carry on when its context filled up. It stands where a message of
+    /// the user's would, but nobody sent it.
+    Summary,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -223,7 +223,10 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
             cwd = v["cwd"].as_str().map(str::to_string);
         }
         let turn = match v["type"].as_str() {
-            Some("user") => said_text(&v).map(|text| Turn { role: Role::User, text }),
+            Some("user") => match compact_summary(&v) {
+                Some(text) => Some(Turn { role: Role::Summary, text }),
+                None => said_text(&v).map(|text| Turn { role: Role::User, text }),
+            },
             // A message typed while a turn ran is recorded as an attachment, not as a user entry.
             Some("attachment") => queued_text(&v).map(|text| Turn { role: Role::User, text }),
             Some("assistant") => assistant_text(&v).map(|text| Turn { role: Role::Assistant, text }),
@@ -245,7 +248,19 @@ pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
 
 /// Text the human typed. Tool results and harness-injected wrappers are excluded.
 pub(crate) fn user_text(v: &Value) -> Option<String> {
+    if compact_summary(v).is_some() {
+        return None;
+    }
     human_text(&content_text(&v["message"]["content"])?)
+}
+
+/// The summary Claude Code puts in a transcript when it compacts a conversation: a line of type
+/// `user`, marked as not coming from the user.
+pub(crate) fn compact_summary(v: &Value) -> Option<String> {
+    if v["isCompactSummary"].as_bool() != Some(true) {
+        return None;
+    }
+    content_text(&v["message"]["content"]).filter(|text| !text.trim().is_empty())
 }
 
 /// What a message says: its text, or its blocks' with pictures marked.
@@ -559,6 +574,18 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_compaction_summary_is_nobodys_message() {
+        let line = serde_json::json!({ "type": "user", "isCompactSummary": true, "isVisibleInTranscriptOnly": true,
+            "message": { "role": "user", "content": "This session is being continued from a previous conversation." } });
+        assert_eq!(super::user_text(&line), None, "not a prompt: titles and last prompts leave it out");
+        assert_eq!(super::said_text(&line), None);
+        assert_eq!(super::compact_summary(&line).as_deref(), Some("This session is being continued from a previous conversation."));
+        let said = serde_json::json!({ "type": "user", "message": { "role": "user", "content": "hello" } });
+        assert_eq!(super::compact_summary(&said), None);
+        assert_eq!(super::user_text(&said).as_deref(), Some("hello"));
+    }
+
     #[test]
     fn a_command_the_user_ran_reads_as_they_typed_it() {
         let ran =
