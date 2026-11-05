@@ -91,6 +91,32 @@ jobs:
             if (-not $value) { throw "$name is not set in the repository's secrets" }
             if (-not $binary.Contains($value)) { throw "$name is not in the binary" }
           }
+      # The installer really installed, twice: the second run goes over the first, as an update does. Without
+      # agentty.com a bare `agentty` still works but stops waiting, which no other check would notice.
+      - name: The installer installs what a terminal runs
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $setup = (Resolve-Path "dist\Agentty-$version-windows-x64-setup.exe").Path
+          $dir = Join-Path $env:RUNNER_TEMP 'agentty-install'
+          foreach ($round in 1, 2) {
+            $run = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir" -Wait -PassThru
+            if ($run.ExitCode -ne 0) { throw "install $round exited with $($run.ExitCode)" }
+            foreach ($file in 'agentty.exe', 'agentty.com') {
+              if (-not (Test-Path -LiteralPath (Join-Path $dir $file))) { throw "install $round left no $file" }
+            }
+            if (Get-ChildItem -Path $dir -Filter '*.old-*') { throw "install $round left a previous version behind" }
+          }
+          $env:Path = "$dir;$env:Path"
+          $found = (Get-Command agentty | Select-Object -First 1).Source
+          if ($found -ne (Join-Path $dir 'agentty.com')) { throw "a bare agentty runs $found" }
+          $out = agentty --version
+          if ($LASTEXITCODE -ne 0) { throw "agentty --version exited with $LASTEXITCODE" }
+          if ("$out" -notlike "*$version*") { throw "agentty --version printed '$out', expected $version" }
+          # Outside an Agentty terminal this command fails: its exit code has to come through.
+          Remove-Item Env:AGENTTY_SOCKET -ErrorAction SilentlyContinue
+          agentty browser title 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'a failed command exited with 0' }
+          exit 0
       # A pull request only checks that the packages build; a tag or a run by hand keeps them for
       # scripts/fetch-release-packages.sh.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

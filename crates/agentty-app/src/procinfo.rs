@@ -100,6 +100,28 @@ pub fn parent_pid(_pid: u32) -> Option<u32> {
     None
 }
 
+/// What a process has used so far (Windows; elsewhere `ps` says).
+#[cfg(windows)]
+pub struct ProcessUsage {
+    /// Kernel and user time together, in 100-nanosecond units.
+    pub cpu_100ns: u64,
+    pub memory_bytes: u64,
+    pub running_seconds: u64,
+    pub read_bytes: u64,
+    pub written_bytes: u64,
+}
+
+/// Every process: its pid, its parent and its program's file name.
+#[cfg(windows)]
+pub fn process_list() -> Vec<(u32, u32, String)> {
+    windows::process_list()
+}
+
+#[cfg(windows)]
+pub fn process_usage(pid: u32) -> Option<ProcessUsage> {
+    windows::process_usage(pid)
+}
+
 /// ConPTY has no foreground process group; callers fall back to the shell's pid.
 #[cfg(not(unix))]
 pub fn foreground_pid(_tty_fd: TtyFd) -> Option<u32> {
@@ -900,7 +922,11 @@ mod windows {
     }
 
     fn snapshot() -> HashMap<u32, u32> {
-        let mut table = HashMap::new();
+        process_list().into_iter().map(|(pid, parent, _)| (pid, parent)).collect()
+    }
+
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        let mut table = Vec::new();
         // SAFETY: a process snapshot has no preconditions; failure returns INVALID_HANDLE_VALUE.
         let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if raw == INVALID_HANDLE_VALUE {
@@ -911,11 +937,45 @@ mod windows {
         // SAFETY: `entry` is a PROCESSENTRY32W with dwSize set, as both calls require.
         let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
         while more {
-            table.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+            let name = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
+            table.push((entry.th32ProcessID, entry.th32ParentProcessID, String::from_utf16_lossy(&entry.szExeFile[..name])));
             // SAFETY: as above.
             more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
         }
         table
+    }
+
+    pub fn process_usage(pid: u32) -> Option<super::ProcessUsage> {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+        use windows_sys::Win32::System::Threading::{GetProcessIoCounters, GetProcessTimes, IO_COUNTERS};
+        let number = |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let empty = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut created, mut ended, mut kernel, mut user, mut now) = (empty, empty, empty, empty, empty);
+        // SAFETY: all four out-parameters are valid FILETIMEs for the call to write.
+        if unsafe { GetProcessTimes(process.0, &mut created, &mut ended, &mut kernel, &mut user) } == 0 {
+            return None;
+        }
+        // SAFETY: `now` is a valid FILETIME for the call to write.
+        unsafe { GetSystemTimeAsFileTime(&mut now) };
+        // SAFETY: zeroed is a valid value of this plain struct, whose size the call is told.
+        let mut memory: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        memory.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        // SAFETY: `memory` is `cb` bytes long. On failure it stays zero: no figure rather than no row.
+        unsafe { K32GetProcessMemoryInfo(process.0, &mut memory, memory.cb) };
+        // SAFETY: zeroed is a valid value of this plain struct.
+        let mut io: IO_COUNTERS = unsafe { std::mem::zeroed() };
+        // SAFETY: `io` is a valid IO_COUNTERS to write. On failure it stays zero, as above.
+        unsafe { GetProcessIoCounters(process.0, &mut io) };
+        Some(super::ProcessUsage {
+            cpu_100ns: number(kernel) + number(user),
+            memory_bytes: memory.WorkingSetSize as u64,
+            running_seconds: number(now).saturating_sub(number(created)) / 10_000_000,
+            read_bytes: io.ReadTransferCount,
+            written_bytes: io.WriteTransferCount,
+        })
     }
 
     pub fn executable_path(pid: u32) -> Option<PathBuf> {

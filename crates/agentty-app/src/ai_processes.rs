@@ -21,7 +21,7 @@ impl ProcRow {
     /// Program name: the executable's file name.
     pub fn name(&self) -> String {
         let program = self.command.split_whitespace().next().unwrap_or_default();
-        program.rsplit('/').next().unwrap_or(program).to_string()
+        program.rsplit(['/', '\\']).next().unwrap_or(program).to_string()
     }
 }
 
@@ -47,6 +47,7 @@ pub struct AgentProcess {
 }
 
 /// Parses `ps -axww -o pid=,ppid=,pcpu=,rss=,state=,etime=,tty=,command=`.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn parse_ps_rows(output: &str) -> Vec<ProcRow> {
     output
         .lines()
@@ -73,11 +74,11 @@ pub fn parse_ps_rows(output: &str) -> Vec<ProcRow> {
 
 /// Quick filter before the (syscall-backed) exact check.
 fn maybe_agent(command: &str) -> bool {
-    let lower = command.to_lowercase();
+    let lower = command.to_lowercase().replace('\\', "/");
     ["claude", "codex", "ollama", "@google/gemini-cli", "opencode", "aider"].iter().any(|k| lower.contains(k))
-        || crate::agents::OTHER_AGENTS
-            .iter()
-            .any(|a| lower.split_whitespace().take(3).any(|word| word.rsplit('/').next() == Some(a.binary)))
+        || crate::agents::OTHER_AGENTS.iter().any(|a| {
+            lower.split_whitespace().take(3).any(|word| word.rsplit('/').next().map(|file| file.trim_end_matches(".exe")) == Some(a.binary))
+        })
 }
 
 /// Which agent a process is, from its executable and arguments.
@@ -86,7 +87,7 @@ fn classify(row: &ProcRow) -> Option<&'static str> {
         return None;
     }
     let path = crate::procinfo::executable_path(row.pid)?;
-    if path.file_name().is_some_and(|n| n == "ollama") {
+    if path.file_stem().is_some_and(|n| n == "ollama") {
         return Some("ollama");
     }
     let args = crate::procinfo::process_args(row.pid);
@@ -160,12 +161,83 @@ fn disk_io(pid: u32) -> (u64, u64) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn disk_io(pid: u32) -> (u64, u64) {
+    crate::procinfo::process_usage(pid).map_or((0, 0), |usage| (usage.read_bytes, usage.written_bytes))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn disk_io(_pid: u32) -> (u64, u64) {
     (0, 0)
 }
 
+/// `[[dd-]hh:]mm:ss`, as `ps` writes elapsed time.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn format_elapsed(seconds: u64) -> String {
+    let (days, hours, minutes, seconds) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60, seconds % 60);
+    match (days, hours) {
+        (0, 0) => format!("{minutes:02}:{seconds:02}"),
+        (0, _) => format!("{hours:02}:{minutes:02}:{seconds:02}"),
+        _ => format!("{days}-{hours:02}:{minutes:02}:{seconds:02}"),
+    }
+}
+
+/// Windows has no `ps`: the process list with each program's name, and the command line of those
+/// that may be agents (a `node` or `python` is one only by what it runs).
+#[cfg(windows)]
+fn windows_rows() -> Vec<ProcRow> {
+    crate::procinfo::process_list()
+        .into_iter()
+        .map(|(pid, ppid, name)| {
+            let stem = name.to_lowercase();
+            let stem = stem.trim_end_matches(".exe");
+            let host = matches!(stem, "node" | "bun" | "deno" | "python" | "python3");
+            let args = if host || maybe_agent(&name) { crate::procinfo::process_args(pid) } else { Vec::new() };
+            let command = std::iter::once(name).chain(args.into_iter().skip(1)).collect::<Vec<_>>().join(" ");
+            ProcRow { pid, ppid, cpu: 0.0, rss_kb: 0, state: "S".into(), elapsed: "00:00".into(), tty: "console".into(), command }
+        })
+        .collect()
+}
+
+/// Fills in what a process uses, for the rows that belong to an agent's tree (asking every process
+/// on the machine, every two seconds, would be most of the work). CPU is what it used since the
+/// last sample, over one core, as `ps` counts it; since it started on the first sample.
+#[cfg(windows)]
+fn fill_windows_usage(rows: &mut [ProcRow], wanted: &std::collections::HashSet<u32>) {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST: Mutex<Option<HashMap<u32, (u64, Instant)>>> = Mutex::new(None);
+    let now = Instant::now();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = last.take().unwrap_or_default();
+    let mut seen = HashMap::new();
+    for row in rows.iter_mut().filter(|row| wanted.contains(&row.pid)) {
+        let Some(usage) = crate::procinfo::process_usage(row.pid) else { continue };
+        row.rss_kb = usage.memory_bytes / 1024;
+        row.elapsed = format_elapsed(usage.running_seconds);
+        let (used, over) = match previous.get(&row.pid) {
+            Some((before, at)) => (usage.cpu_100ns.saturating_sub(*before), now.duration_since(*at).as_secs_f64()),
+            None => (usage.cpu_100ns, usage.running_seconds as f64),
+        };
+        row.cpu = if over > 0.0 { (used as f64 / 100_000.0 / over) as f32 } else { 0.0 };
+        seen.insert(row.pid, (usage.cpu_100ns, now));
+    }
+    *last = Some(seen);
+}
+
 /// Every local AI agent process tree, busiest first.
+#[cfg(windows)]
+pub fn collect() -> Vec<AgentProcess> {
+    let own = std::process::id();
+    let mut rows: Vec<ProcRow> = windows_rows().into_iter().filter(|r| r.pid != own).collect();
+    let agents: HashMap<u32, &'static str> = rows.iter().filter_map(|r| Some((r.pid, classify(r)?))).collect();
+    let wanted = group(&rows, &agents).iter().flat_map(|g| g.tree.iter().map(|r| r.pid)).collect();
+    fill_windows_usage(&mut rows, &wanted);
+    finish(group(&rows, &agents))
+}
+
+/// Every local AI agent process tree, busiest first.
+#[cfg(not(windows))]
 pub fn collect() -> Vec<AgentProcess> {
     let output = std::process::Command::new("/bin/ps")
         .args(["-axww", "-o", "pid=,ppid=,pcpu=,rss=,state=,etime=,tty=,command="])
@@ -176,7 +248,11 @@ pub fn collect() -> Vec<AgentProcess> {
     let own = std::process::id();
     let rows: Vec<ProcRow> = parse_ps_rows(&output).into_iter().filter(|r| r.pid != own).collect();
     let agents: HashMap<u32, &'static str> = rows.iter().filter_map(|r| Some((r.pid, classify(r)?))).collect();
-    let mut groups = group(&rows, &agents);
+    finish(group(&rows, &agents))
+}
+
+/// What the process list doesn't say: disk use and working folders.
+fn finish(mut groups: Vec<AgentProcess>) -> Vec<AgentProcess> {
     for process in &mut groups {
         for row in &process.tree {
             let (read, write) = disk_io(row.pid);
@@ -201,6 +277,30 @@ mod tests {
   600     1   0.0  90000 T       02:00:00 ??       /opt/homebrew/bin/codex exec
   700     1   0.0   1000 S       00:10:00 ttys002  vim notes.md
 ";
+
+    #[test]
+    fn elapsed_reads_as_ps_writes_it() {
+        assert_eq!(format_elapsed(5), "00:05");
+        assert_eq!(format_elapsed(3_725), "01:02:05");
+        assert_eq!(format_elapsed(2 * 86_400 + 3_725), "2-01:02:05");
+    }
+
+    #[test]
+    fn windows_programs_are_recognized() {
+        assert!(maybe_agent(r"node.exe C:\Users\me\AppData\Roaming\npm\node_modules\@google\gemini-cli\dist\index.js"));
+        assert!(maybe_agent("claude.exe --resume"));
+        let row = ProcRow {
+            pid: 1,
+            ppid: 0,
+            cpu: 0.0,
+            rss_kb: 0,
+            state: "S".into(),
+            elapsed: "00:00".into(),
+            tty: "console".into(),
+            command: r"C:\tools\claude.exe --resume".into(),
+        };
+        assert_eq!(row.name(), "claude.exe");
+    }
 
     #[test]
     fn parses_ps_rows() {

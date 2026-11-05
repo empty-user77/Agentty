@@ -1,0 +1,12 @@
+[package]
+name = "agentty-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Windows: `agentty.com`, the console program a terminal finds before the GUI-subsystem agentty.exe"
+
+[dependencies]

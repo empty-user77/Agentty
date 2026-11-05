@@ -85,7 +85,7 @@ if ($build -lt 17763) { throw "Agentty needs Windows 10 version 1809 (build 1776
 
 Stop-Agentty
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-foreach ($file in @('agentty.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.txt', 'install.ps1', 'install.cmd')) {
+foreach ($file in @('agentty.exe', 'agentty.com', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.txt', 'install.ps1', 'install.cmd')) {
     $from = Join-Path $Source $file
     if ((Test-Path -LiteralPath $from) -and ((Resolve-Path -LiteralPath $from).Path -ne (Join-Path $Dest $file))) {
         Copy-Item -LiteralPath $from -Destination $Dest -Force

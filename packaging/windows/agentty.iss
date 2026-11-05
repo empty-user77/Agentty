@@ -74,6 +74,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#BinDir}\agentty.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\agentty.com"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "{#BinDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -97,6 +98,7 @@ Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Agentty\command
 
 [UninstallDelete]
 Type: files; Name: "{app}\agentty.exe.old-*"
+Type: files; Name: "{app}\agentty.com.old-*"
 
 [Run]
 Filename: "{app}\agentty.exe"; Description: "{cm:LaunchProgram,Agentty}"; WorkingDir: "{%USERPROFILE}"; Flags: nowait postinstall skipifsilent; Check: not RelaunchRequested
@@ -109,8 +111,9 @@ const
   LegacyUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Agentty';
 
 var
-  { agentty.exe of the previous version, renamed aside while installing; empty when there was none. }
+  { agentty.exe and agentty.com of the previous version, renamed aside while installing; empty when there was none. }
   PreviousExe: String;
+  PreviousConsole: String;
   Installed: Boolean;
 
 function OpenProcess(DesiredAccess: DWORD; InheritHandle: BOOL; ProcessId: DWORD): THandle;
@@ -174,15 +177,28 @@ begin
     PreviousExe := '';
 end;
 
+{ A command an agent is running keeps agentty.com busy the same way. }
+procedure MoveConsoleAside;
+var
+  Exe: String;
+begin
+  Exe := ExpandConstant('{app}\agentty.com');
+  if not FileExists(Exe) then
+    Exit;
+  PreviousConsole := Exe + '.old-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
+  if not RenameFile(Exe, PreviousConsole) then
+    PreviousConsole := '';
+end;
+
 { After a successful install: removes executables renamed aside by this or earlier installs, except those that still run
   (deleting them fails; a later install gets them). }
-procedure DeletePreviousExecutables;
+procedure DeleteMatching(const Pattern: String);
 var
   Found: TFindRec;
   Dir: String;
 begin
   Dir := ExpandConstant('{app}\');
-  if FindFirst(Dir + 'agentty.exe.old-*', Found) then
+  if FindFirst(Dir + Pattern, Found) then
   try
     repeat
       DeleteFile(Dir + Found.Name);
@@ -192,6 +208,12 @@ begin
   end;
 end;
 
+procedure DeletePreviousExecutables;
+begin
+  DeleteMatching('agentty.exe.old-*');
+  DeleteMatching('agentty.com.old-*');
+end;
+
 { Setup failed or was cancelled after the previous version was moved aside: restore it, and start it again when the
   updater asked for a relaunch, so a failed silent update never leaves the user without Agentty. }
 procedure DeinitializeSetup;
@@ -199,7 +221,12 @@ var
   Exe: String;
   Code: Integer;
 begin
-  if Installed or (PreviousExe = '') then
+  if Installed then
+    Exit;
+  Exe := ExpandConstant('{app}\agentty.com');
+  if (PreviousConsole <> '') and not FileExists(Exe) then
+    RenameFile(PreviousConsole, Exe);
+  if PreviousExe = '' then
     Exit;
   Exe := ExpandConstant('{app}\agentty.exe');
   if not FileExists(Exe) and RenameFile(PreviousExe, Exe) and RelaunchRequested then
@@ -260,7 +287,10 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
+  begin
     MoveExecutableAside;
+    MoveConsoleAside;
+  end;
   if CurStep = ssPostInstall then
   begin
     { The new files are in place: a later failure must not put the old agentty.exe back. }
