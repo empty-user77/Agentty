@@ -29,6 +29,26 @@ pub(super) struct AccountRow {
     pub id: Option<String>,
     pub account: Account,
     pub limits: Option<AgentLimits>,
+    /// Whether the CLI says this login works right now.
+    pub signed_in: bool,
+}
+
+impl AccountRow {
+    /// Signed out, or about to be: the row offers to sign in again.
+    pub(super) fn needs_login(&self, now_ms: u64) -> bool {
+        !self.signed_in || self.account.renew_soon(now_ms)
+    }
+
+    /// "Signed out" or "Login ends soon", when one applies.
+    pub(super) fn login_warning(&self, now_ms: u64, cx: &gpui::App) -> Option<&'static str> {
+        if !self.signed_in {
+            Some(t(cx, "account.signed_out"))
+        } else if self.account.renew_soon(now_ms) {
+            Some(t(cx, "account.ends_soon"))
+        } else {
+            None
+        }
+    }
 }
 
 fn agent_of(agent: AuthAgent) -> Agent {
@@ -82,10 +102,11 @@ fn own_login(agent: AuthAgent) -> Option<Account> {
 }
 
 /// Signs out and deletes an account's folder. Signing out comes first: the CLI's Keychain entry
-/// isn't in the folder. Runs a process: off the UI thread.
+/// isn't in the folder. A folder that never signed in has nothing to sign out of, and isn't asked
+/// to. Runs a process: off the UI thread.
 fn discard_folder(agent: AuthAgent, id: &str) -> anyhow::Result<()> {
-    if agent == AuthAgent::Claude {
-        let folder = accounts::home(agent, id)?;
+    let folder = accounts::home(agent, id)?;
+    if agent == AuthAgent::Claude && claude_login(Some(&folder)).is_some() {
         let mut command = Command::new(crate::agent_bins::program("claude"));
         command.args(["auth", "logout"]).env("CLAUDE_CONFIG_DIR", folder).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         agentty_bridge::process::hide_window(&mut command);
@@ -94,22 +115,69 @@ fn discard_folder(agent: AuthAgent, id: &str) -> anyhow::Result<()> {
     accounts::delete_folder(agent, id)
 }
 
+/// Lists a login that arrived in folder `id`, unless the same account is known already: then the
+/// new folder goes and the known one is returned. `(account, newly listed)`. Off the UI thread.
+fn keep_login(agent: AuthAgent, id: String, login: Account) -> anyhow::Result<(Option<String>, bool)> {
+    let own = own_login(agent);
+    let mut store = AccountStore::load();
+    if own.is_some_and(|own| own.same_login(&login)) {
+        let _ = discard_folder(agent, &id);
+        return Ok((None, false));
+    }
+    match store.add(agent, login) {
+        Added::Duplicate(known) => {
+            let _ = discard_folder(agent, &id);
+            Ok((Some(known), false))
+        }
+        Added::Listed => store.save().map(|()| (Some(id), true)),
+    }
+}
+
+/// Folders left by a login the app quit during. One that signed in after all is listed; an empty
+/// one goes. A folder holding sessions stays as it is (a damaged list must not cost them). Runs
+/// processes: off the UI thread, once at start, before any login pane exists.
+pub(crate) fn tidy_account_folders() {
+    for agent in [AuthAgent::Claude, AuthAgent::Codex] {
+        let store = AccountStore::load();
+        for folder in accounts::homes(agent) {
+            let Some(id) = folder.file_name().and_then(|name| name.to_str()).map(str::to_string) else { continue };
+            if store.contains(agent, &id) || accounts::home(agent, &id).is_err() {
+                continue;
+            }
+            match login_in(agent, &folder) {
+                Some(mut login) => {
+                    login.id = id.clone();
+                    let _ = keep_login(agent, id, login);
+                }
+                None if !accounts::holds_sessions(agent, &folder) => {
+                    let _ = accounts::delete_folder(agent, &id);
+                }
+                None => {}
+            }
+        }
+    }
+}
+
 /// Every account's line: the agent's own login, then the others. Off the UI thread.
 fn read_rows(now_ms: u64) -> Vec<AccountRow> {
     let store = AccountStore::load();
     let mut rows = Vec::new();
     for agent in [AuthAgent::Claude, AuthAgent::Codex] {
+        let own = own_login(agent);
         rows.push(AccountRow {
             agent,
             id: None,
-            account: own_login(agent).unwrap_or_default(),
+            signed_in: own.is_some(),
+            account: own.unwrap_or_default(),
             limits: agentty_bridge::limits::latest(agent_of(agent), None, now_ms),
         });
         for account in store.of(agent) {
+            let live = accounts::home(agent, &account.id).ok().and_then(|folder| login_in(agent, &folder));
             rows.push(AccountRow {
                 agent,
                 id: Some(account.id.clone()),
-                account: account.clone(),
+                signed_in: live.is_some(),
+                account: live.map_or_else(|| account.clone(), |live| account.refreshed(live)),
                 limits: agentty_bridge::limits::latest(agent_of(agent), Some(&account.id), now_ms),
             });
         }
@@ -117,14 +185,16 @@ fn read_rows(now_ms: u64) -> Vec<AccountRow> {
     rows
 }
 
-/// "max" as a name: the CLIs report plans in lower case.
-fn plan_label(plan: &str) -> String {
-    let mut letters = plan.chars();
-    letters.next().map_or_else(String::new, |first| first.to_uppercase().chain(letters).collect())
+/// "5h 12% · weekly 40%", or nothing before the status line recorded any limits.
+pub(super) fn usage_line(row: &AccountRow, cx: &gpui::App) -> Option<String> {
+    let windows = row.limits.iter().flat_map(|limits| [("tray.session", limits.session), ("tray.weekly", limits.weekly)]);
+    let used: Vec<String> =
+        windows.filter_map(|(label, window)| window.map(|w| format!("{} {:.0}%", t(cx, label), w.used_percent))).collect();
+    (!used.is_empty()).then(|| used.join(" · "))
 }
 
 /// The line for an account name: email, else the organization.
-fn name_of(account: &Account) -> Option<&str> {
+pub(super) fn name_of(account: &Account) -> Option<&str> {
     account.email.as_deref().or(account.org.as_deref())
 }
 
@@ -237,6 +307,43 @@ impl Workbench {
         self.watch_login(agent, id, cx);
     }
 
+    /// Signs in again to an account whose login ended or is about to: the default login in the
+    /// agents' own folders (which replaces it), another in its own folder. The rows are read again
+    /// once the pane closes.
+    pub(super) fn relogin(&mut self, agent: AuthAgent, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.account_menu_open = false;
+        // The default login lives in the agents' own folders, whatever account this window is on.
+        let line = match (agent, id.is_some(), cfg!(windows)) {
+            (AuthAgent::Claude, true, false) => "claude auth login && exit",
+            (AuthAgent::Codex, true, false) => "codex login && exit",
+            (AuthAgent::Claude, false, false) => "env -u CLAUDE_CONFIG_DIR claude auth login && exit",
+            (AuthAgent::Codex, false, false) => "env -u CODEX_HOME codex login && exit",
+            (AuthAgent::Claude, true, true) => "claude auth login; if ($?) { exit }",
+            (AuthAgent::Codex, true, true) => "codex login; if ($?) { exit }",
+            (AuthAgent::Claude, false, true) => {
+                "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction Ignore; claude auth login; if ($?) { exit }"
+            }
+            (AuthAgent::Codex, false, true) => "Remove-Item Env:CODEX_HOME -ErrorAction Ignore; codex login; if ($?) { exit }",
+        };
+        let mut spec = LaunchSpec::shell_command(line.to_string(), t(cx, "account.signing_in").to_string(), crate::launch::home_dir());
+        spec.accounts.set(agent, id);
+        self.open_tab(spec, window, cx);
+        self.show_toast(t(cx, "account.login_hint"), cx);
+        let pane = self.active_pane().map(|pane| pane.downgrade());
+        cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            loop {
+                cx.background_executor().timer(LOGIN_POLL).await;
+                let gone = pane.as_ref().is_none_or(|pane| pane.upgrade().is_none());
+                if gone || started.elapsed() > LOGIN_TIMEOUT {
+                    let _ = this.update(cx, |this, cx| this.refresh_account_rows(cx));
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Waits for the login in account `id`'s folder. A login that never comes (the pane closed, or
     /// nothing for a long time) takes its empty folder with it.
     fn watch_login(&mut self, agent: AuthAgent, id: String, cx: &mut Context<Self>) {
@@ -265,21 +372,7 @@ impl Workbench {
     /// so the new folder goes and the known account comes forward.
     fn finish_login(&mut self, agent: AuthAgent, id: String, mut login: Account, cx: &mut Context<Self>) {
         login.id = id.clone();
-        let task = cx.background_spawn(async move {
-            let own = own_login(agent);
-            let mut store = AccountStore::load();
-            if own.is_some_and(|own| own.same_login(&login)) {
-                let _ = discard_folder(agent, &id);
-                return Ok((None, false));
-            }
-            match store.add(agent, login) {
-                Added::Duplicate(known) => {
-                    let _ = discard_folder(agent, &id);
-                    Ok((Some(known), false))
-                }
-                Added::Listed => store.save().map(|()| (Some(id), true)),
-            }
-        });
+        let task = cx.background_spawn(async move { keep_login(agent, id, login) });
         cx.spawn(async move |this, cx| {
             let result: anyhow::Result<(Option<String>, bool)> = task.await;
             let _ = this.update(cx, |this, cx| match result {
@@ -338,18 +431,13 @@ impl Workbench {
                 .items_center()
                 .gap_2()
                 .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name))
-                .children(
-                    row.account
-                        .plan
-                        .as_deref()
-                        .map(|plan| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(plan_label(plan))),
-                ),
+                .children(row.account.plan_name().map(|plan| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(plan))),
         );
-        let windows = row.limits.iter().flat_map(|limits| [("tray.session", limits.session), ("tray.weekly", limits.weekly)]);
-        let used: Vec<String> =
-            windows.filter_map(|(label, window)| window.map(|w| format!("{} {:.0}%", t(cx, label), w.used_percent))).collect();
-        if !used.is_empty() {
-            lines = lines.child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(used.join(" · ")));
+        let now = crate::ui::now_ms();
+        if let Some(warning) = row.login_warning(now, cx) {
+            lines = lines.child(div().truncate().t_caption().text_color(hex(Chrome::WARNING)).child(warning));
+        } else if let Some(used) = usage_line(row, cx) {
+            lines = lines.child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(used));
         }
         let open_id = id.clone();
         let open = div()
@@ -393,7 +481,20 @@ impl Workbench {
                     this.use_account_here(agent, id.clone(), cx);
                 }))
         });
-        div().flex().items_center().gap_0p5().child(open).children(use_here).into_any_element()
+        let relogin = row.needs_login(now).then(|| {
+            let id = row.id.clone();
+            div()
+                .id(SharedString::from(format!("account-relogin-{key}")))
+                .flex_shrink_0()
+                .p_1()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(crate::ui::hover_fill)
+                .child(icon("rotate-cw", IconSize::INLINE, hex(Chrome::WARNING)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "account.relogin"), None))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.relogin(agent, id.clone(), window, cx)))
+        });
+        div().flex().items_center().gap_0p5().child(open).children(relogin).children(use_here).into_any_element()
     }
 
     /// The menu beside the rail, open or not.
@@ -523,8 +624,9 @@ mod tests {
 
     #[test]
     fn a_plan_reads_as_a_name() {
-        assert_eq!(plan_label("max"), "Max");
-        assert_eq!(plan_label(""), "");
+        let plan = |plan: &str| Account { plan: Some(plan.into()), ..Account::default() }.plan_name();
+        assert_eq!(plan("max").as_deref(), Some("Max"));
+        assert_eq!(plan(""), None);
     }
 
     #[test]

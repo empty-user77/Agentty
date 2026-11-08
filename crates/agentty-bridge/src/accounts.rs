@@ -32,9 +32,53 @@ pub struct Account {
     pub email: Option<String>,
     pub org: Option<String>,
     pub plan: Option<String>,
+    /// The plan's tier as the CLI reports it (`max_20x`), finer than `plan`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// When the login stops working unless it is renewed (RFC 3339), where the CLI says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
+/// How long before its end a login asks to be renewed.
+const RENEW_BEFORE_MS: i64 = 2 * 24 * 60 * 60 * 1000;
+
 impl Account {
+    /// The plan as people call it: Pro, Max, Ultra (the CLI's `max_20x` tier is Ultra).
+    pub fn plan_name(&self) -> Option<String> {
+        let tier = self.tier.as_deref().unwrap_or("").to_ascii_lowercase();
+        if tier.contains("ultra") || tier.contains("max_20x") {
+            return Some("Ultra".into());
+        }
+        if tier.contains("max_5x") {
+            return Some("Max".into());
+        }
+        let plan = self.plan.as_deref().filter(|plan| !plan.is_empty())?;
+        let mut letters = plan.chars();
+        letters.next().map(|first| first.to_uppercase().chain(letters).collect())
+    }
+
+    /// Whether the login ends within two days, or already has.
+    pub fn renew_soon(&self, now_ms: u64) -> bool {
+        let Some(end) = self.expires_at.as_deref().and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()) else {
+            return false;
+        };
+        end.timestamp_millis() - i64::try_from(now_ms).unwrap_or(i64::MAX) < RENEW_BEFORE_MS
+    }
+
+    /// What the CLI reports now, kept under this account's id. A field it doesn't report keeps
+    /// what was known.
+    pub fn refreshed(&self, live: Account) -> Account {
+        Account {
+            id: self.id.clone(),
+            email: live.email.or_else(|| self.email.clone()),
+            org: live.org.or_else(|| self.org.clone()),
+            plan: live.plan.or_else(|| self.plan.clone()),
+            tier: live.tier.or_else(|| self.tier.clone()),
+            expires_at: live.expires_at,
+        }
+    }
+
     /// Two logins are the same account when they name the same person in the same organization.
     pub fn same_login(&self, other: &Account) -> bool {
         self.email.is_some() && self.email == other.email && self.org == other.org
@@ -205,6 +249,15 @@ pub fn homes(agent: AuthAgent) -> Vec<PathBuf> {
     folders
 }
 
+/// Whether an account folder holds any session: `projects` for Claude Code, `sessions` for Codex.
+pub fn holds_sessions(agent: AuthAgent, folder: &Path) -> bool {
+    let sessions = folder.join(match agent {
+        AuthAgent::Claude => "projects",
+        AuthAgent::Codex => "sessions",
+    });
+    std::fs::read_dir(sessions).is_ok_and(|mut entries| entries.next().is_some())
+}
+
 /// The account a file inside an account folder belongs to; `None` for anything else.
 pub fn owner_of(agent: AuthAgent, path: &Path) -> Option<String> {
     owner_in(&accounts_root(agent), path)
@@ -353,14 +406,21 @@ pub fn parse_claude_status(status: &Value) -> Option<Account> {
         return None;
     }
     let text = |key: &str| status[key].as_str().filter(|value| !value.is_empty()).map(str::to_string);
-    Some(Account { id: String::new(), email: text("email"), org: text("orgName"), plan: text("subscriptionType") })
+    Some(Account {
+        id: String::new(),
+        email: text("email"),
+        org: text("orgName"),
+        plan: text("subscriptionType"),
+        tier: text("planTier"),
+        expires_at: text("loginExpiresAt"),
+    })
 }
 
 /// The account in a Codex folder's `auth.json`; `None` when it has no ChatGPT login in it.
 pub fn read_codex_login(folder: &Path) -> Option<Account> {
     let bytes = std::fs::read(folder.join("auth.json")).ok()?;
     match agent_auth::summarize_codex_auth(&serde_json::from_slice(&bytes).ok()?).ok()? {
-        agent_auth::CodexAuthSummary::ChatGpt { email, plan } => Some(Account { id: String::new(), email, org: None, plan }),
+        agent_auth::CodexAuthSummary::ChatGpt { email, plan } => Some(Account { email, plan, ..Account::default() }),
         agent_auth::CodexAuthSummary::ApiKey => None,
     }
 }
@@ -378,7 +438,7 @@ mod tests {
     }
 
     fn account(id: &str, email: &str, org: &str) -> Account {
-        Account { id: id.into(), email: Some(email.into()), org: Some(org.into()), plan: None }
+        Account { id: id.into(), email: Some(email.into()), org: Some(org.into()), ..Account::default() }
     }
 
     #[test]
@@ -530,5 +590,49 @@ mod tests {
         );
         assert_eq!(parse_claude_status(&json!({ "loggedIn": false })), None);
         assert_eq!(parse_claude_status(&json!({})), None);
+    }
+
+    #[test]
+    fn a_plan_is_named_by_its_tier_first() {
+        let named = |plan: Option<&str>, tier: Option<&str>| {
+            Account { plan: plan.map(str::to_string), tier: tier.map(str::to_string), ..Account::default() }.plan_name()
+        };
+        assert_eq!(named(Some("pro"), None).as_deref(), Some("Pro"));
+        assert_eq!(named(Some("max"), Some("default_claude_max_5x")).as_deref(), Some("Max"));
+        assert_eq!(named(Some("max"), Some("max_20x")).as_deref(), Some("Ultra"));
+        assert_eq!(named(Some("max"), Some("ultra")).as_deref(), Some("Ultra"));
+        assert_eq!(named(Some("max"), Some("something_new")).as_deref(), Some("Max"));
+        assert_eq!(named(None, None), None);
+    }
+
+    #[test]
+    fn a_login_asks_to_be_renewed_two_days_before_it_ends() {
+        let ends = |at: &str| Account { expires_at: Some(at.into()), ..Account::default() };
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-08T00:00:00Z").unwrap().timestamp_millis() as u64;
+        assert!(!ends("2026-11-16T05:40:11.755Z").renew_soon(now));
+        assert!(ends("2026-11-09T12:00:00Z").renew_soon(now));
+        assert!(ends("2026-11-01T00:00:00Z").renew_soon(now));
+        assert!(!Account::default().renew_soon(now));
+    }
+
+    #[test]
+    fn the_status_names_tier_and_end_of_the_login() {
+        let status = json!({"loggedIn": true, "email": "someone@example.com", "subscriptionType": "max",
+            "planTier": "max_20x", "loginExpiresAt": "2026-11-16T05:40:11.755Z"});
+        let account = parse_claude_status(&status).unwrap();
+        assert_eq!(account.plan_name().as_deref(), Some("Ultra"));
+        assert_eq!(account.expires_at.as_deref(), Some("2026-11-16T05:40:11.755Z"));
+    }
+
+    #[test]
+    fn a_folder_with_a_transcript_holds_sessions() {
+        let dir = scratch("holds-sessions");
+        assert!(!holds_sessions(AuthAgent::Claude, &dir));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        assert!(!holds_sessions(AuthAgent::Claude, &dir));
+        std::fs::create_dir_all(dir.join("projects").join("-tmp-example")).unwrap();
+        assert!(holds_sessions(AuthAgent::Claude, &dir));
+        assert!(!holds_sessions(AuthAgent::Codex, &dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

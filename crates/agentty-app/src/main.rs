@@ -708,6 +708,7 @@ fn main() {
         // look in the background for the ones opened later.
         agent_bins::load_saved();
         let _ = std::thread::Builder::new().name("agent-bins".into()).spawn(agent_bins::refresh);
+        let _ = std::thread::Builder::new().name("account-folders".into()).spawn(workbench::tidy_account_folders);
         let signals = match agent_signal::start() {
             Ok((socket, rx)) => {
                 if !cfg!(target_os = "macos") {
@@ -966,7 +967,17 @@ fn main() {
                                 cx.activate(true);
                             }
                             agent_signal::SocketMessage::Debug(command, argument) => {
-                                if let Some(window) = windows.first() {
+                                // `w<slot>.<command>` goes to that window; a bare command to the first.
+                                let slot = command
+                                    .split_once('.')
+                                    .and_then(|(window, rest)| Some((window.strip_prefix('w')?.parse::<usize>().ok()?, rest.to_string())));
+                                let (window, command) = match slot {
+                                    Some((slot, rest)) => {
+                                        (windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)).copied(), rest)
+                                    }
+                                    None => (windows.first().copied(), command),
+                                };
+                                if let Some(window) = window {
                                     let _ =
                                         window.update(cx, |workbench, window, cx| workbench.debug_command(&command, &argument, window, cx));
                                 }

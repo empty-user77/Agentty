@@ -94,10 +94,6 @@ impl CodexMethod {
     }
 }
 
-fn agent_auth_store() -> agentty_bridge::accounts::AccountStore {
-    agentty_bridge::accounts::AccountStore::load()
-}
-
 /// Result line under a form: success or error text.
 type Status = Option<(bool, String)>;
 
@@ -139,6 +135,7 @@ impl SavedSecrets {
 impl Workbench {
     fn accounts_form(&mut self, window: &mut Window, cx: &mut Context<Self>) -> &mut AccountsForm {
         if self.accounts_form.is_none() {
+            self.refresh_account_rows(cx);
             let profile = AuthProfile::load();
             let mut input = |text: String, key: &'static str, masked: bool| {
                 cx.new(|cx| {
@@ -372,29 +369,69 @@ impl Workbench {
         .detach();
     }
 
-    /// The logins added beside the agents' own, each of which runs in a window of its own.
+    /// Every login: the base login in the agents' own folders first, then the ones added beside it,
+    /// each of which runs in a window of its own. The base login can't be removed; signing in again
+    /// is how it changes.
     fn render_logins(&mut self, cx: &mut Context<Self>) -> Div {
-        let store = agent_auth_store();
+        use super::account_menu::{name_of, usage_line};
+        let now = crate::ui::now_ms();
         let mut card = section(t(cx, "accounts.logins"));
-        for agent in [AuthAgent::Claude, AuthAgent::Codex] {
-            for account in store.of(agent) {
-                let name = account.email.clone().or_else(|| account.org.clone()).unwrap_or_else(|| account.id.clone());
-                let brand = if agent == AuthAgent::Claude { "Claude Code" } else { "Codex" };
-                let (id, label) = (account.id.clone(), name.clone());
-                card = card.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name))
-                        .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(brand))
-                        .child(action_button(
-                            SharedString::from(format!("account-remove-{}", account.id)),
-                            t(cx, "account.remove"),
-                            cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_account(agent, id.clone(), label.clone(), cx)),
-                        )),
-                );
+        for row in &self.account_rows {
+            let brand = if row.agent == AuthAgent::Claude { "Claude Code" } else { "Codex" };
+            let name = name_of(&row.account)
+                .map(str::to_string)
+                .or_else(|| row.id.is_none().then(|| t(cx, "account.own_login").to_string()))
+                .or_else(|| row.id.clone())
+                .unwrap_or_default();
+            let detail: Vec<String> =
+                [Some(brand.to_string()), row.account.plan_name(), usage_line(row, cx)].into_iter().flatten().collect();
+            let warning = row.login_warning(now, cx);
+            let mut line = div().flex().items_center().gap_3().child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name.clone()))
+                            .when(row.id.is_none(), |d| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px_1p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(hex(Chrome::BORDER))
+                                        .t_caption()
+                                        .text_color(hex(Chrome::MUTED))
+                                        .child(t(cx, "account.default_badge")),
+                                )
+                            }),
+                    )
+                    .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(detail.join(" · ")))
+                    .children(warning.map(|warning| div().truncate().t_caption().text_color(hex(Chrome::WARNING)).child(warning))),
+            );
+            let (agent, relogin_id) = (row.agent, row.id.clone());
+            let key = format!("{:?}-{}", row.agent, row.id.as_deref().unwrap_or("own"));
+            line = line.child(action_button(
+                SharedString::from(format!("account-settings-relogin-{key}")),
+                t(cx, "account.relogin"),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.relogin(agent, relogin_id.clone(), window, cx)),
+            ));
+            if let Some(id) = row.id.clone() {
+                let label = name;
+                line = line.child(action_button(
+                    SharedString::from(format!("account-remove-{id}")),
+                    t(cx, "account.remove"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_account(agent, id.clone(), label.clone(), cx)),
+                ));
             }
+            card = card.child(line);
         }
         card.child(
             div()

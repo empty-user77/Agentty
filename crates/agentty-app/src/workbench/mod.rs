@@ -222,6 +222,7 @@ pub fn next_free_window_slot() -> usize {
 }
 
 pub(crate) use account_menu::prepare_window as prepare_account_window;
+pub(crate) use account_menu::tidy_account_folders;
 pub use account_usage::AccountUsage;
 pub(crate) use chat::{prompt_words, user_parts};
 pub(crate) use layout::format_elapsed;
