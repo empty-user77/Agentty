@@ -41,7 +41,8 @@ hooks="$(git config --get core.hooksPath || true)"
 [[ "$hooks" == ".githooks" ]] && pass "secret-scanning git hooks installed" || fail "git hooks not installed — run scripts/install-hooks.sh"
 
 # ─── GitHub ───
-if gh auth status >/dev/null 2>&1; then
+# The active account is the one releases use; another one with an expired token doesn't matter.
+if gh auth status --active >/dev/null 2>&1; then
   pass "gh authenticated"
   for repo in "$SOURCE_REPO" "$RELEASE_REPO" "$TAP_REPO"; do
     [[ "$(gh api "repos/$repo" --jq .permissions.push 2>/dev/null)" == "true" ]] && pass "active gh account can push to $repo" \
