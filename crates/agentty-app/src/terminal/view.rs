@@ -1355,6 +1355,7 @@ impl TerminalView {
             .filter(|_| agent == agentty_bridge::model::Agent::Claude)
             .and_then(|backend| crate::procinfo::foreground_pid(backend.tty_fd).or(self.live_tool_pid));
         let cwd = self.display_cwd();
+        let accounts = self.spec.accounts.clone();
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
         let (pane_id, hooks) = (self.pane_id, [self.hook_session.clone(), self.hook_previous.clone()]);
@@ -1371,10 +1372,14 @@ impl TerminalView {
             // transcript belongs to whichever ran last, not to every one of them.
             let id = session_claims::resolve(pane_id, |taken| {
                 let recent = || match agent {
-                    agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent_except(&cwd, since, |id| {
-                        taken(id) || agentty_bridge::claude::owned_by_other_process(id, agent_pid)
-                    }),
-                    agentty_bridge::model::Agent::Codex if may_guess => agentty_bridge::codex::find_recent_except(&cwd, since, taken),
+                    agentty_bridge::model::Agent::Claude => {
+                        agentty_bridge::claude::find_recent_except(&cwd, since, accounts.claude.as_deref(), |id| {
+                            taken(id) || agentty_bridge::claude::owned_by_other_process(id, agent_pid)
+                        })
+                    }
+                    agentty_bridge::model::Agent::Codex if may_guess => {
+                        agentty_bridge::codex::find_recent_except(&cwd, since, accounts.codex.as_deref(), taken)
+                    }
                     _ => None,
                 };
                 // The running process is the truth, then the session the agent's own events name.
@@ -1487,6 +1492,7 @@ impl TerminalView {
         };
         spec.model = self.spec.model.clone();
         spec.advisor = Some(advisor);
+        spec.accounts = self.spec.accounts.clone();
         self.spec = spec;
         // Dropping the backend ends the running agent; the next paint spawns the new one.
         self.backend = None;

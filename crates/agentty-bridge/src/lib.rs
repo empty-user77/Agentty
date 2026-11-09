@@ -1,5 +1,6 @@
 //! Local Claude Code / Codex session discovery and cross-agent context handoff.
 
+pub mod accounts;
 pub mod agent_auth;
 pub mod agy;
 pub mod amp;
@@ -58,12 +59,17 @@ use std::path::{Path, PathBuf};
 
 /// Sessions from the selected agents, newest first.
 pub fn list(agent: Option<Agent>, limit: usize) -> Vec<SessionInfo> {
+    list_of(agent, &accounts::AccountChoice::default(), limit)
+}
+
+/// [`list`] for the accounts in `choice`: a window lists the sessions of the accounts it runs.
+pub fn list_of(agent: Option<Agent>, choice: &accounts::AccountChoice, limit: usize) -> Vec<SessionInfo> {
     let mut sessions = Vec::new();
     if agent.is_none_or(|a| a == Agent::Claude) {
-        sessions.extend(claude::list(limit));
+        sessions.extend(claude::list_of(choice.claude.as_deref(), limit));
     }
     if agent.is_none_or(|a| a == Agent::Codex) {
-        sessions.extend(codex::list(limit));
+        sessions.extend(codex::list_of(choice.codex.as_deref(), limit));
     }
     if agent.is_none_or(|a| a == Agent::Agy) {
         sessions.extend(agy::list(limit));
@@ -102,7 +108,7 @@ pub fn delete(session: &SessionInfo) -> Result<()> {
     // Only ever a transcript inside an agent's own session folder. Each reader says where its own
     // sessions live, so the guard cannot drift from where the files actually are — spelling these
     // out here had it refusing every Amp session, whose folder is not the one the list guessed.
-    let roots = [
+    let mut roots = vec![
         claude::session_root(),
         codex::session_root(),
         agy::session_root(),
@@ -110,6 +116,8 @@ pub fn delete(session: &SessionInfo) -> Result<()> {
         gemini::session_root(),
         kimi::session_root(),
     ];
+    roots.extend(accounts::homes(agent_auth::AuthAgent::Claude).into_iter().map(|home| home.join("projects")));
+    roots.extend(accounts::homes(agent_auth::AuthAgent::Codex).into_iter().map(|home| home.join("sessions")));
     // `..` is refused rather than resolved: a transcript path never has one, and without this the
     // check below would accept a path that climbs back out of the folder it starts in.
     anyhow::ensure!(!path.components().any(|c| c == std::path::Component::ParentDir), "not an agent session file: {}", path.display());
@@ -154,10 +162,10 @@ pub fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
 /// at whatever they were when the fork happened. Whichever transcript was written most recently is
 /// the live one.
 /// The newest session of `agent` in `cwd` written after `since_ms`, from its files.
-pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64) -> Option<String> {
+pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64, choice: &accounts::AccountChoice) -> Option<String> {
     match agent {
-        Agent::Claude => claude::find_recent(cwd, since_ms),
-        Agent::Codex => codex::find_recent(cwd, since_ms),
+        Agent::Claude => claude::find_recent(cwd, since_ms, choice.claude.as_deref()),
+        Agent::Codex => codex::find_recent(cwd, since_ms, choice.codex.as_deref()),
         Agent::Gemini => gemini::find_recent(cwd, since_ms),
         Agent::Kimi => kimi::find_recent(cwd, since_ms),
         Agent::Agy => recent_in(agy::list(50), cwd, since_ms),
@@ -167,12 +175,18 @@ pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64) -> Option
 
 /// [`find_recent`] leaving out the sessions in `taken`: those other panes in the same folder show,
 /// for the agents that don't say which session they write (Gemini CLI, Antigravity, Amp).
-pub fn find_recent_except(agent: Agent, cwd: &std::path::Path, since_ms: u64, taken: &[String]) -> Option<String> {
+pub fn find_recent_except(
+    agent: Agent,
+    cwd: &std::path::Path,
+    since_ms: u64,
+    taken: &[String],
+    choice: &accounts::AccountChoice,
+) -> Option<String> {
     match agent {
         Agent::Gemini => gemini::find_recent_except(cwd, since_ms, taken),
         Agent::Agy => recent_in_except(agy::list(50), cwd, since_ms, taken),
         Agent::Amp => recent_in_except(amp::list(50), cwd, since_ms, taken),
-        _ => find_recent(agent, cwd, since_ms).filter(|id| !taken.contains(id)),
+        _ => find_recent(agent, cwd, since_ms, choice).filter(|id| !taken.contains(id)),
     }
 }
 

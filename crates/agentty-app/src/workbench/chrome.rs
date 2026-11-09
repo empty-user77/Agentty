@@ -308,7 +308,9 @@ impl Workbench {
                 div()
                     .id(id)
                     .group(id)
-                    .tooltip(crate::ui::Tooltip::text(t(cx, key), (!shortcut.is_empty()).then_some(shortcut)))
+                    .when(!(id == "activity-account" && active), |d| {
+                        d.tooltip(crate::ui::Tooltip::text(t(cx, key), (!shortcut.is_empty()).then_some(shortcut)))
+                    })
                     .w_full()
                     .h(px(48.))
                     .flex()
@@ -445,14 +447,49 @@ impl Workbench {
                     ))
                     .children(self.render_plugin_activity_items(cx)),
             )
-            .child(div().flex_shrink_0().flex().flex_col().child(item(
-                "activity-settings",
-                "settings",
-                self.page == Some(Page::Settings),
-                "page.settings",
-                Box::new(|this, cx| this.open_page(Page::Settings, cx)),
-                cx,
-            )))
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        item(
+                            "activity-account",
+                            "circle-user",
+                            self.account_menu_open,
+                            "account.title",
+                            Box::new(|this, cx| this.toggle_account_menu(cx)),
+                            cx,
+                        )
+                        .relative()
+                        // A window on another account than the agents' own says so at a glance.
+                        .when(self.window_account_label.is_some(), |d| {
+                            const DOT: f32 = 9.;
+                            let corner = |extent: f32| extent / 2. + IconSize::ACTIVITY / 2. - DOT + 1.;
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left(px(corner(ACTIVITY_BAR_WIDTH)))
+                                    .top(px(corner(48.)))
+                                    .size(px(DOT))
+                                    .rounded_full()
+                                    .border_2()
+                                    .border_color(hex(Chrome::ACTIVITY_BAR))
+                                    .bg(hex(Chrome::BLUE)),
+                            )
+                        }),
+                    )
+                    .child(item(
+                        "activity-settings",
+                        "settings",
+                        self.page == Some(Page::Settings),
+                        "page.settings",
+                        Box::new(|this, cx| this.open_page(Page::Settings, cx)),
+                        cx,
+                    ))
+                    .children(self.render_account_menu(cx)),
+            )
     }
 
     pub(super) fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

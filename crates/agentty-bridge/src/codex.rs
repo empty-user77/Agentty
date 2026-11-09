@@ -1,5 +1,6 @@
 //! Reader for Codex rollouts: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`.
 
+use crate::agent_auth::AuthAgent;
 use crate::fsutil::{self, one_line, truncate_chars};
 use crate::model::{Agent, Role, SessionInfo, Turn};
 use anyhow::{Context, Result};
@@ -18,20 +19,52 @@ fn codex_dir() -> PathBuf {
     fsutil::home().join(".codex")
 }
 
-fn rollouts() -> Vec<PathBuf> {
+/// The Codex folder of an account; `None` is the user's own login. An id that isn't one gets an
+/// empty path, which holds nothing.
+fn home_of(account: Option<&str>) -> PathBuf {
+    match account {
+        None => codex_dir(),
+        Some(id) => crate::accounts::home(AuthAgent::Codex, id).unwrap_or_default(),
+    }
+}
+
+/// The rollouts folder of an account.
+pub fn sessions_of(account: Option<&str>) -> PathBuf {
+    match account {
+        None => session_root(),
+        Some(_) => home_of(account).join("sessions"),
+    }
+}
+
+/// One account's rollouts.
+fn rollouts_of(account: Option<&str>) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    fsutil::jsonl_files(&codex_dir().join("sessions"), 4, &mut files);
-    // Agentty's private Codex home (API-key / auth.json sign-in) when its sessions aren't linked here.
-    for private in crate::agent_auth::codex_home_sessions() {
-        fsutil::jsonl_files(&private, 4, &mut files);
+    fsutil::jsonl_files(&sessions_of(account), 4, &mut files);
+    if account.is_none() {
+        // Agentty's private Codex home (API-key / auth.json sign-in) when its sessions aren't linked here.
+        for private in crate::agent_auth::codex_home_sessions() {
+            fsutil::jsonl_files(&private, 4, &mut files);
+        }
     }
     files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("rollout-")));
     files
 }
 
+/// Every account's rollouts. Session ids are unique, so a lookup by id needs no account.
+fn rollouts() -> Vec<PathBuf> {
+    let mut files = rollouts_of(None);
+    for home in crate::accounts::homes(AuthAgent::Codex) {
+        let mut found = Vec::new();
+        fsutil::jsonl_files(&home.join("sessions"), 4, &mut found);
+        found.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("rollout-")));
+        files.append(&mut found);
+    }
+    files
+}
+
 /// Thread names Codex generates, keyed by session id (later entries win).
-fn thread_names() -> HashMap<String, String> {
-    let Ok(file) = File::open(codex_dir().join("session_index.jsonl")) else { return HashMap::new() };
+fn thread_names(account: Option<&str>) -> HashMap<String, String> {
+    let Ok(file) = File::open(home_of(account).join("session_index.jsonl")) else { return HashMap::new() };
     BufReader::new(file)
         .lines()
         .map_while(Result::ok)
@@ -41,8 +74,13 @@ fn thread_names() -> HashMap<String, String> {
 }
 
 pub fn list(limit: usize) -> Vec<SessionInfo> {
-    let names = thread_names();
-    fsutil::newest(rollouts(), limit.saturating_mul(2))
+    list_of(None, limit)
+}
+
+/// The newest sessions of one account.
+pub fn list_of(account: Option<&str>, limit: usize) -> Vec<SessionInfo> {
+    let names = thread_names(account);
+    fsutil::newest(rollouts_of(account), limit.saturating_mul(2))
         .into_iter()
         .filter_map(|(path, updated_at)| {
             fsutil::cached_by_mtime(&SUMMARIES, &path, updated_at, || summarize(&path, updated_at, &names).ok().flatten())
@@ -117,7 +155,7 @@ pub fn last_exchange(path: &Path) -> (Option<String>, Option<String>) {
 /// Distinct models used by the newest `limit` sessions, most recent first (from `turn_context`).
 pub fn recent_models(limit: usize) -> Vec<String> {
     let mut models: Vec<String> = Vec::new();
-    for (path, _) in fsutil::newest(rollouts(), limit) {
+    for (path, _) in fsutil::newest(rollouts_of(None), limit) {
         let Ok(file) = File::open(&path) else { continue };
         let found = BufReader::new(file).lines().map_while(Result::ok).take(400).find_map(|line| {
             if !line.contains("\"type\":\"turn_context\"") {
@@ -190,20 +228,22 @@ pub(crate) fn message_turn(payload: &Value) -> Option<Turn> {
 
 /// Id of the newest Codex session started in `cwd` whose rollout was written after `since_ms`.
 /// Used to find the session behind a Codex pane (Codex cannot be told its session id up front).
-pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
-    find_recent_except(cwd, since_ms, |_| false)
+pub fn find_recent(cwd: &Path, since_ms: u64, account: Option<&str>) -> Option<String> {
+    find_recent_except(cwd, since_ms, account, |_| false)
 }
 
 /// [`find_recent`], passing over the sessions `taken` says belong to someone else: with several
 /// Codex panes in one folder the newest rollout is only one of them, and every pane taking it
 /// would show that session's model and context in all of them.
-pub fn find_recent_except(cwd: &Path, since_ms: u64, taken: impl Fn(&str) -> bool) -> Option<String> {
+pub fn find_recent_except(cwd: &Path, since_ms: u64, account: Option<&str>, taken: impl Fn(&str) -> bool) -> Option<String> {
     let cwd = cwd.to_string_lossy();
-    fsutil::newest(rollouts(), usize::MAX).into_iter().take_while(|(_, mtime)| *mtime + 1_000 >= since_ms).find_map(|(path, _)| {
-        let first = BufReader::new(File::open(&path).ok()?).lines().next()?.ok()?;
-        let v: Value = serde_json::from_str(&first).ok()?;
-        let meta = &v["payload"];
-        let id = meta["id"].as_str().filter(|_| meta["cwd"].as_str() == Some(&*cwd))?;
-        (!taken(id)).then(|| id.to_string())
-    })
+    fsutil::newest(rollouts_of(account), usize::MAX).into_iter().take_while(|(_, mtime)| *mtime + 1_000 >= since_ms).find_map(
+        |(path, _)| {
+            let first = BufReader::new(File::open(&path).ok()?).lines().next()?.ok()?;
+            let v: Value = serde_json::from_str(&first).ok()?;
+            let meta = &v["payload"];
+            let id = meta["id"].as_str().filter(|_| meta["cwd"].as_str() == Some(&*cwd))?;
+            (!taken(id)).then(|| id.to_string())
+        },
+    )
 }

@@ -1,5 +1,6 @@
 //! Reader for Claude Code transcripts: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`.
 
+use crate::agent_auth::AuthAgent;
 use crate::fsutil::{self, one_line, truncate_chars};
 use crate::model::{Agent, Role, SessionInfo, Turn};
 use anyhow::{Context, Result};
@@ -17,10 +18,30 @@ fn projects_dir() -> PathBuf {
     fsutil::home().join(".claude").join("projects")
 }
 
+/// The transcripts folder of an account; `None` is the user's own login. An id that isn't one gets
+/// an empty path, which holds nothing.
+pub fn projects_of(account: Option<&str>) -> PathBuf {
+    match account {
+        None => projects_dir(),
+        Some(id) => crate::accounts::home(AuthAgent::Claude, id).map(|home| home.join("projects")).unwrap_or_default(),
+    }
+}
+
+/// Every account's transcripts. Session ids are unique, so a lookup by id needs no account.
+fn all_projects() -> Vec<PathBuf> {
+    let accounts = crate::accounts::homes(AuthAgent::Claude).into_iter().map(|home| home.join("projects"));
+    std::iter::once(projects_dir()).chain(accounts).collect()
+}
+
 pub fn list(limit: usize) -> Vec<SessionInfo> {
+    list_of(None, limit)
+}
+
+/// The newest sessions of one account.
+pub fn list_of(account: Option<&str>, limit: usize) -> Vec<SessionInfo> {
     let mut files = Vec::new();
     // Only top-level session files; subagent transcripts live in nested directories.
-    fsutil::jsonl_files(&projects_dir(), 1, &mut files);
+    fsutil::jsonl_files(&projects_of(account), 1, &mut files);
     files.retain(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("agent-")));
 
     fsutil::newest(files, limit.saturating_mul(2))
@@ -192,7 +213,7 @@ pub fn prefers_fullscreen() -> bool {
 }
 
 pub fn find(id: &str) -> Result<PathBuf> {
-    find_in(&projects_dir(), id)
+    all_projects().iter().find_map(|projects| find_in(projects, id).ok()).with_context(|| format!("Claude session {id} not found"))
 }
 
 /// The session's file under `projects`. Entering a worktree can leave one in two project folders:
@@ -466,21 +487,21 @@ pub fn exists(id: &str) -> bool {
 
 /// Claude Code stores transcripts under a directory named after the working directory with
 /// every character other than ASCII letters and digits replaced by `-`.
-pub fn project_dir_for(cwd: &Path) -> PathBuf {
+pub fn project_dir_for(cwd: &Path, account: Option<&str>) -> PathBuf {
     let encoded: String = cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-    projects_dir().join(encoded)
+    projects_of(account).join(encoded)
 }
 
 /// Id of the newest session in `cwd` written after `since_ms` (for agents started by hand).
-pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
-    find_recent_except(cwd, since_ms, |_| false)
+pub fn find_recent(cwd: &Path, since_ms: u64, account: Option<&str>) -> Option<String> {
+    find_recent_except(cwd, since_ms, account, |_| false)
 }
 
 /// [`find_recent`], passing over the sessions `taken` says belong to someone else (another pane in
 /// the same folder follows it).
-pub fn find_recent_except(cwd: &Path, since_ms: u64, taken: impl Fn(&str) -> bool) -> Option<String> {
+pub fn find_recent_except(cwd: &Path, since_ms: u64, account: Option<&str>, taken: impl Fn(&str) -> bool) -> Option<String> {
     let mut files = Vec::new();
-    fsutil::jsonl_files(&project_dir_for(cwd), 0, &mut files);
+    fsutil::jsonl_files(&project_dir_for(cwd, account), 0, &mut files);
     fsutil::newest(files, 16)
         .into_iter()
         .take_while(|(_, mtime)| *mtime + 1_000 >= since_ms)
@@ -504,8 +525,10 @@ pub struct PeerSession {
     pub interactive: bool,
 }
 
-fn sessions_dir() -> PathBuf {
-    fsutil::home().join(".claude").join("sessions")
+/// Where running sessions register themselves: one folder per account.
+fn sessions_dirs() -> Vec<PathBuf> {
+    let accounts = crate::accounts::homes(AuthAgent::Claude).into_iter().map(|home| home.join("sessions"));
+    std::iter::once(fsutil::home().join(".claude").join("sessions")).chain(accounts).collect()
 }
 
 /// Claude Code sessions registered on this machine. Read from disk at most once a second: the UI
@@ -527,8 +550,10 @@ pub fn peer_sessions() -> Vec<PeerSession> {
 }
 
 fn read_peer_sessions() -> Vec<PeerSession> {
-    let Ok(entries) = std::fs::read_dir(sessions_dir()) else { return Vec::new() };
-    let mut peers: Vec<PeerSession> = entries
+    let mut peers: Vec<PeerSession> = sessions_dirs()
+        .into_iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|entry| {
@@ -714,7 +739,7 @@ mod tests {
 
     #[test]
     fn encodes_project_dirs() {
-        let dir = project_dir_for(Path::new("/Users/me/my.app/src_x"));
+        let dir = project_dir_for(Path::new("/Users/me/my.app/src_x"), None);
         assert!(dir.ends_with("-Users-me-my-app-src-x"));
     }
 }

@@ -708,6 +708,7 @@ fn main() {
         // look in the background for the ones opened later.
         agent_bins::load_saved();
         let _ = std::thread::Builder::new().name("agent-bins".into()).spawn(agent_bins::refresh);
+        let _ = std::thread::Builder::new().name("account-folders".into()).spawn(workbench::tidy_account_folders);
         let signals = match agent_signal::start() {
             Ok((socket, rx)) => {
                 if !cfg!(target_os = "macos") {
@@ -966,7 +967,17 @@ fn main() {
                                 cx.activate(true);
                             }
                             agent_signal::SocketMessage::Debug(command, argument) => {
-                                if let Some(window) = windows.first() {
+                                // `w<slot>.<command>` goes to that window; a bare command to the first.
+                                let slot = command
+                                    .split_once('.')
+                                    .and_then(|(window, rest)| Some((window.strip_prefix('w')?.parse::<usize>().ok()?, rest.to_string())));
+                                let (window, command) = match slot {
+                                    Some((slot, rest)) => {
+                                        (windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)).copied(), rest)
+                                    }
+                                    None => (windows.first().copied(), command),
+                                };
+                                if let Some(window) = window {
                                     let _ =
                                         window.update(cx, |workbench, window, cx| workbench.debug_command(&command, &argument, window, cx));
                                 }
@@ -1070,6 +1081,29 @@ pub fn new_window(cx: &mut App) {
         }
         None => eprintln!("agentty: could not open window {slot}"),
     }
+}
+
+/// Brings forward the window running `id` for `agent` (`None`: the agent's own login), or opens one.
+pub fn open_account_window(agent: agentty_bridge::agent_auth::AuthAgent, id: Option<String>, cx: &mut App) {
+    cx.defer(move |cx| {
+        let open = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.accounts.get(agent) == id.as_deref()));
+        if let Some(window) = open {
+            let _ = window.update(cx, |_, window, _| window.activate_window());
+            return;
+        }
+        let slot = NEXT_WINDOW_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Err(err) = workbench::prepare_account_window(slot, agent, id) {
+            eprintln!("agentty: could not lay out window {slot}: {err:#}");
+            return;
+        }
+        match open_window(slot, cx) {
+            Some(window) => {
+                metrics::track(cx, "window_opened", serde_json::json!({}));
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+            }
+            None => eprintln!("agentty: could not open window {slot}"),
+        }
+    });
 }
 
 /// Opens another Agentty window with `plugin`'s workspace in front, as if its icon was pressed

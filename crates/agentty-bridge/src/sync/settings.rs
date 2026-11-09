@@ -118,10 +118,10 @@ pub(super) fn step(root: &Path, config: &mut SyncConfig, local: &Bundle) -> Resu
 /// After the app put `incoming` in place: this computer's configuration is now the one changed
 /// at `changed_at`, whatever small differences its own files keep (a newer app writing a field
 /// the other lacks), so they are not sent back as a new change.
-pub fn applied(changed_at: &str, app_version: &str) -> Result<()> {
+pub fn applied(profile: &super::SyncProfile, changed_at: &str, app_version: &str) -> Result<()> {
     let local = backup::collect(backup::Scope::Sync, None, app_version)?;
     let fingerprint = backup::fingerprint(&local);
-    super::update_config(|c| {
+    super::update_config(profile, |c| {
         c.settings_fingerprint = fingerprint;
         c.settings_changed_at = changed_at.to_string();
     })

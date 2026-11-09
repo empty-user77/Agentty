@@ -12,6 +12,8 @@ use std::hash::{Hash, Hasher};
 pub struct WorkspaceInfo {
     pub id: u64,
     pub name: String,
+    /// The account its window runs on, by name; `None` for the agents' own logins.
+    pub account: Option<String>,
     /// The group heading it sits under (`None`: no headings, nothing is grouped).
     pub group: Option<String>,
     pub group_color: Option<String>,
@@ -131,6 +133,15 @@ pub struct SessionInfo {
     /// and its workspace's. Never sent to the page.
     #[serde(skip)]
     pub roots: Vec<std::path::PathBuf>,
+}
+
+/// An open window, for choosing where a new workspace goes. A window runs its accounts, so this
+/// is how the page picks an account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WindowInfo {
+    pub slot: usize,
+    /// The account it runs on, by name; `None` for the agents' own logins.
+    pub account: Option<String>,
 }
 
 /// An installed plugin and how it runs, for the page's home. Only shown: the page can't start,

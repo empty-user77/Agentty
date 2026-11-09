@@ -10,8 +10,10 @@
 //! afterwards, like the Unix fallback shell.
 
 use crate::settings::AdvisorChoice;
+use agentty_bridge::accounts::AccountChoice;
 use agentty_bridge::agent_auth::{AuthAgent, EnvChange};
 use agentty_bridge::model::Agent;
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -97,6 +99,8 @@ pub struct LaunchSpec {
     /// A reviewer: it reads and runs what it needs to judge the work, but does not edit files
     /// (Claude Code without its editing tools, Codex in a read-only sandbox).
     pub read_only: bool,
+    /// Which logins this pane runs on. Set once when the window spawns it.
+    pub accounts: AccountChoice,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
@@ -194,6 +198,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -210,6 +215,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -230,6 +236,7 @@ impl LaunchSpec {
             chat_view: None,
             restricted: false,
             read_only: false,
+            accounts: AccountChoice::default(),
         }
     }
 
@@ -255,16 +262,44 @@ impl LaunchSpec {
     }
 
     /// Credentials for this pane's agent (Settings → Accounts), read when the pane starts.
-    pub fn auth_setup(&self) -> AuthSetup {
+    pub fn auth_setup(&self) -> anyhow::Result<AuthSetup> {
         let agent = match self.kind {
-            PaneKind::Shell => return AuthSetup::default(),
+            PaneKind::Shell => return Ok(AuthSetup::default()),
             PaneKind::Claude => AuthAgent::Claude,
             PaneKind::Codex => AuthAgent::Codex,
         };
-        match agentty_bridge::agent_auth::environment(agent) {
-            Ok(changes) => AuthSetup { changes, warning: None },
-            Err(err) => AuthSetup { changes: Vec::new(), warning: Some(format!("{err:#}")) },
+        // An account whose folder can't be readied refuses the pane: falling back would run the
+        // agent, or a login, on the user's own login.
+        if let Some(id) = self.accounts.get(agent) {
+            let changes = agentty_bridge::accounts::environment(agent, id).with_context(|| format!("account {id}"))?;
+            return Ok(AuthSetup { changes, warning: None });
         }
+        Ok(match agentty_bridge::agent_auth::environment(agent) {
+            Ok(mut changes) => {
+                // Started from a pane on an account, the app inherits that account's folder.
+                changes.extend(agentty_bridge::accounts::inherited_account_variable(agent).map(|name| EnvChange::Unset(name.into())));
+                AuthSetup { changes, warning: None }
+            }
+            Err(err) => AuthSetup { changes: Vec::new(), warning: Some(format!("{err:#}")) },
+        })
+    }
+
+    /// A shell pane's account folders, so an agent typed there runs on its window's accounts. An
+    /// account whose folder can't be readied refuses the pane, as [`Self::auth_setup`].
+    pub fn shell_account_env(&self) -> anyhow::Result<Vec<(String, String)>> {
+        if self.kind != PaneKind::Shell {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for agent in [AuthAgent::Claude, AuthAgent::Codex] {
+            let Some(id) = self.accounts.get(agent) else { continue };
+            for change in agentty_bridge::accounts::environment(agent, id).with_context(|| format!("account {id}"))? {
+                if let EnvChange::Set(name, value) = change {
+                    out.push((name, value));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The agent command line, including activity hooks.
@@ -1379,7 +1414,7 @@ pub(crate) mod tests {
         assert!(script.contains("; exec env -u AGENTTY_AUTH_OPENAI_API_KEY "), "{script}");
         assert_eq!(setup.pane_variables(), vec![("AGENTTY_AUTH_OPENAI_API_KEY".to_string(), hostile)]);
         // Shell panes and command panes never get credentials.
-        assert!(LaunchSpec::new(PaneKind::Shell, PathBuf::from("/tmp")).auth_setup().changes.is_empty());
+        assert!(LaunchSpec::new(PaneKind::Shell, PathBuf::from("/tmp")).auth_setup().unwrap().changes.is_empty());
     }
 
     #[test]

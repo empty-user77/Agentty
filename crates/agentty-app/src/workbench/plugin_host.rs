@@ -567,10 +567,13 @@ impl Workbench {
         let (cwd, launched) = (view.spec.cwd.clone(), view.launched_at_ms);
         let (pane_id, title, status) = (view.pane_id, view.display_title(), status_id(&pane, cx));
         let max_turns = call.params["maxTurns"].as_u64().unwrap_or(200).clamp(1, 2000) as usize;
+        let account = view.spec.accounts.codex.clone();
         let task = cx.background_spawn(async move {
             let id = match (agent, session_id) {
                 (_, Some(id)) => id,
-                (Agent::Codex, None) => agentty_bridge::codex::find_recent(&cwd, launched).ok_or("no Codex session found yet")?,
+                (Agent::Codex, None) => {
+                    agentty_bridge::codex::find_recent(&cwd, launched, account.as_deref()).ok_or("no Codex session found yet")?
+                }
                 _ => return Err("no session yet".to_string()),
             };
             let (cwd, turns) = agentty_bridge::load(agent, &id).map_err(|e| format!("{e:#}"))?;

@@ -1,5 +1,6 @@
 //! The window's root view. Hierarchy: group → workspace (one sidebar row) → tab → split panes.
 
+mod account_menu;
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
@@ -220,6 +221,8 @@ pub fn next_free_window_slot() -> usize {
     LayoutState::next_free_slot()
 }
 
+pub(crate) use account_menu::prepare_window as prepare_account_window;
+pub(crate) use account_menu::tidy_account_folders;
 pub use account_usage::AccountUsage;
 pub(crate) use chat::{prompt_words, user_parts};
 pub(crate) use layout::format_elapsed;
@@ -590,6 +593,12 @@ pub struct Workbench {
     native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
     account_usage: Vec<account_usage::AccountUsage>,
+    /// The logins this window's new sessions run on, and whose sessions it lists.
+    pub(crate) accounts: agentty_bridge::accounts::AccountChoice,
+    /// Those logins by name, to tell this window from the others.
+    window_account_label: Option<String>,
+    account_menu_open: bool,
+    account_rows: Vec<account_menu::AccountRow>,
     /// The session page's Agents and Workflows views (and which one is on screen).
     session_board: session_board::SessionBoard,
     /// Tokens and spend of each session, by session id (from the same scan).
@@ -1015,6 +1024,10 @@ impl Workbench {
             toast_seq: 0,
             native_title: String::new(),
             account_usage: Vec::new(),
+            accounts: Default::default(),
+            window_account_label: None,
+            account_menu_open: false,
+            account_rows: Vec::new(),
             session_board: Default::default(),
             orchestrator_dialog: None,
             session_usage: Default::default(),
@@ -1335,7 +1348,8 @@ impl Workbench {
 
     // -- panes ---------------------------------------------------------------------------------
 
-    fn spawn_pane(&mut self, spec: LaunchSpec, cx: &mut Context<Self>) -> Pane {
+    fn spawn_pane(&mut self, mut spec: LaunchSpec, cx: &mut Context<Self>) -> Pane {
+        self.choose_accounts(&mut spec);
         let tool = match (&spec.kind, &spec.start) {
             (PaneKind::Shell, crate::launch::Start::Command(line)) => {
                 crate::agents::OTHER_AGENTS.iter().find(|a| line.split_whitespace().next() == Some(a.binary)).map_or("command", |a| a.id)
@@ -2409,13 +2423,19 @@ impl Workbench {
             return;
         }
         self.sessions_loading = true;
-        let task = cx.background_spawn(async { agentty_bridge::list(None, 300) });
+        let accounts = self.accounts.clone();
+        let listed = accounts.clone();
+        let task = cx.background_spawn(async move { agentty_bridge::list_of(None, &listed, 300) });
         cx.spawn(async move |this, cx| {
             let sessions = task.await;
             let _ = this.update(cx, |this, cx| {
+                this.sessions_loading = false;
+                // The window moved to another account while this was read: its list is the one to show.
+                if this.accounts != accounts {
+                    return this.refresh_sessions(cx);
+                }
                 crate::set_recent_sessions(&sessions, cx);
                 this.sessions = sessions;
-                this.sessions_loading = false;
                 if let Some(picker) = this.picker.as_mut() {
                     picker.add_session_dirs(&this.sessions);
                 }
@@ -3038,7 +3058,8 @@ impl Workbench {
         let (kind, session_id) =
             persist::saved_session(view.spec.kind, running, view.session_id_live.clone(), view.spec.session_id.clone());
         let session_id = match kind {
-            PaneKind::Codex => session_id.or_else(|| agentty_bridge::codex::find_recent(&view.spec.cwd, view.launched_at_ms)),
+            PaneKind::Codex => session_id
+                .or_else(|| agentty_bridge::codex::find_recent(&view.spec.cwd, view.launched_at_ms, view.spec.accounts.codex.as_deref())),
             _ => session_id,
         };
         PaneSnapshot {
@@ -3198,6 +3219,7 @@ impl Workbench {
             plugins_grouped: self.plugins_grouped,
             window: self.window_state,
             panels: self.panel_state(),
+            accounts: self.accounts.clone(),
         };
         if self.closed {
             return;
@@ -3209,6 +3231,8 @@ impl Workbench {
 
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = LayoutState::load(self.slot);
+        self.restore_accounts(&state.accounts);
+        self.sync_follow_accounts(cx);
         self.groups = state
             .groups
             .iter()
@@ -3513,13 +3537,18 @@ impl Render for Workbench {
             Some(name) if !name.is_empty() => format!("{name} — Agentty"),
             _ => "Agentty".to_string(),
         };
+        let title = match &self.window_account_label {
+            Some(account) => format!("{account} — {title}"),
+            None => title,
+        };
         if title != self.native_title {
             window.set_window_title(&title);
             self.native_title = title;
         }
         let main: gpui::AnyElement = match self.page {
             Some(Page::Usage) => {
-                let usage = self.usage.get_or_insert_with(|| cx.new(UsageView::new)).clone();
+                let accounts = self.accounts.clone();
+                let usage = self.usage.get_or_insert_with(|| cx.new(|cx| UsageView::new(accounts, cx))).clone();
                 gpui::AnyView::from(usage).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
@@ -4396,7 +4425,15 @@ impl Workbench {
             "codex" => PaneKind::Codex,
             _ => PaneKind::Shell,
         };
+        use agentty_bridge::agent_auth::AuthAgent;
+        let auth_agent = |name: &str| if name.starts_with("codex") { AuthAgent::Codex } else { AuthAgent::Claude };
         match command {
+            // `account-add claude|codex`, `account-relogin claude[:<id>]`: the menu's buttons.
+            "account-add" => self.add_account(auth_agent(argument), window, cx),
+            "account-relogin" => {
+                let id = argument.split_once(':').map(|(_, id)| id.to_string());
+                self.relogin(auth_agent(argument), id, window, cx);
+            }
             "snapshot" => {
                 let path = PathBuf::from(argument);
                 // Hidden windows don't repaint; raise it without taking keyboard focus.

@@ -85,6 +85,11 @@ impl Workbench {
             .flat_map(|ws| ws.tabs.iter().flat_map(|tab| tab.root.leaves()).map(move |p| (ws, p)))
     }
 
+    /// This window as the remote page tells it apart: its slot and the account it runs.
+    pub fn remote_window(&self) -> crate::remote::snapshot::WindowInfo {
+        crate::remote::snapshot::WindowInfo { slot: self.slot, account: self.window_account_label() }
+    }
+
     /// What the remote page shows, laid out as the sidebar is: workspaces in its order (outside
     /// any group first, then each group's), each with its tabs and their split panes, and every
     /// terminal's state.
@@ -163,6 +168,7 @@ impl Workbench {
             workspaces.push(WorkspaceInfo {
                 id: ws.id,
                 name,
+                account: self.window_account_label(),
                 group: group.map(|g| g.name.clone()).or_else(|| ungrouped_label.clone()),
                 group_color: group.and_then(|g| super::accent_color(g.color)).map(hex_color),
                 color: super::accent_color(ws.color).map(hex_color),
@@ -210,7 +216,9 @@ impl Workbench {
             }
             Command::CloseTab { workspace, pane } => return self.remote_close_tab(*workspace, *pane, window, cx),
             Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, self.kind_here(*kind, cx), cx),
-            Command::OpenFolder { folder, kind, group, title } => {
+            // For another window, which takes it in its turn.
+            Command::OpenFolder { window: Some(slot), .. } if *slot != self.slot => return false,
+            Command::OpenFolder { folder, kind, group, title, .. } => {
                 return self.remote_open_folder(folder.clone(), group.clone(), title.clone(), self.kind_here(*kind, cx), cx)
             }
             // To a chat's lead the page may reach (in a workspace it is allowed in).
