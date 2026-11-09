@@ -315,6 +315,72 @@ fn user_claude_dir() -> PathBuf {
     }
 }
 
+/// Where a login is kept, for the account details in Settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginPlace {
+    /// The agent's folder: an account's own, or the user's for the base login.
+    pub folder: PathBuf,
+    /// The variable that points the agent there, when one does (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`).
+    pub variable: Option<(&'static str, PathBuf)>,
+    /// Where the CLI keeps the sign-in itself.
+    pub store: LoginStore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginStore {
+    /// The macOS Keychain item with this service name.
+    Keychain(String),
+    /// A file (Claude Code off macOS, Codex's `auth.json`).
+    File(PathBuf),
+    /// Codex's system keyring store.
+    Keyring,
+}
+
+/// The Keychain service Claude Code keeps a login under: its own name for the default folder, and
+/// one with the first 8 hex digits of the folder's SHA-256 for a folder named by `CLAUDE_CONFIG_DIR`.
+pub fn claude_keychain_service(config_dir: Option<&Path>) -> String {
+    use sha2::{Digest, Sha256};
+    const BASE: &str = "Claude Code-credentials";
+    match config_dir {
+        None => BASE.to_string(),
+        Some(dir) => {
+            let digest = Sha256::digest(dir.as_os_str().as_encoded_bytes());
+            let tag: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+            format!("{BASE}-{tag}")
+        }
+    }
+}
+
+/// Where the login of account `id` (the base login without one) lives.
+pub fn login_place(agent: AuthAgent, id: Option<&str>) -> Result<LoginPlace> {
+    let (folder, variable) = match (agent, id) {
+        (_, Some(id)) => {
+            let folder = home(agent, id)?;
+            let name = if agent == AuthAgent::Claude { "CLAUDE_CONFIG_DIR" } else { "CODEX_HOME" };
+            (folder.clone(), Some((name, folder)))
+        }
+        (AuthAgent::Claude, None) => {
+            let folder = user_claude_dir();
+            let named = std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|dir| Path::new(&dir) == folder);
+            (folder.clone(), named.then_some(("CLAUDE_CONFIG_DIR", folder)))
+        }
+        (AuthAgent::Codex, None) => {
+            let folder = agent_auth::user_codex_home();
+            let named = std::env::var_os("CODEX_HOME").is_some_and(|dir| Path::new(&dir) == folder);
+            (folder.clone(), named.then_some(("CODEX_HOME", folder)))
+        }
+    };
+    let store = match agent {
+        AuthAgent::Claude if cfg!(target_os = "macos") => {
+            LoginStore::Keychain(claude_keychain_service(variable.as_ref().map(|(_, dir)| dir.as_path())))
+        }
+        AuthAgent::Claude => LoginStore::File(folder.join(".credentials.json")),
+        AuthAgent::Codex if folder.join("auth.json").is_file() => LoginStore::File(folder.join("auth.json")),
+        AuthAgent::Codex => LoginStore::Keyring,
+    };
+    Ok(LoginPlace { folder, variable, store })
+}
+
 /// The user's own `.claude.json`: inside their config folder only when they moved it themselves.
 fn user_claude_config() -> PathBuf {
     match std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
@@ -461,6 +527,13 @@ pub fn read_codex_login(folder: &Path) -> Option<Account> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Claude Code's own naming: the folder's SHA-256, first 8 hex digits.
+    #[test]
+    fn a_config_folder_has_a_keychain_item_of_its_own() {
+        assert_eq!(claude_keychain_service(None), "Claude Code-credentials");
+        assert_eq!(claude_keychain_service(Some(Path::new("/tmp/example/accounts/claude/a1"))), "Claude Code-credentials-0c710407");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("agentty-accounts-{name}-{}", std::process::id()));

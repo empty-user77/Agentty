@@ -273,6 +273,28 @@ impl Workbench {
                     toggle("wo-unified-header", prefs.unified_header, |s| s.unified_header = !s.unified_header, cx),
                 ))
             })
+            .child(div().mt_2().mb_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(
+                div()
+                    .id("wo-all-settings")
+                    .px_1()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .t_body()
+                    .text_color(hex(Chrome::FOREGROUND))
+                    .hover(crate::ui::hover_fill)
+                    .child(icon("settings", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .child(div().flex_1().min_w_0().child(t(cx, "workspace_options.all_settings")))
+                    .child(icon("chevron-right", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.workspace_options_open = false;
+                        this.open_settings_section(super::settings_page::SettingsSection::General, cx);
+                    })),
+            )
     }
 
     /// The sidebar button in the unified header: shows or hides the sidebar, in the same place
