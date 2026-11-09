@@ -4425,7 +4425,15 @@ impl Workbench {
             "codex" => PaneKind::Codex,
             _ => PaneKind::Shell,
         };
+        use agentty_bridge::agent_auth::AuthAgent;
+        let auth_agent = |name: &str| if name.starts_with("codex") { AuthAgent::Codex } else { AuthAgent::Claude };
         match command {
+            // `account-add claude|codex`, `account-relogin claude[:<id>]`: the menu's buttons.
+            "account-add" => self.add_account(auth_agent(argument), window, cx),
+            "account-relogin" => {
+                let id = argument.split_once(':').map(|(_, id)| id.to_string());
+                self.relogin(auth_agent(argument), id, window, cx);
+            }
             "snapshot" => {
                 let path = PathBuf::from(argument);
                 // Hidden windows don't repaint; raise it without taking keyboard focus.

@@ -155,14 +155,23 @@ impl SyncProfile {
         }
     }
 
-    /// Forgets this account's sync on this computer: its settings, clone and SQLite file. The
-    /// repository itself is left as it is.
+    /// Forgets this account's sync on this computer: its settings and clone. The repository itself
+    /// is left as it is, and so is the SQLite file, which can be the only copy: it moves to the
+    /// data folder. A sync under way finishes first, or it would write the folder back.
     pub fn delete(&self) -> Result<()> {
-        if self.account.is_none() {
-            return Ok(());
-        }
+        let Some((agent, id)) = &self.account else { return Ok(()) };
         let dir = self.dir();
         anyhow::ensure!(dir.is_absolute(), "not an account's sync folder");
+        if !dir.exists() {
+            return Ok(());
+        }
+        let _lock = Lock::wait(self, std::time::Duration::from_secs(60)).map_err(|err| anyhow::anyhow!("{err}"))?;
+        let sqlite = self.default_sqlite_file();
+        if sqlite.is_file() {
+            let agent = if *agent == AuthAgent::Claude { "claude" } else { "codex" };
+            let kept = crate::fsutil::data_dir().join(format!("sessions-{agent}-{id}.sqlite"));
+            fs::rename(&sqlite, &kept).with_context(|| format!("could not keep {}", sqlite.display()))?;
+        }
         match fs::remove_dir_all(&dir) {
             Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.into()),
             _ => Ok(()),
@@ -241,6 +250,21 @@ mod profile_tests {
         assert!(!github("me/sync", false).same_place(&github("me/other", false)));
         assert!(git("git@example.com:me/sync.git").same_place(&git("git@example.com:me/sync")));
         assert!(!git("git@example.com:me/sync").same_place(&Remote::Sqlite { path: "/x/sessions.sqlite".into() }));
+        // A repository picked on GitHub and the same one pasted as a URL, written any way.
+        for url in [
+            "git@github.com:me/sync.git",
+            "https://github.com/Me/Sync",
+            "https://user@github.com/me/sync.git/",
+            "ssh://git@github.com/me/sync",
+            "https://www.github.com/me/sync",
+        ] {
+            assert!(github("me/sync", false).same_place(&git(url)), "{url}");
+        }
+        assert!(!github("me/sync", false).same_place(&git("git@github.com:me/other.git")));
+        assert!(git("ssh://git@example.com/me/sync").same_place(&git("git@Example.com:me/sync")));
+        assert!(git("file:///tmp/example/sync").same_place(&git("/tmp/example/sync")));
+        assert!(!git("/tmp/example/sync").same_place(&git("/tmp/example/other")));
+        assert!(!git("C:\\example\\sync").same_place(&git("C:\\example\\other")));
     }
 }
 

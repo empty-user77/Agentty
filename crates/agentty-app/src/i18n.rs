@@ -3091,6 +3091,7 @@ strings! {
     "accounts.logins" => ["Logins", "로그인 계정", "ログイン", "登录账户", "Anmeldungen"],
     "account.default_badge" => ["Base", "기본 계정", "ベース", "基础账户", "Basis"],
     "account.relogin" => ["Sign in again", "다시 로그인", "再ログイン", "重新登录", "Erneut anmelden"],
+    "account.relogin_other" => ["That was another account, so it was signed out. Sign in again as {name}.", "다른 계정으로 로그인해서 로그아웃했습니다. {name}(으)로 다시 로그인해 주세요.", "別のアカウントだったためログアウトしました。{name} で再ログインしてください。", "登录的是另一个账户，已退出。请用 {name} 重新登录。", "Das war ein anderes Konto, daher wurde es abgemeldet. Melde dich erneut als {name} an."],
     "account.signed_out" => ["Signed out", "로그인 풀림", "ログアウト済み", "已退出登录", "Abgemeldet"],
     "account.ends_soon" => ["Login ends soon", "로그인 곧 만료", "ログインの期限が近い", "登录即将过期", "Anmeldung läuft bald ab"],
     "settings.accounts" => ["Accounts", "계정 · 인증", "アカウント", "账户", "Konten"],

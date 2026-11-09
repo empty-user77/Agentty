@@ -57,6 +57,8 @@ const CLAUDE_VARIABLES: &[&str] = &[
     "CLOUD_ML_REGION",
 ];
 const CODEX_VARIABLES: &[&str] = &["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY"];
+/// Names the Claude Code CLI's Keychain entry in place of `CLAUDE_CONFIG_DIR` when set.
+pub const CLAUDE_KEYCHAIN_VARIABLE: &str = "CLAUDE_SECURESTORAGE_CONFIG_DIR";
 
 /// How Claude Code authenticates.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -475,7 +477,9 @@ pub(crate) fn account_environment(agent: AuthAgent, folder: String) -> Vec<EnvCh
     match agent {
         AuthAgent::Claude => {
             let mut all = CLAUDE_VARIABLES.to_vec();
-            all.push("CLAUDE_CONFIG_DIR");
+            // With this set, the CLI names its Keychain entry after it instead of the folder, and
+            // every account would share one entry: signing in to one replaces another.
+            all.extend(["CLAUDE_CONFIG_DIR", CLAUDE_KEYCHAIN_VARIABLE]);
             changes(&all, vec![("CLAUDE_CONFIG_DIR", folder)])
         }
         AuthAgent::Codex => {
@@ -1049,5 +1053,13 @@ mod tests {
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"x\"\n");
         assert!(!home.join("auth.json").exists());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_account_pane_has_a_keychain_entry_of_its_own() {
+        let changes = account_environment(AuthAgent::Claude, "/tmp/example/accounts/claude/a1".into());
+        assert!(changes.contains(&EnvChange::Unset(CLAUDE_KEYCHAIN_VARIABLE.into())));
+        assert!(changes.contains(&EnvChange::Set("CLAUDE_CONFIG_DIR".into(), "/tmp/example/accounts/claude/a1".into())));
+        assert!(!changes.contains(&EnvChange::Unset("CLAUDE_CONFIG_DIR".into())));
     }
 }

@@ -137,11 +137,33 @@ impl AccountStore {
         fsutil::data_dir().join("accounts.json")
     }
 
+    /// The list, for showing: a damaged file reads as no accounts.
     pub fn load() -> Self {
-        std::fs::read(Self::path()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+        Self::read().unwrap_or_default()
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// The list, or why it can't be read. No file is an empty list; a damaged one is an error, so
+    /// nothing is decided from it and nothing writes an empty list over it.
+    pub fn read() -> Result<Self> {
+        match std::fs::read(Self::path()) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("accounts.json is damaged"),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Reads the list, changes it and saves it, one change at a time across the app's windows and
+    /// threads, so two changes close together don't lose one. Refused while the file is damaged.
+    pub fn change<R>(apply: impl FnOnce(&mut Self) -> R) -> Result<R> {
+        static CHANGING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CHANGING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut store = Self::read()?;
+        let result = apply(&mut store);
+        store.save()?;
+        Ok(result)
+    }
+
+    fn save(&self) -> Result<()> {
         fsutil::write_private(&Self::path(), &serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
@@ -273,6 +295,16 @@ fn owner_in(root: &Path, path: &Path) -> Option<String> {
 /// and `CODEX_HOME` from its pane, and those are not the user's own folders.
 pub fn is_account_path(agent: AuthAgent, path: &Path) -> bool {
     path.starts_with(accounts_root(agent))
+}
+
+/// The folder variable this app inherited from a pane on an account (a nested Agentty), if any: a
+/// pane on the agents' own login must not keep it.
+pub fn inherited_account_variable(agent: AuthAgent) -> Option<&'static str> {
+    let name = match agent {
+        AuthAgent::Claude => "CLAUDE_CONFIG_DIR",
+        AuthAgent::Codex => "CODEX_HOME",
+    };
+    std::env::var_os(name).is_some_and(|value| is_account_path(agent, Path::new(&value))).then_some(name)
 }
 
 /// The user's own Claude Code folder.

@@ -84,7 +84,7 @@ impl Backend {
         let listener = Listener(tx);
 
         // Credentials chosen in Settings → Accounts (nothing for the agents' own CLI login).
-        let auth = spec.auth_setup();
+        let auth = spec.auth_setup()?;
         let (program, args) = spec.argv_with_auth(&auth);
         let mut env = HashMap::new();
         env.insert("TERM".into(), "xterm-256color".into());
@@ -137,7 +137,7 @@ impl Backend {
         }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
-        env.extend(spec.shell_account_env());
+        env.extend(spec.shell_account_env()?);
         // A plugin's capture proxy (`terminal/setProxy`): tabs opened while it is on go through it.
         env.extend(crate::plugins::terminal_proxy::pane_environment(options.pane_id));
         let mut socket_token = None;

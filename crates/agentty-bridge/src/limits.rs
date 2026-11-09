@@ -43,6 +43,14 @@ fn claude_file(account: Option<&str>) -> PathBuf {
     }
 }
 
+/// Deletes a removed account's limits. Codex keeps its own in the account's folder.
+pub fn forget_claude(account: &str) {
+    let file = claude_file(Some(account));
+    if file.is_absolute() {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
 /// `rate_limits` from Claude Code's statusline input.
 pub fn parse_claude(rate_limits: &Value, now_ms: u64) -> Option<AgentLimits> {
     let limits = AgentLimits {

@@ -1089,7 +1089,8 @@ impl Workbench {
             return;
         }
         state.usage_loading = true;
-        let accounts = self.accounts.clone();
+        // The lead's accounts: a session resumed here runs on the account that holds it.
+        let accounts = state.lead.read(cx).spec.accounts.clone();
         let task = cx.background_spawn(async move {
             let now = crate::ui::now_ms();
             agents

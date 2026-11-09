@@ -85,13 +85,14 @@ impl Workbench {
             .flat_map(|ws| ws.tabs.iter().flat_map(|tab| tab.root.leaves()).map(move |p| (ws, p)))
     }
 
-    /// What the remote page shows, laid out as the sidebar is: workspaces in its order (outside
-    /// any group first, then each group's), each with its tabs and their split panes, and every
-    /// terminal's state.
+    /// This window as the remote page tells it apart: its slot and the account it runs.
     pub fn remote_window(&self) -> crate::remote::snapshot::WindowInfo {
         crate::remote::snapshot::WindowInfo { slot: self.slot, account: self.window_account_label() }
     }
 
+    /// What the remote page shows, laid out as the sidebar is: workspaces in its order (outside
+    /// any group first, then each group's), each with its tabs and their split panes, and every
+    /// terminal's state.
     pub fn remote_overview(&self, cx: &gpui::App) -> (Vec<WorkspaceInfo>, Vec<SessionInfo>) {
         let hex_color = |c: u32| format!("#{c:06x}");
         let user = |ws: &&super::Workspace| ws.plugin.is_none() && !ws.remote_hidden;

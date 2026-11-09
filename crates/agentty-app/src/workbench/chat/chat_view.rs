@@ -618,9 +618,11 @@ impl Workbench {
         state.recent_loading = true;
         let view = state.lead.read(cx);
         let (agent, folder, current) = (chat_lead_agent(&state.lead, cx), view.display_cwd(), view.current_session());
+        // The account the lead runs on: its sessions, not those of the agents' own login.
+        let accounts = view.spec.accounts.clone();
         let task = cx.background_spawn(async move {
             let folder = folder.to_string_lossy().into_owned();
-            agentty_bridge::list(Some(agent), RECENT_SCANNED)
+            agentty_bridge::list_of(Some(agent), &accounts, RECENT_SCANNED)
                 .into_iter()
                 // One with no time of its own (an unreadable record) is left out.
                 .filter(|s| s.cwd.as_deref() == Some(folder.as_str()) && Some(&s.id) != current.as_ref() && s.updated_at > 0)

@@ -33,9 +33,35 @@ pub enum Remote {
 impl Remote {
     /// Whether both lead to the same repository, however it is reached.
     pub fn same_place(&self, other: &Remote) -> bool {
-        match (self, other) {
-            (Remote::Github { repo: a, .. }, Remote::Github { repo: b, .. }) => a.eq_ignore_ascii_case(b),
-            _ => self.url().trim_end_matches('/').trim_end_matches(".git") == other.url().trim_end_matches('/').trim_end_matches(".git"),
+        self.place() == other.place()
+    }
+
+    /// The repository as one string, whichever way its URL is written: `host/path` without the
+    /// scheme, a user name or `.git` (the host in lower case, all of it on GitHub, where names
+    /// ignore case), or the path of a local one.
+    fn place(&self) -> String {
+        let url = match self {
+            Remote::Github { repo, .. } => return format!("github.com/{}", repo.to_ascii_lowercase()),
+            Remote::Sqlite { path } => return format!("sqlite:{path}"),
+            Remote::Git { url } => url.trim(),
+        };
+        let url = url.trim_end_matches('/').trim_end_matches(".git").trim_end_matches('/');
+        let remote = match url.split_once("://") {
+            Some(("file", path)) => return path.to_string(),
+            Some((_, rest)) => rest.to_string(),
+            // `user@host:path`, the scp-like form; anything else is a local path.
+            None => match url.split_once(':') {
+                Some((host, path)) if !host.contains('/') && host.len() > 1 => format!("{host}/{}", path.trim_start_matches('/')),
+                _ => return url.to_string(),
+            },
+        };
+        let (host, path) = remote.split_once('/').unwrap_or((&remote, ""));
+        let host = host.rsplit('@').next().unwrap_or(host).to_ascii_lowercase();
+        let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+        if host == "github.com" {
+            format!("{host}/{}", path.to_ascii_lowercase())
+        } else {
+            format!("{host}/{path}")
         }
     }
 
