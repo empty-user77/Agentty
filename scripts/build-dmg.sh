@@ -68,7 +68,7 @@ case "$MODE" in
       [[ -n "${AGENTTY_GA_MEASUREMENT_ID:-}" && -n "${AGENTTY_GA_API_SECRET:-}" ]] \
         || die "AGENTTY_GA_MEASUREMENT_ID / AGENTTY_GA_API_SECRET are empty; refusing to publish a build without analytics"
       command -v gh >/dev/null || die "gh CLI not installed (brew install gh)"
-      gh auth status >/dev/null 2>&1 || die "gh CLI not authenticated (gh auth login)"
+      gh auth status --active >/dev/null 2>&1 || die "gh CLI not authenticated (gh auth login)"
     fi
     log "PROD build (signature: $SIGN_ID, notarization: on)"
     ;;
