@@ -599,6 +599,8 @@ pub struct Workbench {
     window_account_label: Option<String>,
     account_menu_open: bool,
     account_rows: Vec<account_menu::AccountRow>,
+    /// Logins whose details are open in Settings → Accounts.
+    account_details_open: HashSet<String>,
     /// The session page's Agents and Workflows views (and which one is on screen).
     session_board: session_board::SessionBoard,
     /// Tokens and spend of each session, by session id (from the same scan).
@@ -1028,6 +1030,7 @@ impl Workbench {
             window_account_label: None,
             account_menu_open: false,
             account_rows: Vec::new(),
+            account_details_open: HashSet::new(),
             session_board: Default::default(),
             orchestrator_dialog: None,
             session_usage: Default::default(),
@@ -4430,6 +4433,22 @@ impl Workbench {
         match command {
             // `account-add claude|codex`, `account-relogin claude[:<id>]`: the menu's buttons.
             "account-add" => self.add_account(auth_agent(argument), window, cx),
+            "account-menu" => self.toggle_account_menu(cx),
+            "workspace-options" => {
+                self.workspace_options_open = !self.workspace_options_open;
+                cx.notify();
+            }
+            // `account-remove claude:<id>`: the confirmation's Remove, without the dialog.
+            "account-remove" => {
+                if let Some((_, id)) = argument.split_once(':') {
+                    self.remove_account(auth_agent(argument), id.to_string(), cx);
+                }
+            }
+            // `account-details Claude-own`, `Claude-<id>`, …: opens a login's details in Settings.
+            "account-details" => {
+                self.account_details_open.insert(argument.to_string());
+                cx.notify();
+            }
             "account-relogin" => {
                 let id = argument.split_once(':').map(|(_, id)| id.to_string());
                 self.relogin(auth_agent(argument), id, window, cx);

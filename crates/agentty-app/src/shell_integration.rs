@@ -160,6 +160,9 @@ fn posix_guide_lines(command: &str) -> String {
 const BYPASS_SKIP_FIRST: &str =
     "-v|--version|-h|--help|exec|mcp|config|doctor|update|install|login|logout|setup-token|plugin|completion|migrate-installer";
 
+/// Claude Code's first words, besides [`BYPASS_SKIP_FIRST`], that start no session.
+const CLAUDE_SKIP_FIRST: &str = "auth|agents|api-key|status";
+
 /// The options "always Bypass / Full Access" (Settings) adds to an agent typed into a shell, the same
 /// ones a tab Agentty starts gets (`LaunchSpec::command`). Empty for other commands.
 fn bypass_options(command: &str) -> &'static [&'static str] {
@@ -174,7 +177,15 @@ fn bypass_options(command: &str) -> &'static [&'static str] {
 /// session, and the user chose no permission mode of their own on this command line.
 fn posix_bypass_helper() -> String {
     format!(
-        r#"__agentty_bypass_ok() {{
+        r#"__agentty_settings_ok() {{
+  case "$1" in {BYPASS_SKIP_FIRST}|{CLAUDE_SKIP_FIRST}) return 1;; esac
+  local __agentty_word
+  for __agentty_word in "$@"; do
+    case "$__agentty_word" in --settings*) return 1;; esac
+  done
+  return 0
+}}
+__agentty_bypass_ok() {{
   case "$1" in {BYPASS_SKIP_FIRST}) return 1;; esac
   local __agentty_word
   for __agentty_word in "$@"; do
@@ -203,6 +214,14 @@ fn posix_bypass_lines(command: &str, bypass: bool) -> String {
 /// of several Codex in one folder is this pane's. Only inside an Agentty pane, and not for commands
 /// that start no session.
 fn posix_hook_lines(command: &str) -> String {
+    if command == "claude" {
+        // A typed Claude Code gets the status line a Claude Code tab has, so its plan limits are
+        // recorded for the account it runs on. Not when the user brings settings of their own.
+        return format!(
+            "  local -a __agentty_hooks=()\n  [ -n \"$AGENTTY_SOCKET\" ] && __agentty_settings_ok \"$@\" && __agentty_hooks=(--settings {})\n",
+            single_quote(&crate::launch::claude_statusline_settings())
+        );
+    }
     if command != "codex" {
         return "  local -a __agentty_hooks=()\n".into();
     }
@@ -376,6 +395,16 @@ pub fn powershell_script(aliases: &[CommandAlias], bypass: bool) -> String {
         }
         // A typed Codex reports its finished turns (and which session they were) like a Codex tab.
         let _ = writeln!(out, "  $__agentty_hooks = @()");
+        if command == "claude" {
+            let _ = writeln!(
+                out,
+                "  if ($env:AGENTTY_SOCKET -and -not ($args.Count -gt 0 -and \"$($args[0])\" -in @({}, {})) -and -not ($args | Where-Object {{ \"$_\" -like '--settings*' }})) {{",
+                list(BYPASS_SKIP_FIRST),
+                list(CLAUDE_SKIP_FIRST)
+            );
+            let _ = writeln!(out, "    $__agentty_hooks = @('--settings', {})", quote(&crate::launch::claude_statusline_settings()));
+            let _ = writeln!(out, "  }}");
+        }
         if command == "codex" {
             let _ = writeln!(
                 out,
@@ -801,6 +830,26 @@ mod tests {
             assert_eq!(run("--version"), "[--version]", "{shell}");
             assert_eq!(run("mcp list"), "[mcp][list]", "{shell}");
             assert_eq!(run("--append-system-prompt mine"), "[--append-system-prompt][mine]", "{shell}");
+            // Inside a pane a typed Claude Code also gets the status line, for its plan limits.
+            let in_pane = |args: &str| {
+                let flag = if shell == "zsh" { "-f" } else { "--norc" };
+                let output = Command::new(shell)
+                    .args([flag, "-c", &format!("source {}; claude {args}", dir.join("wrappers").display())])
+                    .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_BIN")
+                    .env_remove("AGENTTY_SHELL_API")
+                    .env_remove("AGENTTY_GUIDE_FILE")
+                    // Only tested for being set; nothing connects to it.
+                    .env("AGENTTY_SOCKET", dir.join("example.sock"))
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&output.stdout).to_string()
+            };
+            let settings = crate::launch::claude_statusline_settings();
+            assert_eq!(in_pane("hi"), format!("[--settings][{settings}][hi]"), "{shell}");
+            assert_eq!(in_pane("auth login"), "[auth][login]", "{shell}");
+            assert_eq!(in_pane("--settings mine.json"), "[--settings][mine.json]", "{shell}");
             std::fs::remove_dir_all(dir).ok();
         }
     }

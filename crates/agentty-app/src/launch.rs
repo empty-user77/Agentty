@@ -653,6 +653,13 @@ fn claude_hook_settings() -> String {
     .to_string()
 }
 
+/// `--settings` for a Claude Code typed into a shell pane: only the status line, which records the
+/// plan limits of the account it runs on. Hooks stay with the tabs Agentty starts.
+pub(crate) fn claude_statusline_settings() -> String {
+    let json = serde_json::json!({ "statusLine": { "type": "command", "command": statusline_wrapper() } }).to_string();
+    inline_or_file("claude-statusline.json", json)
+}
+
 /// JSON for a Claude Code flag: inline, or on Windows a file path (both are accepted), which keeps
 /// JSON quotes away from PowerShell's native-argument quoting. The JSON holds no secrets.
 fn inline_or_file(name: &str, json: String) -> String {

@@ -279,12 +279,16 @@ fn read_rows(now_ms: u64) -> Vec<AccountRow> {
     rows
 }
 
-/// "5h 12% · weekly 40%", or nothing before the status line recorded any limits.
-pub(super) fn usage_line(row: &AccountRow, cx: &gpui::App) -> Option<String> {
+/// "5h 12% · weekly 40%", or "-" before the status line recorded any limits.
+pub(super) fn usage_line(row: &AccountRow, cx: &gpui::App) -> String {
     let windows = row.limits.iter().flat_map(|limits| [("tray.session", limits.session), ("tray.weekly", limits.weekly)]);
     let used: Vec<String> =
         windows.filter_map(|(label, window)| window.map(|w| format!("{} {:.0}%", t(cx, label), w.used_percent))).collect();
-    (!used.is_empty()).then(|| used.join(" · "))
+    if used.is_empty() {
+        "-".into()
+    } else {
+        used.join(" · ")
+    }
 }
 
 /// The line for an account name: email, else the organization.
@@ -526,62 +530,48 @@ impl Workbench {
         let key = format!("{:?}-{}", row.agent, row.id.as_deref().unwrap_or("own"));
         let (agent, id) = (row.agent, row.id.clone());
         let name = name_of(&row.account).map(str::to_string).unwrap_or_else(|| t(cx, "account.own_login").to_string());
-        let mut lines = div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name))
-                .children(row.account.plan_name().map(|plan| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(plan))),
-        );
+        // The account this window runs on has the green dot; every row keeps the dot's room, so
+        // names and the lines under them start at the same place.
+        const DOT: f32 = 7.;
+        let dot = div().flex_shrink_0().size(px(DOT)).rounded_full().when(current, |d| d.bg(hex(super::remote_page::NEON_GREEN)));
         let now = crate::ui::now_ms();
-        if let Some(warning) = row.login_warning(now, cx) {
-            lines = lines.child(div().truncate().t_caption().text_color(hex(Chrome::WARNING)).child(warning));
-        } else if let Some(used) = usage_line(row, cx) {
-            lines = lines.child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(used));
-        }
-        let open_id = id.clone();
+        let (detail, color) = match row.login_warning(now, cx) {
+            Some(warning) => (warning.to_string(), Chrome::WARNING),
+            None => (usage_line(row, cx), Chrome::MUTED),
+        };
+        let lines = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(dot)
+                    .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name))
+                    .children(
+                        row.account.plan_name().map(|plan| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(plan)),
+                    ),
+            )
+            .child(div().pl(px(DOT + 8.)).truncate().t_caption().text_color(hex(color)).child(detail));
         let open = div()
             .id(SharedString::from(format!("account-open-{key}")))
             .flex_1()
             .min_w_0()
-            .flex()
-            .items_center()
-            .gap_2()
             .px_2()
             .py_1p5()
             .rounded_md()
             .cursor_pointer()
             .hover(crate::ui::hover_fill)
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .size(px(7.))
-                    .rounded_full()
-                    .when(current, |d| d.bg(hex(super::remote_page::NEON_GREEN)))
-                    .when(!current, |d| d.border_1().border_color(hex(Chrome::MUTED))),
-            )
             .child(lines)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.account_menu_open = false;
                 cx.notify();
-                crate::open_account_window(agent, open_id.clone(), cx);
+                crate::open_account_window(agent, id.clone(), cx);
             }));
-        let use_here = (!current).then(|| {
-            div()
-                .id(SharedString::from(format!("account-here-{key}")))
-                .flex_shrink_0()
-                .p_1()
-                .rounded_md()
-                .cursor_pointer()
-                .hover(crate::ui::hover_fill)
-                .child(icon("check", IconSize::INLINE, hex(Chrome::MUTED)))
-                .tooltip(crate::ui::Tooltip::text(t(cx, "account.use_here"), None))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.account_menu_open = false;
-                    this.use_account_here(agent, id.clone(), cx);
-                }))
-        });
         let relogin = row.needs_login(now).then(|| {
             let id = row.id.clone();
             div()
@@ -595,7 +585,7 @@ impl Workbench {
                 .tooltip(crate::ui::Tooltip::text(t(cx, "account.relogin"), None))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.relogin(agent, id.clone(), window, cx)))
         });
-        div().flex().items_center().gap_0p5().child(open).children(relogin).children(use_here).into_any_element()
+        div().flex().items_center().gap_0p5().child(open).children(relogin).into_any_element()
     }
 
     /// The menu beside the rail, open or not.

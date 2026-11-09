@@ -291,42 +291,52 @@ impl Workbench {
 
     pub(super) fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let target = self.tour_target();
-        let item =
-            |id: &'static str, glyph: &'static str, active: bool, tooltip: &'static str, on_click: ViewAction, cx: &mut Context<Self>| {
-                // Panel titles are upper-case headings; the tooltip uses the menu names.
-                let (key, shortcut) = match tooltip {
-                    "panel.workspaces" => ("menu.show_workspaces", "⇧⌘E"),
-                    "panel.sessions" => ("menu.show_sessions", "⇧⌘S"),
-                    "page.git" => (tooltip, "⇧⌘G"),
-                    "page.flow" => (tooltip, "⇧⌘F"),
-                    "page.monitoring" => (tooltip, "⌥⌘U"),
-                    "page.extensions" => (tooltip, "⇧⌘X"),
-                    "page.plugins" => (tooltip, ""),
-                    "page.settings" => (tooltip, "⌘,"),
-                    _ => (tooltip, ""),
-                };
-                div()
-                    .id(id)
-                    .group(id)
-                    .when(!(id == "activity-account" && active), |d| {
-                        d.tooltip(crate::ui::Tooltip::text(t(cx, key), (!shortcut.is_empty()).then_some(shortcut)))
-                    })
-                    .w_full()
-                    .h(px(48.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .border_l_2()
-                    .border_color(if active { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)))
-                    .child(
-                        icon(glyph, IconSize::ACTIVITY, if active { hex(Chrome::BRIGHT) } else { hex(0x858585) })
-                            .group_hover(id, |s| s.text_color(hex(Chrome::BRIGHT))),
-                    )
-                    // The onboarding tour points here.
-                    .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
+        // A window on another account names it on the account icon's tooltip (the blue dot).
+        let account_label = self.window_account_label.clone();
+        let item = move |id: &'static str,
+                         glyph: &'static str,
+                         active: bool,
+                         tooltip: &'static str,
+                         on_click: ViewAction,
+                         cx: &mut Context<Self>| {
+            // Panel titles are upper-case headings; the tooltip uses the menu names.
+            let (key, shortcut) = match tooltip {
+                "panel.workspaces" => ("menu.show_workspaces", "⇧⌘E"),
+                "panel.sessions" => ("menu.show_sessions", "⇧⌘S"),
+                "page.git" => (tooltip, "⇧⌘G"),
+                "page.flow" => (tooltip, "⇧⌘F"),
+                "page.monitoring" => (tooltip, "⌥⌘U"),
+                "page.extensions" => (tooltip, "⇧⌘X"),
+                "page.plugins" => (tooltip, ""),
+                "page.settings" => (tooltip, "⌘,"),
+                _ => (tooltip, ""),
             };
+            div()
+                .id(id)
+                .group(id)
+                .when(!(id == "activity-account" && active), |d| {
+                    let text = match (id, &account_label) {
+                        ("activity-account", Some(label)) => format!("{} · {label}", t(cx, key)),
+                        _ => t(cx, key).to_string(),
+                    };
+                    d.tooltip(crate::ui::Tooltip::text(text, (!shortcut.is_empty()).then_some(shortcut)))
+                })
+                .w_full()
+                .h(px(48.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .border_l_2()
+                .border_color(if active { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)))
+                .child(
+                    icon(glyph, IconSize::ACTIVITY, if active { hex(Chrome::BRIGHT) } else { hex(0x858585) })
+                        .group_hover(id, |s| s.text_color(hex(Chrome::BRIGHT))),
+                )
+                // The onboarding tour points here.
+                .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
+        };
         // One active item at a time: an open page wins over the side panel's item. A folded sidebar
         // still has its panel: the item stays lit, and a click on it unfolds it.
         let in_plugin = self.front_plugin_workspace(cx).is_some();

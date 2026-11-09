@@ -3,12 +3,14 @@
 //! `auth.json`) are for machines where that login isn't possible. Secrets go straight to the OS
 //! credential store (`agentty_bridge::agent_auth`); the fields are cleared once saved.
 
+use super::account_menu::AccountRow;
 use super::settings_page::{row_with_hint, section};
 use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::text_input::TextInput;
 use crate::theme::{hex, Chrome};
-use crate::ui::{action_button, chip, TypeScale};
+use crate::ui::{action_button, chip, icon, IconSize, TypeScale};
+use agentty_bridge::accounts::LoginStore;
 use agentty_bridge::agent_auth::{self, AuthAgent, AuthProfile, ClaudeAuth, CodexAuth, CodexAuthSummary};
 use gpui::{div, prelude::*, ClickEvent, Context, Div, Entity, PathPromptOptions, SharedString, Window};
 
@@ -373,82 +375,174 @@ impl Workbench {
     /// each of which runs in a window of its own. The base login can't be removed; signing in again
     /// is how it changes.
     fn render_logins(&mut self, cx: &mut Context<Self>) -> Div {
+        let mut card = section(t(cx, "accounts.logins"));
+        for agent in [AuthAgent::Claude, AuthAgent::Codex] {
+            let (brand, add_id) = match agent {
+                AuthAgent::Claude => ("Claude Code", "account-settings-add-claude"),
+                AuthAgent::Codex => ("Codex", "account-settings-add-codex"),
+            };
+            let heading =
+                div().flex().items_center().justify_between().child(div().t_caption().text_color(hex(Chrome::MUTED)).child(brand)).child(
+                    div()
+                        .id(add_id)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_caption()
+                        .text_color(hex(Chrome::MUTED))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                        .child(icon("plus", IconSize::INLINE, hex(Chrome::MUTED)))
+                        .child(t(cx, "accounts.add"))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.add_account(agent, window, cx))),
+                );
+            let mut list = div().flex().flex_col().rounded_lg().border_1().border_color(hex(Chrome::BORDER)).overflow_hidden();
+            let rows: Vec<_> = self.account_rows.iter().filter(|row| row.agent == agent).cloned().collect();
+            for (index, row) in rows.iter().enumerate() {
+                let item = self.render_login(row, cx);
+                list = list.child(if index == 0 { item } else { item.border_t_1().border_color(hex(Chrome::BORDER)) });
+            }
+            card = card.child(div().flex().flex_col().gap_1p5().child(heading).child(list));
+        }
+        card
+    }
+
+    /// One login: its name, plan and usage on a line that opens its details (where it lives, and
+    /// signing in again or removing it).
+    fn render_login(&self, row: &AccountRow, cx: &mut Context<Self>) -> Div {
         use super::account_menu::{name_of, usage_line};
         let now = crate::ui::now_ms();
-        let mut card = section(t(cx, "accounts.logins"));
-        for row in &self.account_rows {
-            let brand = if row.agent == AuthAgent::Claude { "Claude Code" } else { "Codex" };
-            let name = name_of(&row.account)
-                .map(str::to_string)
-                .or_else(|| row.id.is_none().then(|| t(cx, "account.own_login").to_string()))
-                .or_else(|| row.id.clone())
-                .unwrap_or_default();
-            let detail: Vec<String> =
-                [Some(brand.to_string()), row.account.plan_name(), usage_line(row, cx)].into_iter().flatten().collect();
-            let warning = row.login_warning(now, cx);
-            let mut line = div().flex().items_center().gap_3().child(
+        let key = format!("{:?}-{}", row.agent, row.id.as_deref().unwrap_or("own"));
+        let open = self.account_details_open.contains(&key);
+        let name = name_of(&row.account)
+            .map(str::to_string)
+            .or_else(|| row.id.is_none().then(|| t(cx, "account.own_login").to_string()))
+            .or_else(|| row.id.clone())
+            .unwrap_or_default();
+        let (detail, color) = match row.login_warning(now, cx) {
+            Some(warning) => (warning.to_string(), Chrome::WARNING),
+            None => {
+                let parts: Vec<String> = [row.account.plan_name(), Some(usage_line(row, cx))].into_iter().flatten().collect();
+                (parts.join(" · "), Chrome::MUTED)
+            }
+        };
+        let toggle = key.clone();
+        let header = div()
+            .id(SharedString::from(format!("account-login-{key}")))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .cursor_pointer()
+            .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .child(icon(if open { "chevron-down" } else { "chevron-right" }, IconSize::INLINE, hex(Chrome::MUTED)))
+            .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name.clone()))
-                            .when(row.id.is_none(), |d| {
-                                d.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px_1p5()
-                                        .rounded_md()
-                                        .border_1()
-                                        .border_color(hex(Chrome::BORDER))
-                                        .t_caption()
-                                        .text_color(hex(Chrome::MUTED))
-                                        .child(t(cx, "account.default_badge")),
-                                )
-                            }),
-                    )
-                    .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(detail.join(" · ")))
-                    .children(warning.map(|warning| div().truncate().t_caption().text_color(hex(Chrome::WARNING)).child(warning))),
-            );
-            let (agent, relogin_id) = (row.agent, row.id.clone());
-            let key = format!("{:?}-{}", row.agent, row.id.as_deref().unwrap_or("own"));
-            line = line.child(action_button(
-                SharedString::from(format!("account-settings-relogin-{key}")),
-                t(cx, "account.relogin"),
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.relogin(agent, relogin_id.clone(), window, cx)),
-            ));
-            if let Some(id) = row.id.clone() {
-                let label = name;
-                line = line.child(action_button(
-                    SharedString::from(format!("account-remove-{id}")),
-                    t(cx, "account.remove"),
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_account(agent, id.clone(), label.clone(), cx)),
-                ));
-            }
-            card = card.child(line);
+                    .items_center()
+                    .gap_2()
+                    .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(name.clone()))
+                    .when(row.id.is_none(), |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .px_1p5()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(hex(Chrome::BORDER))
+                                .t_caption()
+                                .text_color(hex(Chrome::MUTED))
+                                .child(t(cx, "account.default_badge")),
+                        )
+                    }),
+            )
+            .child(div().flex_shrink_0().t_caption().text_color(hex(color)).child(detail))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if !this.account_details_open.remove(&toggle) {
+                    this.account_details_open.insert(toggle.clone());
+                }
+                cx.notify();
+            }));
+        let mut item = div().flex().flex_col().child(header);
+        if open {
+            item = item.child(self.render_login_details(row, &key, name, cx));
         }
-        card.child(
+        item
+    }
+
+    /// Where a login lives (folder, variable, sign-in store) and what can be done with it.
+    fn render_login_details(&self, row: &AccountRow, key: &str, name: String, cx: &mut Context<Self>) -> Div {
+        const LABEL_WIDTH: f32 = 96.;
+        let place = agentty_bridge::accounts::login_place(row.agent, row.id.as_deref()).ok();
+        let line = |label: &str, value: Div| {
             div()
                 .flex()
-                .flex_wrap()
+                .items_center()
+                .gap_3()
+                .min_h(gpui::px(24.))
+                .child(div().flex_shrink_0().w(gpui::px(LABEL_WIDTH)).t_caption().text_color(hex(Chrome::MUTED)).child(label.to_string()))
+                .child(value.flex_1().min_w_0())
+        };
+        let mono =
+            |text: String| div().truncate().t_caption().font_family(super::plugin_ui::MONO).text_color(hex(Chrome::FOREGROUND)).child(text);
+        let mut details = div().flex().flex_col().gap_1().pl(gpui::px(36.)).pr_3().pt_1().pb_3();
+        if let Some(place) = place {
+            let shown = crate::ui::tilde(&place.folder);
+            let (open_path, copy_path) = (place.folder.clone(), place.folder.display().to_string());
+            let folder = div()
+                .flex()
+                .items_center()
                 .gap_2()
-                .child(action_button(
-                    "account-settings-add-claude",
-                    t(cx, "account.add_claude"),
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.add_account(AuthAgent::Claude, window, cx)),
+                .child(mono(shown).flex_1().min_w_0())
+                .child(small_button(
+                    SharedString::from(format!("account-folder-open-{key}")),
+                    t(cx, "accounts.open_folder"),
+                    cx.listener(move |_, _: &ClickEvent, _, _| crate::platform::open_folder(&open_path)),
                 ))
-                .child(action_button(
-                    "account-settings-add-codex",
-                    t(cx, "account.add_codex"),
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.add_account(AuthAgent::Codex, window, cx)),
-                )),
-        )
+                .child(small_button(
+                    SharedString::from(format!("account-folder-copy-{key}")),
+                    t(cx, "accounts.copy_path"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_path.clone()));
+                        this.show_toast(tf(cx, "workspace.copied", &[("text", &copy_path)]), cx);
+                    }),
+                ));
+            details = details.child(line(t(cx, "accounts.detail_folder"), folder));
+            let variable = match &place.variable {
+                Some((variable, dir)) => mono(format!("{variable}={}", crate::ui::tilde(dir))),
+                None => div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "accounts.detail_variable_none")),
+            };
+            details = details.child(line(t(cx, "accounts.detail_variable"), variable));
+            let store = match place.store {
+                LoginStore::Keychain(service) => mono(tf(cx, "accounts.detail_keychain", &[("name", &service)])),
+                LoginStore::File(path) => mono(crate::ui::tilde(&path)),
+                LoginStore::Keyring => mono(t(cx, "accounts.detail_keyring").to_string()),
+            };
+            details = details.child(line(t(cx, "accounts.detail_store"), store));
+        }
+        let (agent, relogin_id) = (row.agent, row.id.clone());
+        let mut actions = div().flex().items_center().gap_2().pt_2().child(action_button(
+            SharedString::from(format!("account-settings-relogin-{key}")),
+            t(cx, "account.relogin"),
+            cx.listener(move |this, _: &ClickEvent, window, cx| this.relogin(agent, relogin_id.clone(), window, cx)),
+        ));
+        if let Some(id) = row.id.clone() {
+            actions = actions.child(
+                action_button(
+                    SharedString::from(format!("account-remove-{id}")),
+                    t(cx, "account.remove"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_account(agent, id.clone(), name.clone(), cx)),
+                )
+                .text_color(hex(Chrome::ERROR)),
+            );
+        }
+        details.child(actions)
     }
 
     pub(super) fn render_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -644,4 +738,23 @@ impl Workbench {
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "accounts.applies"))),
         )
     }
+}
+
+/// A compact button for a detail line (open or copy a path).
+fn small_button(
+    id: SharedString,
+    label: &str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .px_1p5()
+        .rounded_sm()
+        .cursor_pointer()
+        .t_caption()
+        .text_color(hex(Chrome::MUTED))
+        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+        .child(label.to_string())
+        .on_click(on_click)
 }
