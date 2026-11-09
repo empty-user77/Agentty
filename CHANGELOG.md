@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Added
+- Several Claude Code and Codex accounts, side by side. Sign in to another account from the account icon above
+  Settings; each account runs in a window of its own, with its own sessions, usage and plan limits, and accounts can
+  run at the same time. Settings, skills, rules, hooks and MCP servers are shared with every account. The login in
+  `~/.claude` and `~/.codex` stays as it was and is listed as the base account.
+- Settings → Accounts lists every login grouped by agent. A login opens to show its folder (Open, Copy), the
+  environment variable that points the agent there and where its sign-in is kept, with Sign in again and Remove.
+- An account that is signed out, or whose login ends within two days, says so, with Sign in again next to it.
+- Plans show as Pro, Max or Ultra in the account menu, Settings, the Usage page and the menu bar.
+- Sync is per account: a window syncs for its account into a repository of its own, and two accounts can't share one.
+- The remote page shows each workspace's account, and a new workspace can choose among the open windows.
+- Workspace options end with All settings.
+
+### Changed
+- A `claude` typed into a shell tab now records its plan limits, like a Claude Code tab.
+
 ### Fixed
 - Windows: `agentty` commands in PowerShell and cmd now wait until they finish and report their exit code. Before,
   the next command ran ahead of them, `wait-load` waited for nothing, and their output could not be captured.
