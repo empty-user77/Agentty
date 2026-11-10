@@ -83,7 +83,7 @@ const REMOTE_TEXT: usize = 3_000;
 /// Tool steps of one reply shown before the rest fold into a count.
 const TOOL_STEPS_SHOWN: usize = 3;
 /// The widest the conversation runs in a wide pane. Narrower panes use all they have.
-const CHAT_COLUMN: f32 = 1400.;
+const CHAT_COLUMN: f32 = 1040.;
 
 /// What the lead is told before the user's first message. English, like every prompt Agentty
 /// ships; the last line names the language to talk in.
@@ -904,14 +904,6 @@ impl Workbench {
         let on = self.chat_modes.get(&pane.entity_id()).copied().unwrap_or(false);
         let switched_back = self.chats.get(&pane.entity_id()).filter(|state| state.plain).is_some_and(|state| state.show_terminal);
         Some(on && !switched_back)
-    }
-
-    /// Whether the title bar's chat button shows on: the pane in front shows its chat.
-    pub(super) fn chat_view_shown(&self, cx: &App) -> bool {
-        self.active_pane()
-            .and_then(|pane| self.chats.get(&pane.entity_id()))
-            .filter(|state| state.plain)
-            .is_some_and(|state| !state.show_terminal && !Self::terminal_forced(state, cx))
     }
 
     /// The lead of the chat tab `pane` is in (the pane itself when it is the lead).

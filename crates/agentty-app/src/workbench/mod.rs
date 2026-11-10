@@ -1,6 +1,7 @@
 //! The window's root view. Hierarchy: group → workspace (one sidebar row) → tab → split panes.
 
 mod account_menu;
+mod account_pick;
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
@@ -45,6 +46,7 @@ mod install_hint;
 mod integrations_page;
 mod layout;
 pub(crate) mod log_panel;
+mod login_mark;
 pub mod mini;
 mod notices;
 mod notify_settings;
@@ -103,6 +105,7 @@ pub mod update;
 mod voice_input;
 #[cfg(windows)]
 mod webview_setup;
+mod window_move;
 mod windows_page;
 mod workspace_menu;
 mod workspace_options;
@@ -442,13 +445,6 @@ pub struct Workbench {
     sidebar_open: bool,
     page: Option<Page>,
     launcher_open: bool,
-    /// The split button's menu (right or down), and whether the pointer is on the button / the menu:
-    /// it opens on hover and closes a moment after the pointer left both.
-    split_menu: bool,
-    split_menu_hover: (bool, bool),
-    /// The split menu was opened (or kept) by a click: leaving it with the pointer doesn't close it.
-    split_menu_pinned: bool,
-    split_button_at: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// Where the + menu opens what is picked: a tab (default each time it opens) or a split.
     launcher_target: LaunchTarget,
     workspace_menu: Option<u64>,
@@ -598,7 +594,13 @@ pub struct Workbench {
     /// Those logins by name, to tell this window from the others.
     window_account_label: Option<String>,
     account_menu_open: bool,
+    /// The other windows a workspace can be sent to, read when a menu that offers it opens.
+    window_targets: Vec<window_move::WindowTarget>,
     account_rows: Vec<account_menu::AccountRow>,
+    /// Which login a new agent starts on, while that is being asked.
+    account_pick: Option<account_pick::AccountPick>,
+    /// The pane whose login mark has its menu open.
+    login_mark_open: Option<gpui::EntityId>,
     /// Logins whose details are open in Settings → Accounts.
     account_details_open: HashSet<String>,
     /// The session page's Agents and Workflows views (and which one is on screen).
@@ -934,10 +936,6 @@ impl Workbench {
             sidebar_open: true,
             page: None,
             launcher_open: false,
-            split_menu: false,
-            split_menu_hover: (false, false),
-            split_menu_pinned: false,
-            split_button_at: Rc::default(),
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
@@ -1029,7 +1027,10 @@ impl Workbench {
             accounts: Default::default(),
             window_account_label: None,
             account_menu_open: false,
+            window_targets: Vec::new(),
             account_rows: Vec::new(),
+            account_pick: None,
+            login_mark_open: None,
             account_details_open: HashSet::new(),
             session_board: Default::default(),
             orchestrator_dialog: None,
@@ -1343,6 +1344,24 @@ impl Workbench {
         self.installed.as_ref().is_none_or(|i| i.has(binary))
     }
 
+    /// The settings this window reads: the common ones, with what it changed for itself.
+    pub(super) fn prefs<'a>(&self, cx: &'a gpui::App) -> &'a crate::settings::Settings {
+        crate::settings::window_settings(cx, self.slot)
+    }
+
+    /// A settings change made in this window (see `settings::update_window_settings`), saved.
+    pub(super) fn change_settings(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut crate::settings::Settings)) {
+        crate::settings::update_window_settings(cx, self.slot, true, change);
+        if self.slot > 0 {
+            self.persist(cx);
+        }
+    }
+
+    /// The same while an edge is dragged: saved when the drag ends (`end_drags`).
+    pub(super) fn change_settings_live(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut crate::settings::Settings)) {
+        crate::settings::update_window_settings(cx, self.slot, false, change);
+    }
+
     fn next_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -1361,7 +1380,13 @@ impl Workbench {
         };
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
-        let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
+        self.subscribe_pane(&pane, cx);
+        pane
+    }
+
+    /// Listens to what a pane says: one it started, or one brought over from another window.
+    fn subscribe_pane(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        let subscription = cx.subscribe(pane, |this, pane, event: &TerminalEvent, cx| match event {
             TerminalEvent::Exited => {
                 let pane_id = pane.read(cx).pane_id;
                 this.pane_exited(pane.clone(), cx);
@@ -1426,7 +1451,6 @@ impl Workbench {
             }
         });
         self.pane_subscriptions.insert(pane.entity_id(), subscription);
-        pane
     }
 
     /// (workspace index, tab index) holding the pane.
@@ -1942,6 +1966,10 @@ impl Workbench {
     ) {
         let choice = choice.into();
         self.launcher_open = false;
+        // An agent with several logins asks which one, every time.
+        if self.ask_launch_account(&choice, target, cx) {
+            return;
+        }
         // New tabs open where the user is (unless set to ask); new workspaces ask by default.
         let ask = match target {
             LaunchTarget::NewTab => settings(cx).ask_directory_for_tabs || self.workspaces.is_empty() && settings(cx).ask_directory,
@@ -2064,7 +2092,7 @@ impl Workbench {
     /// What the workspace list is filtered by. A hidden search box filters nothing, whatever was
     /// left in it — turning the box off must not leave workspaces missing with no way to see why.
     pub(super) fn workspace_query(&self, cx: &gpui::App) -> String {
-        if !crate::settings::settings(cx).workspace_search_bar {
+        if !self.prefs(cx).workspace_search_bar {
             return String::new();
         }
         self.workspace_search.read(cx).text().trim().to_lowercase()
@@ -3223,6 +3251,7 @@ impl Workbench {
             window: self.window_state,
             panels: self.panel_state(),
             accounts: self.accounts.clone(),
+            settings: crate::settings::window_overrides(cx, self.slot),
         };
         if self.closed {
             return;
@@ -3233,8 +3262,10 @@ impl Workbench {
     }
 
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let state = LayoutState::load(self.slot);
+        let mut state = LayoutState::load(self.slot);
+        crate::settings::set_window_overrides(cx, self.slot, std::mem::take(&mut state.settings));
         self.restore_accounts(&state.accounts);
+        self.refresh_account_rows(cx);
         self.sync_follow_accounts(cx);
         self.groups = state
             .groups
@@ -3368,27 +3399,21 @@ impl Workbench {
             // Dragging up makes the network panel taller; the page above keeps a readable height.
             let viewport = f32::from(window.viewport_size().height);
             let height = (start_height + start_y - f32::from(event.position.y)).clamp(90., (viewport - 260.).max(90.));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.browser.network_height = height
-            });
+            self.change_settings_live(cx, move |s| s.browser.network_height = height);
             cx.notify();
         } else if let Some((start_y, start_height)) = self.files_trees_drag {
             // Down makes the working-tree list taller, up shorter: any height, leaving the rest of
             // the window its room.
             let most = (f32::from(window.viewport_size().height) - files_panel::TREES_ROOM_LEFT).max(40.);
             let height = (start_height + f32::from(event.position.y) - start_y).clamp(40., most);
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.files_panel_trees_height = height
-            });
+            self.change_settings_live(cx, move |s| s.files_panel_trees_height = height);
             cx.notify();
         } else if self.files_resizing {
             // The files panel is the last column: its splitter sits just left of it.
             let viewport = f32::from(window.viewport_size().width);
             let width = (viewport - f32::from(event.position.x) - 2.5)
                 .clamp(files_panel::MIN_WIDTH, (viewport - 420.0).max(files_panel::MIN_WIDTH));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.files_panel_width = width
-            });
+            self.change_settings_live(cx, move |s| s.files_panel_width = width);
             cx.notify();
         } else if self.editor_session_drag.is_some() {
             self.drag_editor_session(f32::from(event.position.x), cx);
@@ -3405,11 +3430,11 @@ impl Workbench {
             let right = self.side_panels_total(cx) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
+            self.change_settings_live(cx, move |s| s.browser.width = width);
             cx.notify();
         } else if self.sidebar_resizing {
             let width = (f32::from(event.position.x) - chrome::ACTIVITY_BAR_WIDTH).clamp(180.0, 640.0);
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.sidebar_width = width);
+            self.change_settings_live(cx, move |s| s.sidebar_width = width);
             cx.notify();
         } else if let Some(drag) = &self.split_drag {
             self.drag_split(drag.clone(), event.position, cx);
@@ -3467,6 +3492,7 @@ impl Workbench {
             self.files_trees_drag = None;
             self.browser_net_drag = None;
             update_settings(cx, |_| {}); // persist the final width
+            self.persist(cx); // and this window's own
         }
         if self.split_drag.take().is_some() {
             self.persist(cx);
@@ -3625,6 +3651,10 @@ impl Render for Workbench {
                 }
                 // ⌘↩ is Continue on the onboarding card.
                 if this.onboarding_key(event, window, cx) {
+                    return cx.stop_propagation();
+                }
+                // So does the question which login a new agent starts on.
+                if this.account_pick_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
                 // A close confirmation owns the keyboard.
@@ -3935,7 +3965,6 @@ impl Render for Workbench {
                                 )
                             })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
-                            .children(self.render_split_menu(cx))
                             // A selection's bar, menu or side-chat question (a chat's, or a terminal's).
                             .children(self.render_select_ui(cx))
                             // Opens under the sync icon, left of the bell.
@@ -3986,6 +4015,7 @@ impl Render for Workbench {
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
+            .children(self.render_account_pick(cx))
             .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
             .children(self.render_run_add_dialog(cx))
@@ -4900,10 +4930,19 @@ impl Workbench {
                     self.request_delete_tree(id, window, cx);
                 }
             }
+            // `move-to-window <n> <slot>`: sends the n-th workspace to window `slot`, as its menu does.
+            "move-to-window" => {
+                let mut words = argument.split_whitespace();
+                let index = words.next().and_then(|w| w.parse::<usize>().ok());
+                let slot = words.next().and_then(|w| w.parse::<usize>().ok());
+                if let (Some(id), Some(slot)) = (index.and_then(|i| self.workspaces.get(i)).map(|ws| ws.id), slot) {
+                    self.send_to_window(vec![id], slot, cx);
+                }
+            }
             // `workspace-menu <n>`: opens the n-th workspace's menu, as its card's ⋯ does.
             "workspace-menu" => {
                 if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
-                    self.open_workspace_menu(id, 80.);
+                    self.open_workspace_menu(id, 80., cx);
                     cx.notify();
                 }
             }
@@ -5497,13 +5536,13 @@ impl Workbench {
             }
             "sidebar-width" => {
                 if let Ok(width) = argument.parse::<f32>() {
-                    update_settings(cx, |s| s.sidebar_width = width);
+                    self.change_settings(cx, move |s| s.sidebar_width = width);
                 }
             }
             "setting" => {
                 if let Some((key, value)) = argument.split_once('=') {
                     let (key, value) = (key.to_string(), value.to_string());
-                    update_settings(cx, move |s| {
+                    self.change_settings(cx, move |s| {
                         let mut json = serde_json::to_value(&*s).unwrap_or_default();
                         json[key] = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
                         if let Ok(updated) = serde_json::from_value(json) {
@@ -5528,6 +5567,16 @@ impl Workbench {
                         .collect();
                     eprintln!("screen-lines: total={} {:?} state={state:?}", lines.len(), &shown[shown.len().saturating_sub(10)..]);
                 }
+            }
+            // `workspaces`: this window's workspaces (id, group, panes) and its own settings.
+            "workspaces" => {
+                for ws in &self.workspaces {
+                    let group = ws.group.and_then(|g| self.groups.iter().find(|x| x.id == g)).map(|g| g.name.clone());
+                    let panes: Vec<u64> = ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id).collect();
+                    let title = self.workspace_title(ws, cx);
+                    eprintln!("workspaces[w{}]: id={} title={title:?} group={group:?} panes={panes:?}", self.slot, ws.id);
+                }
+                eprintln!("workspaces[w{}]: own settings {:?}", self.slot, crate::settings::window_overrides(cx, self.slot));
             }
             "dump" => {
                 if let Some(pane) = self.active_pane() {

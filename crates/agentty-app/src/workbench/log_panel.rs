@@ -593,7 +593,7 @@ impl Workbench {
     pub(super) fn drag_log_panel(&mut self, pointer_y: f32, viewport: f32, cx: &mut Context<Self>) {
         let Some((start_y, start_height)) = self.log().drag else { return };
         let height = (start_height + start_y - pointer_y).clamp(MIN_HEIGHT, (viewport - MIN_TERMINALS - 120.).max(MIN_HEIGHT));
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.run_log_height = height);
+        self.change_settings_live(cx, move |s| s.run_log_height = height);
         cx.notify();
     }
 
@@ -650,7 +650,7 @@ impl Workbench {
         if !log.open || log.tabs.is_empty() {
             return None;
         }
-        let height = crate::settings::settings(cx).run_log_height.max(MIN_HEIGHT);
+        let height = self.prefs(cx).run_log_height.max(MIN_HEIGHT);
         let active = log.active.min(log.tabs.len() - 1);
         let tab = &log.tabs[active];
 
@@ -674,7 +674,7 @@ impl Workbench {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    let height = crate::settings::settings(cx).run_log_height.max(MIN_HEIGHT);
+                    let height = this.prefs(cx).run_log_height.max(MIN_HEIGHT);
                     this.runs.log.drag = Some((f32::from(event.position.y), height));
                     cx.stop_propagation();
                     cx.notify();

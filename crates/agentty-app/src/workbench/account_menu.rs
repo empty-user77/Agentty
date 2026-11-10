@@ -316,7 +316,13 @@ impl Workbench {
     /// transcript, wherever it is resumed from. Everything else takes this window's accounts, except
     /// where the spec already names one (a login pane).
     pub(super) fn choose_accounts(&self, spec: &mut LaunchSpec) {
+        // A login picked for this pane stays, the agent's own login included.
+        let fixed = spec.fixed_account.map(|agent| (agent, spec.accounts.get(agent).map(str::to_string)));
         spec.accounts.fill_from(&self.accounts);
+        if let Some((agent, id)) = fixed {
+            spec.accounts.set(agent, id);
+            return;
+        }
         let (crate::launch::Start::Resume(id) | crate::launch::Start::Fork(id)) = &spec.start else { return };
         let agent = match spec.kind {
             crate::launch::PaneKind::Claude => AuthAgent::Claude,
@@ -336,6 +342,18 @@ impl Workbench {
             self.accounts.set(agent, id);
         }
         self.window_account_label = window_label(&self.accounts);
+    }
+
+    /// What a login is called: its email (or organization), else "Default login".
+    pub(super) fn login_name(&self, agent: AuthAgent, id: Option<&str>, cx: &gpui::App) -> String {
+        let listed = self.account_rows.iter().find(|row| row.agent == agent && row.id.as_deref() == id);
+        let name = match (listed, id) {
+            (Some(row), _) => name_of(&row.account).map(str::to_string),
+            // Before the rows are read: the saved account.
+            (None, Some(id)) => AccountStore::load().of(agent).iter().find(|a| a.id == id).and_then(name_of).map(str::to_string),
+            (None, None) => None,
+        };
+        name.unwrap_or_else(|| t(cx, "account.own_login").to_string())
     }
 
     pub(super) fn window_account_label(&self) -> Option<String> {

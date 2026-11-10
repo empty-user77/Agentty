@@ -503,7 +503,7 @@ impl Workbench {
     }
 
     pub(super) fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = settings(cx).sidebar_width;
+        let width = self.prefs(cx).sidebar_width;
         let (title, body): (&str, AnyElement) = match self.panel {
             SidePanel::Workspaces => (t(cx, "panel.workspaces"), self.render_workspaces_panel(window, cx).into_any_element()),
             SidePanel::Sessions => (t(cx, "panel.sessions"), self.render_sessions_panel(cx).into_any_element()),
@@ -524,7 +524,10 @@ impl Workbench {
         let actions = match self.panel {
             SidePanel::Workspaces => div()
                 .flex()
+                .items_center()
                 .gap_0p5()
+                // Without the search box, the moon that sits in it comes here.
+                .when(!self.prefs(cx).workspace_search_bar, |d| d.child(div().px_1().child(self.render_sleeping_toggle(cx))))
                 .children(bell)
                 .child(
                     icon_only(
@@ -568,9 +571,11 @@ impl Workbench {
         };
         // Title and session content, debounced the same way the sessions panel searches: title
         // matches show at once, content matches trail in from the background.
-        let workspace_search = (self.panel == SidePanel::Workspaces && settings(cx).workspace_search_bar).then(|| {
+        let workspace_search = (self.panel == SidePanel::Workspaces && self.prefs(cx).workspace_search_bar).then(|| {
             let running = self.workspace_search_running(cx);
-            self.render_search_box("workspace-search", &self.workspace_search, running, cx).px_2().pb_2()
+            // Sleeping workspaces shown or hidden, at the box's right end.
+            let moon = self.render_sleeping_toggle(cx);
+            self.render_search_box_with("workspace-search", &self.workspace_search, running, Some(moon), cx).px_2().pb_2()
         });
 
         div()
@@ -666,6 +671,18 @@ impl Workbench {
         running: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        self.render_search_box_with(id, input, running, None, cx)
+    }
+
+    /// A search box with `trailing` at its right end, after the clear button.
+    pub(super) fn render_search_box_with(
+        &self,
+        id: &'static str,
+        input: &gpui::Entity<crate::text_input::TextInput>,
+        running: bool,
+        trailing: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let has_text = !input.read(cx).text().is_empty();
         let clear = input.clone();
         div()
@@ -712,7 +729,8 @@ impl Workbench {
                                 }))
                                 .child(icon("x", IconSize::INLINE, hex(Chrome::MUTED))),
                         )
-                    }),
+                    })
+                    .children(trailing),
             )
     }
 
@@ -734,7 +752,7 @@ impl Workbench {
         let mut linked = self.linked_workspaces(cx);
         // Grouped another way than by the user's groups (the options menu): with no grouping
         // nothing folds; projects fold like groups do.
-        let grouping = settings(cx).workspace_list.grouping;
+        let grouping = self.prefs(cx).workspace_list.grouping;
         if grouping != crate::settings::WorkspaceGrouping::Groups {
             let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
             if grouping == crate::settings::WorkspaceGrouping::None {
@@ -1075,6 +1093,9 @@ impl Workbench {
                     let Some(gid) = group else { return };
                     cx.stop_propagation();
                     this.group_menu = if this.group_menu == Some(gid) { None } else { Some(gid) };
+                    if this.group_menu.is_some() {
+                        this.refresh_window_targets(cx);
+                    }
                     cx.notify();
                 }),
             )
@@ -1158,6 +1179,18 @@ impl Workbench {
                     t(cx, "group.sleep"),
                     cx.listener(move |this, _: &ClickEvent, window, cx| this.sleep_group(gid, window, cx)),
                 ))
+            })
+            .when(!self.window_targets.is_empty() && self.workspaces.iter().any(|w| w.group == Some(gid)), |d| {
+                let mut d = d.child(div().px_2().pt_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "window.move_group_to")));
+                for target in &self.window_targets {
+                    let slot = target.slot;
+                    d = d.child(menu_item(
+                        SharedString::from(format!("gm-window-{slot}")),
+                        target.name.clone(),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.send_group_to_window(gid, slot, cx)),
+                    ));
+                }
+                d.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             })
             .child(menu_item(
                 "gm-delete",
@@ -1291,7 +1324,7 @@ impl Workbench {
         }
         let marked = chat || orchestration.is_some();
         let indent = px(if show_logo || marked { 24. } else { 2. });
-        let compact = settings(cx).compact_workspaces;
+        let compact = self.prefs(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
         // waiting for the user. A card that already carries a colour would only clash with it, so
@@ -1482,7 +1515,7 @@ impl Workbench {
                                             if this.workspace_menu == Some(id) {
                                                 this.workspace_menu = None;
                                             } else {
-                                                this.open_workspace_menu(id, f32::from(event.position().y));
+                                                this.open_workspace_menu(id, f32::from(event.position().y), cx);
                                             }
                                             cx.notify();
                                         }),
@@ -1561,7 +1594,7 @@ impl Workbench {
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.open_workspace_menu(id, f32::from(event.position.y));
+                    this.open_workspace_menu(id, f32::from(event.position.y), cx);
                     cx.notify();
                 }),
             )
@@ -2429,13 +2462,6 @@ impl Workbench {
                             cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
                         ))
                     })
-                    .child(header_icon(
-                        "header-chat-view",
-                        "message-square",
-                        self.chat_view_shown(cx),
-                        (t(cx, "menu.chat_view"), Some("⇧⌘J")),
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_chat_view(window, cx)),
-                    ))
                     .child(ringed(
                         header_icon(
                             "header-browser",
@@ -2459,129 +2485,27 @@ impl Workbench {
                             "header-mini",
                         ))
                     })
-                    .child(ringed(self.render_split_button(cx), "header-split-right"))
+                    .child(ringed(
+                        header_icon(
+                            "header-split-right",
+                            "columns-2",
+                            false,
+                            (t(cx, "split.right"), Some("⌘D")),
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
+                        ),
+                        "header-split-right",
+                    ))
+                    .child(header_icon(
+                        "header-split-down",
+                        "rows-2",
+                        false,
+                        (t(cx, "split.down"), Some("⇧⌘D")),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
+                    ))
                     // The files panel docks at the right edge, so its button is the last one. A tree, not a
                     // framed panel: next to the split buttons a frame reads as one more way to split.
                     .child(ringed(self.files_button(cx), "header-files"))
             })
-    }
-
-    /// One split button: hovering or clicking it opens a menu of where the new pane goes.
-    fn render_split_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let open = self.split_menu;
-        let button = div()
-            .id("header-split-right")
-            .relative()
-            .flex_shrink_0()
-            .my_auto()
-            .size(px(crate::ui::ICON_BUTTON))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .when(open, |d| d.bg(hex(Chrome::SELECTED)))
-            .hover(|s| s.bg(hex(Chrome::HOVER)))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.hover_split_menu(Some(*hovered), None, cx)))
-            // A click opens it and the next click closes it. Opened by the pointer a moment ago, the
-            // click keeps it open instead (and the pointer leaving no longer closes it).
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                if this.just_dismissed("split-menu") {
-                    return;
-                }
-                if this.split_menu && !this.split_menu_pinned {
-                    this.split_menu_pinned = true;
-                } else {
-                    this.split_menu = !this.split_menu;
-                    this.split_menu_pinned = this.split_menu;
-                }
-                cx.notify();
-            }))
-            .child(icon("columns-2", IconSize::BUTTON, hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND })));
-        // Where the menu hangs from: it is drawn at the window's top level, clear of the strip's clip.
-        let at = self.split_button_at.clone();
-        button.child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| at.set(Some(bounds))).absolute().size_full())
-    }
-
-    /// The split button's menu, under the button's right edge.
-    pub(super) fn render_split_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let at = self.split_button_at.get().filter(|_| self.split_menu)?;
-        let item = |id: &'static str, glyph: &'static str, label: &'static str, keys: &'static str, axis: super::Axis| {
-            div()
-                .id(id)
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .flex()
-                .items_center()
-                .gap_2()
-                .t_body()
-                .cursor_pointer()
-                .hover(crate::ui::hover_fill)
-                .child(icon(glyph, IconSize::BUTTON, hex(Chrome::FOREGROUND)))
-                .child(div().flex_1().whitespace_nowrap().child(label))
-                .child(div().pl_4().t_caption().text_color(hex(Chrome::MUTED)).child(keys))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.split_menu = false;
-                    this.split_menu_pinned = false;
-                    this.split_menu_hover = (false, false);
-                    this.split(axis, window, cx);
-                }))
-        };
-        let menu = popover()
-            .id("split-menu")
-            .min_w(px(200.))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.hover_split_menu(None, Some(*hovered), cx)))
-            // A press here must not start a window move from the title bar.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.split_menu = false;
-                this.split_menu_pinned = false;
-                this.note_dismissed("split-menu");
-                cx.notify();
-            }))
-            .child(item("split-menu-right", "columns-2", t(cx, "split.right"), "⌘D", super::Axis::Horizontal))
-            .child(item("split-menu-down", "rows-2", t(cx, "split.down"), "⇧⌘D", super::Axis::Vertical));
-        Some(
-            gpui::deferred(
-                gpui::anchored()
-                    .position(at.bottom_right())
-                    .anchor(gpui::Corner::TopRight)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(div().pt_1().child(menu)),
-            )
-            .with_priority(3)
-            .into_any_element(),
-        )
-    }
-
-    /// The pointer moved on or off the split button (`button`) or its menu (`menu`). The menu opens
-    /// on the button and closes a moment after the pointer left both, so crossing the gap between
-    /// them keeps it open.
-    fn hover_split_menu(&mut self, button: Option<bool>, menu: Option<bool>, cx: &mut Context<Self>) {
-        if let Some(on) = button {
-            self.split_menu_hover.0 = on;
-        }
-        if let Some(on) = menu {
-            self.split_menu_hover.1 = on;
-        }
-        if button == Some(true) && !self.split_menu {
-            self.split_menu = true;
-            cx.notify();
-            return;
-        }
-        if self.split_menu_hover == (false, false) && self.split_menu && !self.split_menu_pinned {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.split_menu && !this.split_menu_pinned && this.split_menu_hover == (false, false) {
-                        this.split_menu = false;
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
     }
 
     pub(super) fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {

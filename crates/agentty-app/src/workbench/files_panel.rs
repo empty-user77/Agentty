@@ -409,7 +409,7 @@ impl Workbench {
 
     /// Shown widths of (browser, files panel): see [`docked_widths`].
     pub(super) fn docked_widths(&self, cx: &gpui::App) -> (f32, f32) {
-        let prefs = crate::settings::settings(cx);
+        let prefs = self.prefs(cx);
         let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
         let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - self.side_panels_total(cx);
         docked_widths(room, self.browser.as_ref().map(|_| prefs.browser.width), self.files_panel.as_ref().map(|_| prefs.files_panel_width))
@@ -1368,8 +1368,7 @@ impl Workbench {
         };
         // Folded projects keep their band and hide their trees.
         let hidden = trees.iter().filter(|t| t.repo.as_ref().is_some_and(|repo| panel.folded_projects.contains(repo))).count();
-        let height =
-            trees_height(trees_content_height(trees.len() - hidden, headers), crate::settings::settings(cx).files_panel_trees_height);
+        let height = trees_height(trees_content_height(trees.len() - hidden, headers), self.prefs(cx).files_panel_trees_height);
         // A project picked from the list of a folder of projects: the way back to that list.
         let back = active_tree
             .filter(|folder| demo_sessions.is_empty() && panel.pinned.is_some() && self.is_folder_of_projects_cached(folder))

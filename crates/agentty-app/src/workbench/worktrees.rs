@@ -55,6 +55,7 @@ fn label(choice: &LaunchChoice) -> String {
         LaunchChoice::Kind(PaneKind::Codex) | LaunchChoice::Model(PaneKind::Codex, _) => "codex".into(),
         LaunchChoice::Kind(_) | LaunchChoice::Model(..) | LaunchChoice::Chat => "claude".into(),
         LaunchChoice::Command { title, .. } => title.split_whitespace().next().unwrap_or("agent").to_lowercase(),
+        LaunchChoice::OnAccount(choice, ..) => label(choice),
     }
 }
 

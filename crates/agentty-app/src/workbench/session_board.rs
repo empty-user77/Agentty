@@ -594,9 +594,7 @@ impl Workbench {
         let chart = f32::from(self.session_board.canvas.get().size.width);
         let most = if chart > 0. { (self.threads_width(cx) + chart - MIN_CHART).max(MIN_THREADS) } else { 640. };
         let width = (from_width + pointer_x - from_x).clamp(MIN_THREADS, most);
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-            store.settings.orch_threads_width = width
-        });
+        self.change_settings_live(cx, move |s| s.orch_threads_width = width);
         cx.notify();
     }
 
@@ -2084,7 +2082,7 @@ impl Workbench {
         let shown = crate::settings::settings(cx).orch_feed_height.max(MIN_FEED);
         let most = if chart > 0. { (shown + chart - MIN_CHART_HEIGHT).max(MIN_FEED) } else { 400. };
         let height = (from_height + from_y - pointer_y).clamp(MIN_FEED, most);
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.orch_feed_height = height);
+        self.change_settings_live(cx, move |s| s.orch_feed_height = height);
         cx.notify();
     }
 

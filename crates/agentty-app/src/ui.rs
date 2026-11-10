@@ -166,6 +166,7 @@ pub const ICONS: &[&str] = &[
     "eye",
     "eye-off",
     "moon",
+    "moon-star",
     "sun",
     "play",
     "square",

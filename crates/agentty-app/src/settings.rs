@@ -129,6 +129,9 @@ pub struct WorkspaceListOptions {
     pub sort: WorkspaceSort,
     /// Leaves out workspaces with nothing running (asleep, or not opened since Agentty started).
     pub hide_sleeping: bool,
+    /// Within each part of the list, the workspaces with something running come before the sleeping
+    /// ones, each in the order chosen. Only how the list is drawn: off, the order is as it was.
+    pub awake_first: bool,
     /// Leaves out workspaces on the repository's main branch (`main` / `master`).
     pub hide_default_branch: bool,
     /// Leaves out the workspaces plugins made.
@@ -1289,6 +1292,111 @@ pub struct SettingsStore {
     /// The chosen theme with the user's own colour replacements applied. Everything draws from
     /// this, so a replaced colour reaches the terminals, the preview and the panels alike.
     composed: TerminalTheme,
+    /// Windows that changed some of [`WINDOW_KEYS`] for themselves, by slot.
+    windows: std::collections::HashMap<usize, WindowLayer>,
+}
+
+/// Settings each window may keep for itself: how its own sidebar, list and panels look. Window 0
+/// (the main window) sets them for every window; another window that changes one keeps its value,
+/// and follows the main window in the rest. What the terminals draw (font, theme) is the same in
+/// every window: a terminal can move from one window to another.
+pub const WINDOW_KEYS: &[&str] = &[
+    "workspaceList",
+    "compactWorkspaces",
+    "cardSubagents",
+    "cardActivity",
+    "sortFinishedToTop",
+    "workspaceSearchBar",
+    "unifiedHeader",
+    "sidebarWidth",
+    "filesPanelWidth",
+    "filesPanelTreesHeight",
+    "pluginPanelWidth",
+    "dockerPanelWidth",
+    "dbPanelWidth",
+    "runLogHeight",
+    "editorSessionWidth",
+];
+
+/// A window's own values of [`WINDOW_KEYS`] (as stored, by key), and the settings it reads: the
+/// common ones with those put in.
+struct WindowLayer {
+    overrides: serde_json::Map<String, serde_json::Value>,
+    effective: Settings,
+}
+
+/// `common` with a window's own values put in. A setting made of several (the workspace list's
+/// grouping, sort and filters) is kept field by field: the window keeps the fields it changed and
+/// follows the main window in the others.
+fn layered(common: &Settings, overrides: &serde_json::Map<String, serde_json::Value>) -> Settings {
+    if overrides.is_empty() {
+        return common.clone();
+    }
+    let mut json = serde_json::to_value(common).unwrap_or_default();
+    if let Some(map) = json.as_object_mut() {
+        for (key, value) in overrides {
+            match (map.get_mut(key), value) {
+                (Some(serde_json::Value::Object(fields)), serde_json::Value::Object(own)) => {
+                    fields.extend(own.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+                _ => {
+                    map.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    let mut layered: Settings = serde_json::from_value(json).unwrap_or_else(|_| common.clone());
+    // Not in the file, so not in the JSON either.
+    layered.pin_sidebar_plugins = common.pin_sidebar_plugins;
+    layered
+}
+
+/// A change a window other than the main one made, from `before` to `after` (both as that window
+/// reads them): its window settings go into `overrides` (field by field for a setting made of
+/// several), and what is left, everyone's settings, is returned.
+fn split_window_change(
+    overrides: &mut serde_json::Map<String, serde_json::Value>,
+    before: &Settings,
+    after: &Settings,
+) -> Vec<(String, serde_json::Value)> {
+    let before_json = serde_json::to_value(before).unwrap_or_default();
+    let mut common = Vec::new();
+    for (key, value) in changed_keys(before, after) {
+        if !WINDOW_KEYS.contains(&key.as_str()) {
+            common.push((key, value));
+            continue;
+        }
+        match (before_json.get(&key), &value) {
+            (Some(serde_json::Value::Object(old)), serde_json::Value::Object(new)) => {
+                let entry = overrides.entry(key).or_insert_with(|| serde_json::Value::Object(Default::default()));
+                if !entry.is_object() {
+                    *entry = serde_json::Value::Object(Default::default());
+                }
+                if let Some(own) = entry.as_object_mut() {
+                    own.extend(new.iter().filter(|(k, v)| old.get(*k) != Some(*v)).map(|(k, v)| (k.clone(), v.clone())));
+                }
+            }
+            _ => {
+                overrides.insert(key, value);
+            }
+        }
+    }
+    common
+}
+
+/// How many settings `overrides` holds, a setting made of several counting each field.
+fn override_count(overrides: &serde_json::Map<String, serde_json::Value>) -> usize {
+    overrides.values().map(|v| v.as_object().map_or(1, |fields| fields.len().max(1))).sum()
+}
+
+/// The top-level keys whose values differ between `before` and `after`, with the new values.
+fn changed_keys(before: &Settings, after: &Settings) -> Vec<(String, serde_json::Value)> {
+    let (serde_json::Value::Object(before), serde_json::Value::Object(after)) =
+        (serde_json::to_value(before).unwrap_or_default(), serde_json::to_value(after).unwrap_or_default())
+    else {
+        return Vec::new();
+    };
+    after.into_iter().filter(|(key, value)| before.get(key) != Some(value)).collect()
 }
 
 impl Global for SettingsStore {}
@@ -1298,7 +1406,7 @@ impl SettingsStore {
         let (settings, may_save) = Settings::load();
         let themes = load_themes();
         let composed = SettingsStore::compose(&settings, &themes);
-        let store = SettingsStore { settings, revision: 0, themes, composed };
+        let store = SettingsStore { settings, revision: 0, themes, composed, windows: Default::default() };
         if may_save {
             let _ = store.save();
         }
@@ -1338,6 +1446,13 @@ impl SettingsStore {
     pub fn theme(&self) -> &TerminalTheme {
         &self.composed
     }
+
+    /// Every window's settings again, after the common ones changed.
+    fn refresh_windows_layers(&mut self) {
+        for layer in self.windows.values_mut() {
+            layer.effective = layered(&self.settings, &layer.overrides);
+        }
+    }
 }
 
 /// Read from the settings file (launch specs are built without an `App`).
@@ -1376,6 +1491,98 @@ pub fn advisor_default() -> AdvisorChoice {
 
 pub fn settings(cx: &App) -> &Settings {
     &cx.global::<SettingsStore>().settings
+}
+
+/// The settings window `slot` reads: the common ones, with what that window changed for itself.
+pub fn window_settings(cx: &App, slot: usize) -> &Settings {
+    let store = cx.global::<SettingsStore>();
+    store.windows.get(&slot).map_or(&store.settings, |layer| &layer.effective)
+}
+
+/// What window `slot` changed for itself, as its layout file keeps it.
+pub fn window_overrides(cx: &App, slot: usize) -> serde_json::Map<String, serde_json::Value> {
+    cx.global::<SettingsStore>().windows.get(&slot).map(|layer| layer.overrides.clone()).unwrap_or_default()
+}
+
+/// How many settings window `slot` keeps for itself.
+pub fn window_override_count(cx: &App, slot: usize) -> usize {
+    cx.global::<SettingsStore>().windows.get(&slot).map_or(0, |layer| override_count(&layer.overrides))
+}
+
+/// Puts back what window `slot` had changed for itself (read from its layout file). Keys that are
+/// not window settings (a file edited by hand, a later version) are left out; the main window has
+/// none, its changes being everyone's.
+pub fn set_window_overrides(cx: &mut App, slot: usize, overrides: serde_json::Map<String, serde_json::Value>) {
+    let overrides: serde_json::Map<_, _> = overrides.into_iter().filter(|(key, _)| WINDOW_KEYS.contains(&key.as_str())).collect();
+    cx.update_global::<SettingsStore, _>(|store, _| {
+        if slot == 0 || overrides.is_empty() {
+            store.windows.remove(&slot);
+        } else {
+            let effective = layered(&store.settings, &overrides);
+            store.windows.insert(slot, WindowLayer { overrides, effective });
+        }
+        store.revision += 1;
+    });
+    cx.refresh_windows();
+}
+
+/// Window `slot` follows the common settings again in everything.
+pub fn reset_window_settings(cx: &mut App, slot: usize) {
+    set_window_overrides(cx, slot, serde_json::Map::new());
+}
+
+/// A change made in window `slot`. In the main window it is everyone's, as [`update_settings`];
+/// in another one, a window setting ([`WINDOW_KEYS`]) changes for that window only, and anything
+/// else for every window. `save` false is a drag in progress: nothing is written until it ends
+/// (with `update_settings(cx, |_| {})` and the window's layout saved).
+pub fn update_window_settings(cx: &mut App, slot: usize, save: bool, change: impl FnOnce(&mut Settings)) {
+    if slot == 0 {
+        if save {
+            return update_settings(cx, change);
+        }
+        cx.update_global::<SettingsStore, _>(|store, _| {
+            change(&mut store.settings);
+            store.refresh_windows_layers();
+        });
+        return;
+    }
+    let before = window_settings(cx, slot).clone();
+    let mut after = before.clone();
+    change(&mut after);
+    let mut overrides = window_overrides(cx, slot);
+    let previous = overrides.clone();
+    let common = split_window_change(&mut overrides, &before, &after);
+    if overrides != previous {
+        cx.update_global::<SettingsStore, _>(|store, _| {
+            let effective = layered(&store.settings, &overrides);
+            store.windows.insert(slot, WindowLayer { overrides, effective });
+            store.revision += 1;
+        });
+    }
+    if common.is_empty() {
+        if save {
+            cx.refresh_windows();
+        }
+        return;
+    }
+    let patch = move |settings: &mut Settings| {
+        let mut json = serde_json::to_value(&*settings).unwrap_or_default();
+        if let Some(map) = json.as_object_mut() {
+            map.extend(common);
+        }
+        if let Ok(mut patched) = serde_json::from_value::<Settings>(json) {
+            patched.pin_sidebar_plugins = settings.pin_sidebar_plugins;
+            *settings = patched;
+        }
+    };
+    if save {
+        update_settings(cx, patch);
+    } else {
+        cx.update_global::<SettingsStore, _>(|store, _| {
+            patch(&mut store.settings);
+            store.refresh_windows_layers();
+        });
+    }
 }
 
 pub fn terminal_theme(cx: &App) -> &TerminalTheme {
@@ -1429,6 +1636,7 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
         let wrappers_before = (store.settings.aliases.clone(), store.settings.always_bypass);
         change(&mut store.settings);
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
+        store.refresh_windows_layers();
         store.revision += 1;
         let _ = store.save();
         if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
@@ -1478,6 +1686,7 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
         store.settings = settings;
         store.themes = load_themes();
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
+        store.refresh_windows_layers();
         store.revision += 1;
         let _ = store.save();
         if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
@@ -1663,6 +1872,114 @@ mod browser_settings_tests {
         let map = value.as_object().unwrap();
         for key in agentty_bridge::backup::DEVICE_SETTINGS {
             assert!(map.contains_key(*key), "{key} is not a settings field");
+        }
+    }
+}
+
+#[cfg(test)]
+mod window_settings_tests {
+    use super::*;
+
+    #[test]
+    fn a_window_reads_its_own_values_over_the_common_ones() {
+        let common = Settings { compact_workspaces: false, sidebar_width: 260., font_size: 13., ..Settings::default() };
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("compactWorkspaces".into(), serde_json::json!(true));
+        let window = layered(&common, &overrides);
+        assert!(window.compact_workspaces);
+        // Everything it did not change is the common value.
+        assert_eq!(window.sidebar_width, 260.);
+        assert_eq!(window.font_size, 13.);
+        assert!(!layered(&common, &serde_json::Map::new()).compact_workspaces);
+    }
+
+    #[test]
+    fn only_the_keys_a_change_touched_are_reported() {
+        let before = Settings::default();
+        let mut after = before.clone();
+        after.workspace_list.grouping = WorkspaceGrouping::Project;
+        after.font_size = before.font_size + 1.;
+        let mut keys: Vec<String> = changed_keys(&before, &after).into_iter().map(|(key, _)| key).collect();
+        keys.sort();
+        assert_eq!(keys, ["fontSize", "workspaceList"]);
+        assert!(changed_keys(&before, &before).is_empty());
+    }
+
+    #[test]
+    fn a_window_change_keeps_window_settings_and_passes_the_rest_on() {
+        let before = Settings::default();
+        let mut after = before.clone();
+        after.compact_workspaces = !before.compact_workspaces;
+        after.sidebar_width = 333.;
+        after.font_size = before.font_size + 2.;
+        let mut overrides = serde_json::Map::new();
+        let common = split_window_change(&mut overrides, &before, &after);
+        let common_keys: Vec<&str> = common.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(common_keys, ["fontSize"]);
+        assert_eq!(overrides.get("compactWorkspaces"), Some(&serde_json::json!(after.compact_workspaces)));
+        assert_eq!(overrides.get("sidebarWidth"), Some(&serde_json::json!(333.0)));
+        assert_eq!(override_count(&overrides), 2);
+        // Read back, the window has its two values and the common font.
+        let window = layered(&before, &overrides);
+        assert_eq!(window.compact_workspaces, after.compact_workspaces);
+        assert_eq!(window.sidebar_width, 333.);
+        assert_eq!(window.font_size, before.font_size);
+    }
+
+    #[test]
+    fn a_window_keeps_only_the_list_fields_it_changed() {
+        let main = Settings::default();
+        let mut mine = main.clone();
+        mine.workspace_list.grouping = WorkspaceGrouping::Project;
+        let mut overrides = serde_json::Map::new();
+        assert!(split_window_change(&mut overrides, &main, &mine).is_empty());
+        assert_eq!(overrides.get("workspaceList"), Some(&serde_json::json!({ "grouping": "project" })));
+        assert_eq!(override_count(&overrides), 1);
+
+        // The main window changes the sort and a filter: this window follows both and keeps its grouping.
+        let mut main_later = main.clone();
+        main_later.workspace_list.sort = WorkspaceSort::Name;
+        main_later.workspace_list.hide_sleeping = true;
+        main_later.workspace_list.grouping = WorkspaceGrouping::None;
+        let window = layered(&main_later, &overrides);
+        assert_eq!(window.workspace_list.grouping, WorkspaceGrouping::Project);
+        assert_eq!(window.workspace_list.sort, WorkspaceSort::Name);
+        assert!(window.workspace_list.hide_sleeping);
+
+        // A second field changed in this window joins the first.
+        let before = layered(&main_later, &overrides);
+        let mut after = before.clone();
+        after.workspace_list.hide_plugin_workspaces = true;
+        assert!(split_window_change(&mut overrides, &before, &after).is_empty());
+        assert_eq!(override_count(&overrides), 2);
+        let window = layered(&main_later, &overrides);
+        assert!(window.workspace_list.hide_plugin_workspaces);
+        assert_eq!(window.workspace_list.grouping, WorkspaceGrouping::Project);
+    }
+
+    #[test]
+    fn a_whole_list_stored_by_an_earlier_build_still_reads() {
+        let common = Settings::default();
+        let mut whole = common.workspace_list.clone();
+        whole.grouping = WorkspaceGrouping::Project;
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("workspaceList".into(), serde_json::to_value(&whole).unwrap());
+        assert_eq!(layered(&common, &overrides).workspace_list, whole);
+    }
+
+    #[test]
+    fn a_broken_override_falls_back_to_the_common_settings() {
+        let common = Settings { sidebar_width: 280., ..Settings::default() };
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("sidebarWidth".into(), serde_json::json!("wide"));
+        assert_eq!(layered(&common, &overrides).sidebar_width, 280.);
+    }
+
+    #[test]
+    fn every_window_key_is_a_setting() {
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        for key in WINDOW_KEYS {
+            assert!(json.get(key).is_some(), "{key} is not a settings key");
         }
     }
 }

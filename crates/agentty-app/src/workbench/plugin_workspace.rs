@@ -636,14 +636,14 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| match drag {
+        self.change_settings_live(cx, move |s| match drag {
             PluginWorkspaceDrag::Panel(start_x, start_width) => {
                 let most = (width - super::chrome::ACTIVITY_BAR_WIDTH - 420.).max(MIN_PANEL);
-                store.settings.plugin_workspace_panel_width = (start_width + x - start_x).clamp(MIN_PANEL, most);
+                s.plugin_workspace_panel_width = (start_width + x - start_x).clamp(MIN_PANEL, most);
             }
             PluginWorkspaceDrag::Terminals(start_y, start_height) => {
                 let most = (height - 120. - MIN_BROWSER).max(MIN_TERMINALS);
-                store.settings.plugin_workspace_terminal_height = (start_height + start_y - y).clamp(MIN_TERMINALS, most);
+                s.plugin_workspace_terminal_height = (start_height + start_y - y).clamp(MIN_TERMINALS, most);
             }
         });
         cx.notify();

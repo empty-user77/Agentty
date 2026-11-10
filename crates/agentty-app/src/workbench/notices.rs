@@ -3,7 +3,6 @@
 
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
-use crate::settings::settings;
 use crate::terminal::NoticeKind;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -62,7 +61,7 @@ impl Workbench {
         );
         self.notices.truncate(MAX_NOTICES);
 
-        let prefs = settings(cx);
+        let prefs = self.prefs(cx);
         let sort_finished_to_top = prefs.sort_finished_to_top;
         let background = !self.in_front() || self.is_mini();
         // The user is looking at this very pane: no need to tell them elsewhere.

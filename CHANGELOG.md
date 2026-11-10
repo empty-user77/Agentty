@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Move to Window in a workspace's menu, and Move group to window in a group's menu, move workspaces between open
+  windows (another account's window included). Terminals keep running and agents stay in their sessions, on the
+  account they started with.
+- Workspace Options, the sidebar's width and the side panels' widths can differ per window: the main window sets them
+  for every window, and a window that changes one keeps its own value until Use the main window's puts it back.
+- Starting Claude Code or Codex asks which account to start on when that agent has more than one, every time.
+- A pane running on another account than its window's shows that account's initial in a blue circle on its bar, with a
+  blue line under the bar. Clicking it shows the account's plan, its 5-hour and weekly limits with their resets, and
+  its usage over the last 7 days.
+- Awake workspaces first, under the order in Workspace Options, lifts the workspaces with something running above the
+  sleeping ones in each group, each in its order; off, the list is as it was. A moon at the right end of the workspace
+  search box shows or hides the sleeping workspaces in one click.
+
+### Changed
+- The split buttons are two icons again, Split Right and Split Down, instead of a menu that opened on hover.
+- Every agent pane that can show its chat has a Chat button at its top right, and the chat a Terminal button in the
+  same place; the speech bubble in the title bar is gone. ⇧⌘J still switches.
+- The chat is narrower in a wide pane.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

@@ -29,6 +29,7 @@ pub(super) type HoverListener = Box<dyn Fn(&bool, &mut Window, &mut gpui::App)>;
 pub enum Submenu {
     OpenIn,
     Group,
+    Window,
 }
 
 /// "Set Parent Worktree…": which workspace gets a parent, and the search over the candidates.
@@ -110,7 +111,8 @@ pub(super) fn rule() -> gpui::Div {
 
 impl Workbench {
     /// Opens the menu of workspace `id`, asked for at height `at` in the window.
-    pub(super) fn open_workspace_menu(&mut self, id: u64, at: f32) {
+    pub(super) fn open_workspace_menu(&mut self, id: u64, at: f32, cx: &gpui::App) {
+        self.refresh_window_targets(cx);
         self.workspace_menu_at = at;
         self.workspace_menu = Some(id);
         self.workspace_submenu = None;
@@ -568,6 +570,7 @@ impl Workbench {
             crate::settings::settings(cx).remote.feature,
             !ws.tabs.is_empty(),
             self.deletable_tree(id, cx).is_some(),
+            !self.window_targets.is_empty() && ws.plugin.is_none(),
         ]
         .iter()
         .filter(|on| **on)
@@ -727,6 +730,34 @@ impl Workbench {
                             }),
                         ),
                     );
+                }
+                moves = moves.child(div().absolute().top(px(-4.)).left(px(MENU_WIDTH - 8.)).child(flyout));
+            }
+            menu = menu.child(moves);
+        }
+        // Move to window › (only with another window open)
+        if !self.window_targets.is_empty() && ws.is_some_and(|w| w.plugin.is_none()) {
+            let mut moves = div().relative().child(
+                row("wm-move-window", "app-window", t(cx, "window.move_to"), false)
+                    .when(submenu == Some(Submenu::Window), |d| d.bg(hex(Chrome::HOVER)))
+                    .on_hover(hover(Some(Submenu::Window), cx))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.workspace_submenu = Some(Submenu::Window);
+                        cx.notify();
+                    }))
+                    .child(chevron()),
+            );
+            if submenu == Some(Submenu::Window) {
+                let mut flyout = popover().w(px(FLYOUT_WIDTH));
+                for target in &self.window_targets {
+                    let slot = target.slot;
+                    flyout = flyout.child(row(("wm-window", slot), "app-window", target.name.clone(), false).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.send_to_window(vec![id], slot, cx);
+                        }),
+                    ));
                 }
                 moves = moves.child(div().absolute().top(px(-4.)).left(px(MENU_WIDTH - 8.)).child(flyout));
             }
