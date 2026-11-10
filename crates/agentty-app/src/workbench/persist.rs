@@ -557,6 +557,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_window_keeps_its_own_settings_in_its_layout() {
+        // A layout written before windows had settings of their own reads with none.
+        let (old, complete) = LayoutState::parse(br#"{"groups":[],"workspaces":[],"activeWorkspace":0}"#);
+        assert!(complete);
+        assert!(old.settings.is_empty());
+        // None is not written at all, so the main window's file stays as it was.
+        assert!(!serde_json::to_string(&LayoutState::default()).unwrap().contains("settings"));
+        // A window's own settings come back as saved.
+        let mut state = LayoutState::default();
+        state.settings.insert("compactWorkspaces".into(), serde_json::json!(true));
+        state.settings.insert("workspaceList".into(), serde_json::json!({ "grouping": "project" }));
+        let bytes = serde_json::to_vec(&state).unwrap();
+        let (back, complete) = LayoutState::parse(&bytes);
+        assert!(complete);
+        assert_eq!(back.settings, state.settings);
+    }
+
+    #[test]
     fn panes_are_saved_with_the_session_running_now() {
         let id = |s: &str| Some(s.to_string());
         use PaneKind::{Claude, Codex, Shell};

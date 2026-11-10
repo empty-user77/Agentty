@@ -1169,10 +1169,7 @@ impl Workbench {
                     d = d.child(menu_item(
                         SharedString::from(format!("gm-window-{slot}")),
                         target.name.clone(),
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let ids = this.workspaces.iter().filter(|w| w.group == Some(gid)).map(|w| w.id).collect();
-                            this.send_to_window(ids, slot, cx);
-                        }),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.send_group_to_window(gid, slot, cx)),
                     ));
                 }
                 d.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
