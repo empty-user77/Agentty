@@ -195,9 +195,7 @@ impl Workbench {
         let Some((start_x, start_width)) = self.editor_session_drag else { return };
         let most = (self.editor_area_width - MIN_EDITOR).max(MIN_WIDTH);
         let width = (start_width + start_x - pointer_x).clamp(MIN_WIDTH, most);
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-            store.settings.editor_session_width = width
-        });
+        self.change_settings_live(cx, move |s| s.editor_session_width = width);
         cx.notify();
     }
 
@@ -208,7 +206,7 @@ impl Workbench {
         }
         let pane = self.linked_session(cx).filter(|_| !self.editor_session_picking);
         let total = self.editor_area_width;
-        let width = crate::settings::settings(cx).editor_session_width.clamp(MIN_WIDTH, (total - MIN_EDITOR).max(MIN_WIDTH));
+        let width = self.prefs(cx).editor_session_width.clamp(MIN_WIDTH, (total - MIN_EDITOR).max(MIN_WIDTH));
         let dragging = self.editor_session_drag.is_some();
         let splitter = div()
             .id("editor-session-resize")

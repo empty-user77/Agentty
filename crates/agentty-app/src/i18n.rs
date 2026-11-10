@@ -1747,6 +1747,24 @@ strings! {
     "workspace_options.hide_default_branch" => ["Hide main / master branch", "main·master 브랜치 숨기기", "main / master ブランチを隠す", "隐藏 main / master 分支", "Branch main / master ausblenden"],
     "workspace_options.hide_plugins" => ["Hide plugin workspaces", "플러그인 워크스페이스 숨기기", "プラグインのワークスペースを隠す", "隐藏插件工作区", "Plug-in-Arbeitsbereiche ausblenden"],
     "workspace_options.window" => ["Window", "창", "ウィンドウ", "窗口", "Fenster"],
+    "window.numbered" => ["Window {n}", "창 {n}", "ウィンドウ {n}", "窗口 {n}", "Fenster {n}"],
+    "window.move_to" => ["Move to Window", "다른 창으로 옮기기", "別のウィンドウへ移動", "移到其他窗口", "In anderes Fenster verschieben"],
+    "window.move_group_to" => ["Move group to window", "그룹을 다른 창으로 옮기기", "グループを別のウィンドウへ移動", "将分组移到窗口", "Gruppe in Fenster verschieben"],
+    "window.move_plugin_stays" => [
+        "A plugin's workspace stays in the window it runs in",
+        "플러그인 작업공간은 실행 중인 창에 남아요",
+        "プラグインのワークスペースは動いているウィンドウに残ります",
+        "插件的工作区留在它运行的窗口中",
+        "Der Arbeitsbereich eines Plugins bleibt in seinem Fenster"
+    ],
+    "window.settings_own" => [
+        "{n} setting(s) for this window only",
+        "이 창에서만 쓰는 설정 {n}개",
+        "このウィンドウだけの設定 {n} 件",
+        "仅此窗口的设置 {n} 项",
+        "Nur für dieses Fenster: {n}"
+    ],
+    "window.settings_reset" => ["Use the main window's", "메인 창 설정 따르기", "メインウィンドウに合わせる", "跟随主窗口", "Wie Hauptfenster"],
     "workspace_options.unified_header" => ["Tabs in the title bar", "탭을 제목 표시줄에 두기", "タブをタイトルバーに置く", "标签页放在标题栏", "Tabs in der Titelleiste"],
     "tooltip.refresh" => ["Refresh", "새로고침", "更新", "刷新", "Aktualisieren"],
     "welcome.name_label" => ["Workspace name (optional)", "작업공간 이름 (선택)", "ワークスペース名（任意）", "工作区名称（可选）", "Name des Arbeitsbereichs (optional)"],

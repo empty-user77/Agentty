@@ -760,9 +760,9 @@ pub(super) fn toggle(
     switch(
         id,
         on,
-        cx.listener(move |_, _: &ClickEvent, _, cx| {
+        cx.listener(move |this, _: &ClickEvent, _, cx| {
             let change = change.clone();
-            update_settings(cx, move |s| change(s));
+            this.change_settings(cx, move |s| change(s));
         }),
     )
 }
@@ -841,7 +841,7 @@ fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Cont
 impl Workbench {
     fn render_browser_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use crate::settings::{ChromeSignIn, LinkOpener, SearchEngine};
-        let prefs = settings(cx).clone();
+        let prefs = self.prefs(cx).clone();
         let b = prefs.browser.clone();
         let mut engines = chip_row();
         for engine in SearchEngine::ALL {
@@ -1171,7 +1171,7 @@ impl Workbench {
     }
 
     fn render_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let prefs = settings(cx).clone();
+        let prefs = self.prefs(cx).clone();
         let form = self.harness_pattern_form(window, cx);
         let (input, invalid) = (form.input.clone(), form.invalid);
 
@@ -1516,7 +1516,7 @@ impl Workbench {
     /// AI settings: what Agentty itself adds to agent sessions — the advisor, the agent bar, the
     /// guide it gives agents, and the tasks agents may start.
     fn render_ai_settings(&mut self, cx: &mut Context<Self>) -> Div {
-        let prefs = settings(cx).clone();
+        let prefs = self.prefs(cx).clone();
         let mut advisors = chip_row();
         for choice in crate::settings::AdvisorChoice::ALL {
             advisors = advisors.child(chip(
@@ -1672,7 +1672,7 @@ impl Workbench {
     /// the search index is built, with [`COLLECT`] set to gather the rows.
     fn settings_content(&mut self, section_id: SettingsSection, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let aliases = self.render_aliases(window, cx);
-        let prefs = settings(cx).clone();
+        let prefs = self.prefs(cx).clone();
         let themes = cx.global::<SettingsStore>().themes.clone();
 
         let mut languages = chip_row();
@@ -1848,6 +1848,7 @@ impl Workbench {
                 )
                 .child(
                     section(t(cx, "settings.group.workspaces"))
+                        .children(self.render_window_settings_reset("settings-window-reset", cx))
                         .child(row_with_hint(
                             t(cx, "settings.workspace_search_bar"),
                             t(cx, "settings.workspace_search_bar_hint"),

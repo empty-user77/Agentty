@@ -103,6 +103,7 @@ pub mod update;
 mod voice_input;
 #[cfg(windows)]
 mod webview_setup;
+mod window_move;
 mod windows_page;
 mod workspace_menu;
 mod workspace_options;
@@ -598,6 +599,8 @@ pub struct Workbench {
     /// Those logins by name, to tell this window from the others.
     window_account_label: Option<String>,
     account_menu_open: bool,
+    /// The other windows a workspace can be sent to, read when a menu that offers it opens.
+    window_targets: Vec<window_move::WindowTarget>,
     account_rows: Vec<account_menu::AccountRow>,
     /// Logins whose details are open in Settings → Accounts.
     account_details_open: HashSet<String>,
@@ -1029,6 +1032,7 @@ impl Workbench {
             accounts: Default::default(),
             window_account_label: None,
             account_menu_open: false,
+            window_targets: Vec::new(),
             account_rows: Vec::new(),
             account_details_open: HashSet::new(),
             session_board: Default::default(),
@@ -1343,6 +1347,24 @@ impl Workbench {
         self.installed.as_ref().is_none_or(|i| i.has(binary))
     }
 
+    /// The settings this window reads: the common ones, with what it changed for itself.
+    pub(super) fn prefs<'a>(&self, cx: &'a gpui::App) -> &'a crate::settings::Settings {
+        crate::settings::window_settings(cx, self.slot)
+    }
+
+    /// A settings change made in this window (see `settings::update_window_settings`), saved.
+    pub(super) fn change_settings(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut crate::settings::Settings)) {
+        crate::settings::update_window_settings(cx, self.slot, true, change);
+        if self.slot > 0 {
+            self.persist(cx);
+        }
+    }
+
+    /// The same while an edge is dragged: saved when the drag ends (`end_drags`).
+    pub(super) fn change_settings_live(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut crate::settings::Settings)) {
+        crate::settings::update_window_settings(cx, self.slot, false, change);
+    }
+
     fn next_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -1361,7 +1383,13 @@ impl Workbench {
         };
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
-        let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
+        self.subscribe_pane(&pane, cx);
+        pane
+    }
+
+    /// Listens to what a pane says: one it started, or one brought over from another window.
+    fn subscribe_pane(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        let subscription = cx.subscribe(pane, |this, pane, event: &TerminalEvent, cx| match event {
             TerminalEvent::Exited => {
                 let pane_id = pane.read(cx).pane_id;
                 this.pane_exited(pane.clone(), cx);
@@ -1426,7 +1454,6 @@ impl Workbench {
             }
         });
         self.pane_subscriptions.insert(pane.entity_id(), subscription);
-        pane
     }
 
     /// (workspace index, tab index) holding the pane.
@@ -2064,7 +2091,7 @@ impl Workbench {
     /// What the workspace list is filtered by. A hidden search box filters nothing, whatever was
     /// left in it — turning the box off must not leave workspaces missing with no way to see why.
     pub(super) fn workspace_query(&self, cx: &gpui::App) -> String {
-        if !crate::settings::settings(cx).workspace_search_bar {
+        if !self.prefs(cx).workspace_search_bar {
             return String::new();
         }
         self.workspace_search.read(cx).text().trim().to_lowercase()
@@ -3223,6 +3250,7 @@ impl Workbench {
             window: self.window_state,
             panels: self.panel_state(),
             accounts: self.accounts.clone(),
+            settings: crate::settings::window_overrides(cx, self.slot),
         };
         if self.closed {
             return;
@@ -3233,7 +3261,8 @@ impl Workbench {
     }
 
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let state = LayoutState::load(self.slot);
+        let mut state = LayoutState::load(self.slot);
+        crate::settings::set_window_overrides(cx, self.slot, std::mem::take(&mut state.settings));
         self.restore_accounts(&state.accounts);
         self.sync_follow_accounts(cx);
         self.groups = state
@@ -3368,27 +3397,21 @@ impl Workbench {
             // Dragging up makes the network panel taller; the page above keeps a readable height.
             let viewport = f32::from(window.viewport_size().height);
             let height = (start_height + start_y - f32::from(event.position.y)).clamp(90., (viewport - 260.).max(90.));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.browser.network_height = height
-            });
+            self.change_settings_live(cx, move |s| s.browser.network_height = height);
             cx.notify();
         } else if let Some((start_y, start_height)) = self.files_trees_drag {
             // Down makes the working-tree list taller, up shorter: any height, leaving the rest of
             // the window its room.
             let most = (f32::from(window.viewport_size().height) - files_panel::TREES_ROOM_LEFT).max(40.);
             let height = (start_height + f32::from(event.position.y) - start_y).clamp(40., most);
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.files_panel_trees_height = height
-            });
+            self.change_settings_live(cx, move |s| s.files_panel_trees_height = height);
             cx.notify();
         } else if self.files_resizing {
             // The files panel is the last column: its splitter sits just left of it.
             let viewport = f32::from(window.viewport_size().width);
             let width = (viewport - f32::from(event.position.x) - 2.5)
                 .clamp(files_panel::MIN_WIDTH, (viewport - 420.0).max(files_panel::MIN_WIDTH));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
-                store.settings.files_panel_width = width
-            });
+            self.change_settings_live(cx, move |s| s.files_panel_width = width);
             cx.notify();
         } else if self.editor_session_drag.is_some() {
             self.drag_editor_session(f32::from(event.position.x), cx);
@@ -3405,11 +3428,11 @@ impl Workbench {
             let right = self.side_panels_total(cx) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
+            self.change_settings_live(cx, move |s| s.browser.width = width);
             cx.notify();
         } else if self.sidebar_resizing {
             let width = (f32::from(event.position.x) - chrome::ACTIVITY_BAR_WIDTH).clamp(180.0, 640.0);
-            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.sidebar_width = width);
+            self.change_settings_live(cx, move |s| s.sidebar_width = width);
             cx.notify();
         } else if let Some(drag) = &self.split_drag {
             self.drag_split(drag.clone(), event.position, cx);
@@ -3467,6 +3490,7 @@ impl Workbench {
             self.files_trees_drag = None;
             self.browser_net_drag = None;
             update_settings(cx, |_| {}); // persist the final width
+            self.persist(cx); // and this window's own
         }
         if self.split_drag.take().is_some() {
             self.persist(cx);
@@ -4900,10 +4924,19 @@ impl Workbench {
                     self.request_delete_tree(id, window, cx);
                 }
             }
+            // `move-to-window <n> <slot>`: sends the n-th workspace to window `slot`, as its menu does.
+            "move-to-window" => {
+                let mut words = argument.split_whitespace();
+                let index = words.next().and_then(|w| w.parse::<usize>().ok());
+                let slot = words.next().and_then(|w| w.parse::<usize>().ok());
+                if let (Some(id), Some(slot)) = (index.and_then(|i| self.workspaces.get(i)).map(|ws| ws.id), slot) {
+                    self.send_to_window(vec![id], slot, cx);
+                }
+            }
             // `workspace-menu <n>`: opens the n-th workspace's menu, as its card's ⋯ does.
             "workspace-menu" => {
                 if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
-                    self.open_workspace_menu(id, 80.);
+                    self.open_workspace_menu(id, 80., cx);
                     cx.notify();
                 }
             }
@@ -5497,13 +5530,13 @@ impl Workbench {
             }
             "sidebar-width" => {
                 if let Ok(width) = argument.parse::<f32>() {
-                    update_settings(cx, |s| s.sidebar_width = width);
+                    self.change_settings(cx, move |s| s.sidebar_width = width);
                 }
             }
             "setting" => {
                 if let Some((key, value)) = argument.split_once('=') {
                     let (key, value) = (key.to_string(), value.to_string());
-                    update_settings(cx, move |s| {
+                    self.change_settings(cx, move |s| {
                         let mut json = serde_json::to_value(&*s).unwrap_or_default();
                         json[key] = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
                         if let Ok(updated) = serde_json::from_value(json) {
@@ -5528,6 +5561,16 @@ impl Workbench {
                         .collect();
                     eprintln!("screen-lines: total={} {:?} state={state:?}", lines.len(), &shown[shown.len().saturating_sub(10)..]);
                 }
+            }
+            // `workspaces`: this window's workspaces (id, group, panes) and its own settings.
+            "workspaces" => {
+                for ws in &self.workspaces {
+                    let group = ws.group.and_then(|g| self.groups.iter().find(|x| x.id == g)).map(|g| g.name.clone());
+                    let panes: Vec<u64> = ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id).collect();
+                    let title = self.workspace_title(ws, cx);
+                    eprintln!("workspaces[w{}]: id={} title={title:?} group={group:?} panes={panes:?}", self.slot, ws.id);
+                }
+                eprintln!("workspaces[w{}]: own settings {:?}", self.slot, crate::settings::window_overrides(cx, self.slot));
             }
             "dump" => {
                 if let Some(pane) = self.active_pane() {

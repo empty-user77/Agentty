@@ -265,6 +265,9 @@ pub struct LayoutState {
     /// The logins this window runs on.
     #[serde(default)]
     pub accounts: agentty_bridge::accounts::AccountChoice,
+    /// Settings this window changed for itself (see `settings::WINDOW_KEYS`).
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl LayoutState {
@@ -322,6 +325,7 @@ impl LayoutState {
             window: serde_json::from_value(field(&value, "window")).unwrap_or_default(),
             panels: serde_json::from_value(field(&value, "panels")).unwrap_or_default(),
             accounts: serde_json::from_value(field(&value, "accounts")).unwrap_or_default(),
+            settings: serde_json::from_value(field(&value, "settings")).unwrap_or_default(),
         };
         (state, false)
     }

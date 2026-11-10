@@ -239,6 +239,11 @@ impl SyncUi {
 }
 
 impl Workbench {
+    /// The repository this window syncs to.
+    pub(super) fn sync_profile(&self) -> &SyncProfile {
+        &self.sync.profile
+    }
+
     fn sync_key(&self, id: u64) -> String {
         format!("{}:{id}", self.slot)
     }
@@ -435,6 +440,18 @@ impl Workbench {
     /// Its id in the repository, kept with it in the trash.
     pub(super) fn workspace_sync_id(&self, id: u64) -> Option<String> {
         self.sync.config.workspaces.get(&self.sync_key(id)).cloned()
+    }
+
+    /// Gone to another window that syncs to the same repository: it syncs on from there, so it
+    /// is neither removed nor sent from here any more.
+    pub(super) fn forget_sync_of(&mut self, id: u64) {
+        let key = self.sync_key(id);
+        self.sync.pending.remove(&id);
+        let stored = key.clone();
+        let _ = bridge::update_config(&self.sync.profile, move |c| {
+            c.workspaces.remove(&stored);
+        });
+        self.sync.config.workspaces.remove(&key);
     }
 
     /// Back from the trash, under a new local id: it syncs on as the same workspace.

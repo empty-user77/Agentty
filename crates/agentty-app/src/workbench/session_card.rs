@@ -85,7 +85,7 @@ impl Workbench {
             Some(ink) => hex_alpha(ink, 0.7),
             None => hex_alpha(Chrome::MUTED, 1.),
         };
-        let prefs = crate::settings::settings(cx);
+        let prefs = self.prefs(cx);
         let (show_activity, show_subagents) = (prefs.card_activity, prefs.card_subagents);
         let mut lines = div().pl(indent).pt_0p5().flex().flex_col().gap_0p5().t_caption();
 

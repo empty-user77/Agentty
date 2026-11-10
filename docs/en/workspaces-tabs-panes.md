@@ -16,6 +16,8 @@ Each row in the sidebar (**⌘B**) is a workspace, with a folder it opens in. **
 - **⌥⌘↓ / ⌥⌘↑** move between workspaces, **⌘1…⌘9** jump to one.
 - Every workspace, its tabs, splits and groups come back after a restart.
 - The **⚙** in the list's header opens **Workspace Options**: card layout (detailed or compact, whether detailed cards list running subagents — up to five, the rest as "+N"; ⌘-click one to open the subagents window — and whether they show their agents' state, time, tokens and cost), grouping (none, your groups, or by project — a repository and its worktrees together; a project folds like a group), order (manual, recent activity, name), filters (hide sleeping workspaces, workspaces on `main` / `master`, plugin workspaces) and whether the tabs sit in the title bar. The workspace you are in is always listed.
+- With more than one window open (**File → New Window**, or another account's window), **Move to Window ›** in a workspace's menu, or a window under **Move group to window** in a group's menu, moves it there. Its terminals keep running and its agents stay in their sessions, on the account they started with; its group comes along by name.
+- Workspace Options, the sidebar's width and the side panels' widths are set in the main window for every window. Changed in another window, they stay that way in that window only; **Use the main window's** at the bottom of its Workspace Options puts it back.
 
 On macOS the tabs sit in the title bar next to the window buttons, with the sidebar button (**⌘B**) beside them; double-click the empty part of the bar to zoom the window. Turn **Tabs in the title bar** off in Workspace Options for a tab row of its own.
 
@@ -34,6 +36,7 @@ Right-click a workspace, or click its **⋯**, for what can be done to it. Where
 | Mark as Unread | Shows the attention mark on the card until you open it |
 | New Group, Move to Group ›, Remove from Group | Files the workspace in a group |
 | Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
+| Move to Window › | Moves the workspace, running, to another open window |
 | Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon, as is every workspace not opened since Agentty started. Opening it again starts its tabs and continues their agent sessions |
 | Delete Worktree | Closes the workspace and removes its worktree and branch. Uncommitted changes and commits found nowhere else are kept |
 

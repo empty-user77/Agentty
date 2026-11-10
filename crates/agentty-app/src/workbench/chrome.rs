@@ -503,7 +503,7 @@ impl Workbench {
     }
 
     pub(super) fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = settings(cx).sidebar_width;
+        let width = self.prefs(cx).sidebar_width;
         let (title, body): (&str, AnyElement) = match self.panel {
             SidePanel::Workspaces => (t(cx, "panel.workspaces"), self.render_workspaces_panel(window, cx).into_any_element()),
             SidePanel::Sessions => (t(cx, "panel.sessions"), self.render_sessions_panel(cx).into_any_element()),
@@ -568,7 +568,7 @@ impl Workbench {
         };
         // Title and session content, debounced the same way the sessions panel searches: title
         // matches show at once, content matches trail in from the background.
-        let workspace_search = (self.panel == SidePanel::Workspaces && settings(cx).workspace_search_bar).then(|| {
+        let workspace_search = (self.panel == SidePanel::Workspaces && self.prefs(cx).workspace_search_bar).then(|| {
             let running = self.workspace_search_running(cx);
             self.render_search_box("workspace-search", &self.workspace_search, running, cx).px_2().pb_2()
         });
@@ -734,7 +734,7 @@ impl Workbench {
         let mut linked = self.linked_workspaces(cx);
         // Grouped another way than by the user's groups (the options menu): with no grouping
         // nothing folds; projects fold like groups do.
-        let grouping = settings(cx).workspace_list.grouping;
+        let grouping = self.prefs(cx).workspace_list.grouping;
         if grouping != crate::settings::WorkspaceGrouping::Groups {
             let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
             if grouping == crate::settings::WorkspaceGrouping::None {
@@ -1075,6 +1075,9 @@ impl Workbench {
                     let Some(gid) = group else { return };
                     cx.stop_propagation();
                     this.group_menu = if this.group_menu == Some(gid) { None } else { Some(gid) };
+                    if this.group_menu.is_some() {
+                        this.refresh_window_targets(cx);
+                    }
                     cx.notify();
                 }),
             )
@@ -1158,6 +1161,21 @@ impl Workbench {
                     t(cx, "group.sleep"),
                     cx.listener(move |this, _: &ClickEvent, window, cx| this.sleep_group(gid, window, cx)),
                 ))
+            })
+            .when(!self.window_targets.is_empty() && self.workspaces.iter().any(|w| w.group == Some(gid)), |d| {
+                let mut d = d.child(div().px_2().pt_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "window.move_group_to")));
+                for target in &self.window_targets {
+                    let slot = target.slot;
+                    d = d.child(menu_item(
+                        SharedString::from(format!("gm-window-{slot}")),
+                        target.name.clone(),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let ids = this.workspaces.iter().filter(|w| w.group == Some(gid)).map(|w| w.id).collect();
+                            this.send_to_window(ids, slot, cx);
+                        }),
+                    ));
+                }
+                d.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             })
             .child(menu_item(
                 "gm-delete",
@@ -1291,7 +1309,7 @@ impl Workbench {
         }
         let marked = chat || orchestration.is_some();
         let indent = px(if show_logo || marked { 24. } else { 2. });
-        let compact = settings(cx).compact_workspaces;
+        let compact = self.prefs(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
         // waiting for the user. A card that already carries a colour would only clash with it, so
@@ -1482,7 +1500,7 @@ impl Workbench {
                                             if this.workspace_menu == Some(id) {
                                                 this.workspace_menu = None;
                                             } else {
-                                                this.open_workspace_menu(id, f32::from(event.position().y));
+                                                this.open_workspace_menu(id, f32::from(event.position().y), cx);
                                             }
                                             cx.notify();
                                         }),
@@ -1561,7 +1579,7 @@ impl Workbench {
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.open_workspace_menu(id, f32::from(event.position.y));
+                    this.open_workspace_menu(id, f32::from(event.position.y), cx);
                     cx.notify();
                 }),
             )

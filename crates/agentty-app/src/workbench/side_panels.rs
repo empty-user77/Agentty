@@ -26,7 +26,7 @@ pub enum SidePanel {
 impl Workbench {
     /// Width the plugin panel is drawn at, wherever it is drawn.
     pub(super) fn plugin_panel_shown_width(&self, cx: &gpui::App) -> f32 {
-        crate::settings::settings(cx).plugin_panel_width.max(MIN_WIDTH)
+        self.prefs(cx).plugin_panel_width.max(MIN_WIDTH)
     }
 
     /// Width the plugin panel takes from the window's layout: nothing unless it is docked, and
@@ -49,7 +49,7 @@ impl Workbench {
 
     /// The most the plugin panel may take while docked.
     pub(super) fn dockable_width(&self, cx: &gpui::App) -> f32 {
-        let prefs = crate::settings::settings(cx);
+        let prefs = self.prefs(cx);
         let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
         let others = self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. };
         // The browser and the files panel shrink to make room, but only down to their minimum:
@@ -62,7 +62,7 @@ impl Workbench {
     /// Width of the Docker panel as shown (0 while it is closed).
     pub(super) fn docker_panel_width(&self, cx: &gpui::App) -> f32 {
         if self.docker.open {
-            crate::settings::settings(cx).docker_panel_width.max(MIN_WIDTH)
+            self.prefs(cx).docker_panel_width.max(MIN_WIDTH)
         } else {
             0.
         }
@@ -71,7 +71,7 @@ impl Workbench {
     /// Width of the database panel as shown (0 while it is closed).
     pub(super) fn db_panel_width(&self, cx: &gpui::App) -> f32 {
         if self.db.panel_open {
-            crate::settings::settings(cx).db_panel_width.max(MIN_WIDTH)
+            self.prefs(cx).db_panel_width.max(MIN_WIDTH)
         } else {
             0.
         }
@@ -191,10 +191,10 @@ impl Workbench {
         // A floating panel may be as wide as the window bar its left edge; a docked one leaves the
         // terminals their room.
         let width = if floating { (edge - pointer_x - 2.5).clamp(MIN_WIDTH, edge) } else { side_width(edge, pointer_x) };
-        gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| match panel {
-            SidePanel::Plugin => store.settings.plugin_panel_width = width,
-            SidePanel::Docker => store.settings.docker_panel_width = width,
-            SidePanel::Database => store.settings.db_panel_width = width,
+        self.change_settings_live(cx, move |s| match panel {
+            SidePanel::Plugin => s.plugin_panel_width = width,
+            SidePanel::Docker => s.docker_panel_width = width,
+            SidePanel::Database => s.db_panel_width = width,
         });
         cx.notify();
     }

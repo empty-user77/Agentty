@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Move to Window in a workspace's menu, and Move group to window in a group's menu, move workspaces between open
+  windows (another account's window included). Terminals keep running and agents stay in their sessions, on the
+  account they started with.
+- Workspace Options, the sidebar's width and the side panels' widths can differ per window: the main window sets them
+  for every window, and a window that changes one keeps its own value until Use the main window's puts it back.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

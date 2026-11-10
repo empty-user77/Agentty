@@ -5,7 +5,7 @@
 use super::settings_page::toggle;
 use super::Workbench;
 use crate::i18n::t;
-use crate::settings::{settings, update_settings, Settings, WorkspaceGrouping, WorkspaceSort};
+use crate::settings::{Settings, WorkspaceGrouping, WorkspaceSort};
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
@@ -41,7 +41,7 @@ fn segmented<T: Copy + PartialEq + 'static>(
                 .text_color(hex(if on { Chrome::BRIGHT } else { Chrome::MUTED }))
                 .when(on, |d| d.bg(hex(Chrome::SELECTED)))
                 .when(!on, |d| d.hover(crate::ui::hover_fill))
-                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| set(s, value))))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.change_settings(cx, move |s| set(s, value))))
                 .child(t(cx, key)),
         );
     }
@@ -70,7 +70,7 @@ impl Workbench {
     /// Tabs in the title bar: macOS (where Agentty draws its own title bar under the traffic
     /// lights) with the setting on, and not for a plugin's workspace, which has a tab row of its own.
     pub(super) fn unified_header(&self, cx: &gpui::App) -> bool {
-        cfg!(target_os = "macos") && settings(cx).unified_header
+        cfg!(target_os = "macos") && self.prefs(cx).unified_header
     }
 
     /// With the unified header the bell sits in the sidebar's own header while the sidebar shows,
@@ -92,7 +92,7 @@ impl Workbench {
     /// `members` with the options' filters and order applied. The workspace in front is never
     /// filtered out: the list must always show where you are.
     pub(super) fn list_order(&self, members: Vec<usize>, cx: &gpui::App) -> Vec<usize> {
-        let options = &settings(cx).workspace_list;
+        let options = &self.prefs(cx).workspace_list;
         let mut kept: Vec<usize> = members
             .into_iter()
             .filter(|&i| {
@@ -166,7 +166,7 @@ impl Workbench {
     }
 
     fn render_workspace_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let prefs = settings(cx).clone();
+        let prefs = self.prefs(cx).clone();
         let options = prefs.workspace_list.clone();
         popover()
             .id("workspace-options")
@@ -295,6 +295,39 @@ impl Workbench {
                         this.open_settings_section(super::settings_page::SettingsSection::General, cx);
                     })),
             )
+            .children(self.render_window_settings_reset("wo-window-reset", cx))
+    }
+
+    /// In a window other than the main one that changed settings for itself: how many, and the
+    /// way back to the main window's.
+    pub(super) fn render_window_settings_reset(&self, id: &'static str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let count = crate::settings::window_override_count(cx, self.slot);
+        if self.slot == 0 || count == 0 {
+            return None;
+        }
+        Some(
+            div()
+                .id(id)
+                .px_1()
+                .py_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded_md()
+                .cursor_pointer()
+                .t_body()
+                .text_color(hex(Chrome::FOREGROUND))
+                .hover(crate::ui::hover_fill)
+                .child(icon("app-window", IconSize::INLINE, hex(Chrome::MUTED)))
+                .child(div().flex_1().min_w_0().child(crate::i18n::tf_count(cx, "window.settings_own", count, &[])))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "window.settings_reset")))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    crate::settings::reset_window_settings(cx, this.slot);
+                    this.persist(cx);
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
     }
 
     /// The sidebar button in the unified header: shows or hides the sidebar, in the same place
