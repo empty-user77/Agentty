@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
 ### Added
 - Move to Window in a workspace's menu, and Move group to window in a group's menu, move workspaces between open
   windows (another account's window included). Terminals keep running and agents stay in their sessions, on the
