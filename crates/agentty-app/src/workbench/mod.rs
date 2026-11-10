@@ -1,6 +1,7 @@
 //! The window's root view. Hierarchy: group → workspace (one sidebar row) → tab → split panes.
 
 mod account_menu;
+mod account_pick;
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
@@ -45,6 +46,7 @@ mod install_hint;
 mod integrations_page;
 mod layout;
 pub(crate) mod log_panel;
+mod login_mark;
 pub mod mini;
 mod notices;
 mod notify_settings;
@@ -443,13 +445,6 @@ pub struct Workbench {
     sidebar_open: bool,
     page: Option<Page>,
     launcher_open: bool,
-    /// The split button's menu (right or down), and whether the pointer is on the button / the menu:
-    /// it opens on hover and closes a moment after the pointer left both.
-    split_menu: bool,
-    split_menu_hover: (bool, bool),
-    /// The split menu was opened (or kept) by a click: leaving it with the pointer doesn't close it.
-    split_menu_pinned: bool,
-    split_button_at: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// Where the + menu opens what is picked: a tab (default each time it opens) or a split.
     launcher_target: LaunchTarget,
     workspace_menu: Option<u64>,
@@ -602,6 +597,10 @@ pub struct Workbench {
     /// The other windows a workspace can be sent to, read when a menu that offers it opens.
     window_targets: Vec<window_move::WindowTarget>,
     account_rows: Vec<account_menu::AccountRow>,
+    /// Which login a new agent starts on, while that is being asked.
+    account_pick: Option<account_pick::AccountPick>,
+    /// The pane whose login mark has its menu open.
+    login_mark_open: Option<gpui::EntityId>,
     /// Logins whose details are open in Settings → Accounts.
     account_details_open: HashSet<String>,
     /// The session page's Agents and Workflows views (and which one is on screen).
@@ -937,10 +936,6 @@ impl Workbench {
             sidebar_open: true,
             page: None,
             launcher_open: false,
-            split_menu: false,
-            split_menu_hover: (false, false),
-            split_menu_pinned: false,
-            split_button_at: Rc::default(),
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
@@ -1034,6 +1029,8 @@ impl Workbench {
             account_menu_open: false,
             window_targets: Vec::new(),
             account_rows: Vec::new(),
+            account_pick: None,
+            login_mark_open: None,
             account_details_open: HashSet::new(),
             session_board: Default::default(),
             orchestrator_dialog: None,
@@ -1969,6 +1966,10 @@ impl Workbench {
     ) {
         let choice = choice.into();
         self.launcher_open = false;
+        // An agent with several logins asks which one, every time.
+        if self.ask_launch_account(&choice, target, cx) {
+            return;
+        }
         // New tabs open where the user is (unless set to ask); new workspaces ask by default.
         let ask = match target {
             LaunchTarget::NewTab => settings(cx).ask_directory_for_tabs || self.workspaces.is_empty() && settings(cx).ask_directory,
@@ -3264,6 +3265,7 @@ impl Workbench {
         let mut state = LayoutState::load(self.slot);
         crate::settings::set_window_overrides(cx, self.slot, std::mem::take(&mut state.settings));
         self.restore_accounts(&state.accounts);
+        self.refresh_account_rows(cx);
         self.sync_follow_accounts(cx);
         self.groups = state
             .groups
@@ -3651,6 +3653,10 @@ impl Render for Workbench {
                 if this.onboarding_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
+                // So does the question which login a new agent starts on.
+                if this.account_pick_key(event, window, cx) {
+                    return cx.stop_propagation();
+                }
                 // A close confirmation owns the keyboard.
                 if this.close_confirm_key(event, window, cx) {
                     return cx.stop_propagation();
@@ -3959,7 +3965,6 @@ impl Render for Workbench {
                                 )
                             })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
-                            .children(self.render_split_menu(cx))
                             // A selection's bar, menu or side-chat question (a chat's, or a terminal's).
                             .children(self.render_select_ui(cx))
                             // Opens under the sync icon, left of the bell.
@@ -4010,6 +4015,7 @@ impl Render for Workbench {
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
+            .children(self.render_account_pick(cx))
             .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
             .children(self.render_run_add_dialog(cx))

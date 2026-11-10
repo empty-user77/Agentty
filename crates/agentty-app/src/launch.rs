@@ -101,6 +101,9 @@ pub struct LaunchSpec {
     pub read_only: bool,
     /// Which logins this pane runs on. Set once when the window spawns it.
     pub accounts: AccountChoice,
+    /// The agent whose login in `accounts` was picked for this pane (the own login included): the
+    /// window's does not replace it.
+    pub fixed_account: Option<AuthAgent>,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
@@ -124,6 +127,8 @@ pub enum LaunchChoice {
     },
     /// A chat workspace: Claude Code (or Codex) as the lead the user chats with, starting workers below it.
     Chat,
+    /// `choice` on a login picked for it when it was started: `None` is the agent's own login.
+    OnAccount(Box<LaunchChoice>, AuthAgent, Option<String>),
 }
 
 impl From<PaneKind> for LaunchChoice {
@@ -138,6 +143,20 @@ impl LaunchChoice {
             LaunchChoice::Kind(kind) | LaunchChoice::Model(kind, _) => *kind,
             LaunchChoice::Command { .. } => PaneKind::Shell,
             LaunchChoice::Chat => PaneKind::Claude,
+            LaunchChoice::OnAccount(choice, ..) => choice.kind(),
+        }
+    }
+
+    /// The agent whose login has to be picked before this starts, when the agent has several. A
+    /// chat and other CLIs have none to pick; a choice already on an account has its own.
+    pub fn account_agent(&self) -> Option<AuthAgent> {
+        match self {
+            LaunchChoice::Kind(kind) | LaunchChoice::Model(kind, _) => match kind {
+                PaneKind::Claude => Some(AuthAgent::Claude),
+                PaneKind::Codex => Some(AuthAgent::Codex),
+                PaneKind::Shell => None,
+            },
+            LaunchChoice::Command { .. } | LaunchChoice::Chat | LaunchChoice::OnAccount(..) => None,
         }
     }
 
@@ -148,6 +167,7 @@ impl LaunchChoice {
             LaunchChoice::Model(kind, model) => Some(format!("{} · {model}", LaunchSpec::new(*kind, PathBuf::new()).title)),
             LaunchChoice::Command { title, .. } => Some(title.clone()),
             LaunchChoice::Chat => Some(CHAT_TITLE.to_string()),
+            LaunchChoice::OnAccount(choice, ..) => choice.label(),
         }
     }
 
@@ -163,6 +183,12 @@ impl LaunchChoice {
             LaunchChoice::Chat => {
                 let mut spec = LaunchSpec::new(PaneKind::Claude, cwd);
                 spec.title = CHAT_TITLE.to_string();
+                spec
+            }
+            LaunchChoice::OnAccount(choice, agent, id) => {
+                let mut spec = choice.spec(cwd);
+                spec.accounts.set(*agent, id.clone());
+                spec.fixed_account = Some(*agent);
                 spec
             }
         }
@@ -199,6 +225,7 @@ impl LaunchSpec {
             restricted: false,
             read_only: false,
             accounts: AccountChoice::default(),
+            fixed_account: None,
         }
     }
 
@@ -216,6 +243,7 @@ impl LaunchSpec {
             restricted: false,
             read_only: false,
             accounts: AccountChoice::default(),
+            fixed_account: None,
         }
     }
 
@@ -237,6 +265,7 @@ impl LaunchSpec {
             restricted: false,
             read_only: false,
             accounts: AccountChoice::default(),
+            fixed_account: None,
         }
     }
 
@@ -1014,6 +1043,33 @@ pub fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_started_on_a_picked_login_keeps_it() {
+        let claude = LaunchChoice::Model(PaneKind::Claude, "opus".into());
+        // Claude Code and Codex ask which login; a shell, another CLI and a chat do not.
+        assert_eq!(claude.account_agent(), Some(AuthAgent::Claude));
+        assert_eq!(LaunchChoice::Kind(PaneKind::Codex).account_agent(), Some(AuthAgent::Codex));
+        assert_eq!(LaunchChoice::Kind(PaneKind::Shell).account_agent(), None);
+        assert_eq!(LaunchChoice::Chat.account_agent(), None);
+        assert_eq!(LaunchChoice::Command { title: "Amp".into(), command: "amp".into() }.account_agent(), None);
+
+        // The answer is asked once: a choice on a login does not ask again.
+        let on_sub = LaunchChoice::OnAccount(Box::new(claude.clone()), AuthAgent::Claude, Some("aexample1".into()));
+        assert_eq!(on_sub.account_agent(), None);
+        assert_eq!(on_sub.kind(), PaneKind::Claude);
+        assert_eq!(on_sub.label(), claude.label());
+        let spec = on_sub.spec(PathBuf::from("/tmp"));
+        assert_eq!(spec.model.as_deref(), Some("opus"));
+        assert_eq!(spec.accounts.claude.as_deref(), Some("aexample1"));
+        assert_eq!(spec.fixed_account, Some(AuthAgent::Claude));
+
+        // The agent's own login is a pick too, not "whatever the window runs".
+        let own = LaunchChoice::OnAccount(Box::new(claude), AuthAgent::Claude, None).spec(PathBuf::from("/tmp"));
+        assert_eq!(own.accounts.claude, None);
+        assert_eq!(own.fixed_account, Some(AuthAgent::Claude));
+        assert_eq!(LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp")).fixed_account, None);
+    }
 
     #[test]
     fn the_store_copy_of_pwsh_gives_way_to_the_regular_install() {

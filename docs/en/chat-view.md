@@ -7,7 +7,7 @@ Chat view draws a Claude Code, Codex, Antigravity or Gemini CLI pane as a chat, 
 
 ## Turning it on
 
-- Click the speech bubble in the pane's title bar, choose **View → Chat View**, or press **⇧⌘J**. Each switches only the pane in front. Each pane keeps its view, chat or terminal, across a restart.
+- Click **Chat** at the top right of an agent's pane (**Terminal** in the same place goes back), choose **View → Chat View**, or press **⇧⌘J**. Each switches only the pane in front. Each pane keeps its view, chat or terminal, across a restart.
 - **Settings → AI settings → How agents open** picks the mode new agents start in (terminal or chat). You also pick it in onboarding. An agent started again in a pane, after the last one quit, opens in this mode.
 
 ## The conversation

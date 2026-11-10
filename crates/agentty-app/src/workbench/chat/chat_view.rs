@@ -362,6 +362,29 @@ impl Workbench {
         });
         let composer = self.render_chat_composer(state, &live, cx);
         let target = pane.clone();
+        // The way to the terminal, where the terminal has its way back to the chat.
+        let to_terminal = div()
+            .id("chat-to-terminal")
+            .absolute()
+            .top_1()
+            .right_3()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .gap_1()
+            .t_caption()
+            .cursor_pointer()
+            .border_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(Chrome::PANEL))
+            .text_color(hex(Chrome::FOREGROUND))
+            .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .tooltip(crate::ui::Tooltip::text(t(cx, "menu.chat_view"), Some("⇧⌘J")))
+            .child(icon("square-terminal", 12., hex(Chrome::FOREGROUND)))
+            .child(t(cx, "chat.show_terminal"))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_chat_terminal(id, window, cx)));
         let main = div()
             .relative()
             .flex_1()
@@ -373,7 +396,8 @@ impl Workbench {
             .children(approval)
             .children(interrupted)
             .children(activity)
-            .children(composer);
+            .children(composer)
+            .child(to_terminal);
         Some(
             div()
                 .id(SharedString::from(format!("plain-chat-{}", id.as_u64())))
@@ -986,12 +1010,41 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Over the terminal of a pane chat view shows as a chat: the way back to the chat, or why the
-    /// terminal is up (the agent asks something only its screen can answer).
+    /// Over the terminal of every agent pane that can be shown as a chat: the way to the chat, or
+    /// why the terminal is up (the agent asks something only its screen can answer).
     pub(in crate::workbench) fn render_plain_chat_return(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let state = self.chats.get(&pane.entity_id()).filter(|state| state.plain && state.first_load.is_none())?;
         let id = pane.entity_id();
         let pill = div().absolute().top_1().right_3().px_2().py_1().rounded_md().flex().items_center().gap_1().t_caption();
+        let button = |pill: gpui::Div| {
+            pill.id("chat-back")
+                .cursor_pointer()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex(Chrome::PANEL))
+                .text_color(hex(Chrome::FOREGROUND))
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "menu.chat_view"), Some("⇧⌘J")))
+                .child(icon("message-square", 12., hex(Chrome::FOREGROUND)))
+                .child(t(cx, "chat.show_chat"))
+        };
+        let Some(state) = self.chats.get(&id) else {
+            // Never shown as a chat yet: the same button turns it on. Not over a chat
+            // workspace's workers, nor while the chat it was just switched to is starting.
+            let first = super::shows_as_chat(pane, cx) && self.chat_lead_of(pane).is_none() && self.chat_modes.get(&id) != Some(&true);
+            return first.then(|| {
+                let target = pane.clone();
+                button(pill)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.mark_active(&target, cx);
+                        this.focus_pane(&target, window, cx);
+                        this.toggle_chat_view(window, cx);
+                    }))
+                    .into_any_element()
+            });
+        };
+        if !state.plain || state.first_load.is_some() {
+            return None;
+        }
         if Self::terminal_forced(state, cx) {
             let reason = t(cx, if state.setup_screen { "chat.setup_screen_plain" } else { "chat.answer_in_terminal" });
             return Some(
@@ -1003,15 +1056,7 @@ impl Workbench {
             );
         }
         Some(
-            pill.id("chat-back")
-                .cursor_pointer()
-                .border_1()
-                .border_color(hex(Chrome::BORDER))
-                .bg(hex(Chrome::PANEL))
-                .text_color(hex(Chrome::FOREGROUND))
-                .hover(|s| s.bg(hex(Chrome::HOVER)))
-                .child(icon("message-square", 12., hex(Chrome::FOREGROUND)))
-                .child(t(cx, "chat.show_chat"))
+            button(pill)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_chat_terminal(id, window, cx)))
                 .into_any_element(),
         )

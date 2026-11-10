@@ -180,6 +180,8 @@ impl Workbench {
             // name and the pane's own buttons still fit.
             shown.then(|| self.context_meter(pane, percent, width < COMPACT_METER_WIDTH, cx))
         };
+        let mut login_chip = self.foreign_login_chip(pane, cx);
+        let foreign = login_chip.is_some();
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
         let bars_below = bars_below(cx);
@@ -209,6 +211,7 @@ impl Workbench {
                 .pl_2()
                 .pr_0p5()
                 .overflow_hidden()
+                .when(foreign, |d| d.border_b_1().border_color(hex(Chrome::BLUE)))
                 .bg(if active { hex(Chrome::SELECTED) } else { hex(Chrome::TAB_INACTIVE) })
                 .t_small()
                 .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
@@ -264,6 +267,8 @@ impl Workbench {
                             .child(title),
                     )
                 })
+                // Another login than the window's: said before anything else on the bar.
+                .children(login_chip.take())
                 // The items of the status bar, in the user's order (Settings → Appearance), in a row of
                 // their own: where the pane is too narrow for all of them, they give way at its end,
                 // never the pane's own buttons after it.
@@ -1047,6 +1052,8 @@ impl Workbench {
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
         let mut context_meter = Some(self.context_meter(pane, percent, false, cx));
+        let login_chip = self.foreign_login_chip(pane, cx);
+        let foreign = login_chip.is_some();
         let view = pane.read(cx);
         // Claude Code and Codex tell their state, context and model through their hooks and logs.
         // Antigravity and Gemini CLI only through their screen: their bar has the model it shows
@@ -1076,7 +1083,8 @@ impl Workbench {
                 .overflow_hidden()
                 .bg(hex(Chrome::TAB_INACTIVE))
                 .map(|d| if bars_below(cx) { d.border_t_1() } else { d.border_b_1() })
-                .border_color(hex(Chrome::BORDER))
+                // Another login than the window's: the line in the account blue.
+                .border_color(if foreign { hex(Chrome::BLUE) } else { hex(Chrome::BORDER) })
                 .t_small()
                 .when_some(worker, |d, title| {
                     d.child(
@@ -1089,6 +1097,7 @@ impl Workbench {
                             .child(title),
                     )
                 })
+                .children(login_chip)
                 // The items of the status bar, in the user's order (Settings → Appearance).
                 .map(|mut d| {
                     for entry in hud.iter().filter(|e| e.visible) {
