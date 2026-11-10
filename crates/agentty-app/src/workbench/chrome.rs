@@ -524,9 +524,10 @@ impl Workbench {
         let actions = match self.panel {
             SidePanel::Workspaces => div()
                 .flex()
+                .items_center()
                 .gap_0p5()
-                // Sleeping workspaces shown or hidden, without opening Workspace Options.
-                .child(self.render_sleeping_toggle(cx))
+                // Without the search box, the moon that sits in it comes here.
+                .when(!self.prefs(cx).workspace_search_bar, |d| d.child(div().px_1().child(self.render_sleeping_toggle(cx))))
                 .children(bell)
                 .child(
                     icon_only(
@@ -572,7 +573,9 @@ impl Workbench {
         // matches show at once, content matches trail in from the background.
         let workspace_search = (self.panel == SidePanel::Workspaces && self.prefs(cx).workspace_search_bar).then(|| {
             let running = self.workspace_search_running(cx);
-            self.render_search_box("workspace-search", &self.workspace_search, running, cx).px_2().pb_2()
+            // Sleeping workspaces shown or hidden, at the box's right end.
+            let moon = self.render_sleeping_toggle(cx);
+            self.render_search_box_with("workspace-search", &self.workspace_search, running, Some(moon), cx).px_2().pb_2()
         });
 
         div()
@@ -668,6 +671,18 @@ impl Workbench {
         running: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        self.render_search_box_with(id, input, running, None, cx)
+    }
+
+    /// A search box with `trailing` at its right end, after the clear button.
+    pub(super) fn render_search_box_with(
+        &self,
+        id: &'static str,
+        input: &gpui::Entity<crate::text_input::TextInput>,
+        running: bool,
+        trailing: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let has_text = !input.read(cx).text().is_empty();
         let clear = input.clone();
         div()
@@ -714,7 +729,8 @@ impl Workbench {
                                 }))
                                 .child(icon("x", IconSize::INLINE, hex(Chrome::MUTED))),
                         )
-                    }),
+                    })
+                    .children(trailing),
             )
     }
 

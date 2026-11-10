@@ -120,23 +120,29 @@ impl Workbench {
         kept
     }
 
-    /// The moon in the workspace list's header: shows the sleeping workspaces (lit) or hides them,
-    /// the same choice as the filter in Workspace Options, a click away.
+    /// The moon at the search box's end: sleeping workspaces shown (a moon with a star) or hidden (the
+    /// moon alone), the same choice as the filter in Workspace Options, a click away.
     pub(super) fn render_sleeping_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
         let shown = !self.prefs(cx).workspace_list.hide_sleeping;
-        crate::ui::icon_only(
-            "sidebar-sleeping",
-            "moon",
-            cx.listener(|this, _: &ClickEvent, _, cx| {
+        div()
+            .id("sidebar-sleeping")
+            .flex_shrink_0()
+            .size(px(18.))
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            // Quiet either way, like the search icon beside it: only the star says which.
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.change_settings(cx, |s| s.workspace_list.hide_sleeping = !s.workspace_list.hide_sleeping);
-            }),
-        )
-        .map(|d| if shown { d.bg(hex(Chrome::SELECTED)) } else { d.opacity(0.45) })
-        .tooltip(crate::ui::Tooltip::text(
-            t(cx, if shown { "workspace_options.hide_sleeping" } else { "workspace_options.show_sleeping" }),
-            None,
-        ))
-        .into_any_element()
+            }))
+            .child(crate::ui::icon(if shown { "moon-star" } else { "moon" }, 14., hex(Chrome::MUTED)))
+            .tooltip(crate::ui::Tooltip::text(
+                t(cx, if shown { "workspace_options.hide_sleeping" } else { "workspace_options.show_sleeping" }),
+                None,
+            ))
+            .into_any_element()
     }
 
     /// The project a workspace belongs to, for grouping by project: the repository's main folder
