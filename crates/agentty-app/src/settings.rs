@@ -1457,7 +1457,10 @@ impl SettingsStore {
 
 /// Read from the settings file (launch specs are built without an `App`).
 pub fn browser_tools_enabled() -> bool {
-    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+    std::fs::read(Settings::path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+        .is_none_or(|s| s.browser.agent_tools && s.in_app_browser())
 }
 
 /// Plugins whose MCP connection the user turned off, read from the settings file like
@@ -1468,6 +1471,11 @@ pub fn plugin_mcp_off() -> std::collections::BTreeSet<String> {
         .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
         .map(|s| s.plugin_mcp_off)
         .unwrap_or_default()
+}
+
+/// [`Settings::in_app_browser`], read from the settings file like [`browser_tools_enabled`].
+pub fn in_app_browser_enabled() -> bool {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.in_app_browser())
 }
 
 /// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].
@@ -1487,6 +1495,15 @@ pub fn advisor_default() -> AdvisorChoice {
         .ok()
         .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
         .map_or_else(AdvisorChoice::default, |s| s.advisor)
+}
+
+impl Settings {
+    /// Whether the in-app browser is on for the user and the agents. With links set to open in the
+    /// external browser it is off altogether: no panel, no terminal tabs, no agent tools. Plugins'
+    /// own pages (`plugin_browser`) are theirs and keep working.
+    pub fn in_app_browser(&self) -> bool {
+        self.link_opener == LinkOpener::InApp
+    }
 }
 
 pub fn settings(cx: &App) -> &Settings {

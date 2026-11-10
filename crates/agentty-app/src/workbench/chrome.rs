@@ -2462,16 +2462,19 @@ impl Workbench {
                             cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
                         ))
                     })
-                    .child(ringed(
-                        header_icon(
+                    // Off with links set to open in the external browser.
+                    .when(crate::settings::settings(cx).in_app_browser(), |d| {
+                        d.child(ringed(
+                            header_icon(
+                                "header-browser",
+                                "globe",
+                                self.browser.is_some(),
+                                (t(cx, "tooltip.browser"), Some("⇧⌘B")),
+                                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
+                            ),
                             "header-browser",
-                            "globe",
-                            self.browser.is_some(),
-                            (t(cx, "tooltip.browser"), Some("⇧⌘B")),
-                            cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
-                        ),
-                        "header-browser",
-                    ))
+                        ))
+                    })
                     // With the tabs in the title bar the mini button sits by the sidebar button.
                     .when(crate::platform::HAS_MINI_MODE && !in_title_bar, |d| {
                         d.child(ringed(

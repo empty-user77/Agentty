@@ -902,22 +902,28 @@ impl Workbench {
                 cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.link_opener = value)),
             )
         };
+        let link_opener = row_with_hint(
+            t(cx, "settings.link_opener"),
+            t(cx, "settings.link_inapp_hint"),
+            chip_row().child(opener("link-external", "settings.link_external", LinkOpener::External, cx)).child(opener(
+                "link-inapp",
+                "settings.link_inapp",
+                LinkOpener::InApp,
+                cx,
+            )),
+        );
+        // Links open in the external browser: the in-app one is off, and only the choice that turns
+        // it back on is left.
+        if !prefs.in_app_browser() {
+            return div().flex().flex_col().child(section(t(cx, "settings.browser_general")).child(link_opener));
+        }
         div()
             .flex()
             .flex_col()
             .child(
                 section(t(cx, "settings.browser_general"))
                     .child(row(t(cx, "settings.browser_home"), div().w(px(320.)).child(self.browser_home_field(window, cx))))
-                    .child(row_with_hint(
-                        t(cx, "settings.link_opener"),
-                        t(cx, "settings.link_inapp_hint"),
-                        chip_row().child(opener("link-external", "settings.link_external", LinkOpener::External, cx)).child(opener(
-                            "link-inapp",
-                            "settings.link_inapp",
-                            LinkOpener::InApp,
-                            cx,
-                        )),
-                    ))
+                    .child(link_opener)
                     .child(row(t(cx, "settings.search_engine"), engines))
                     .child(row(
                         t(cx, "settings.browser_zoom"),
