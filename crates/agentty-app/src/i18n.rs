@@ -1743,6 +1743,8 @@ strings! {
     "workspace_options.card_subagents" => ["Show subagents on cards", "카드에 서브 에이전트 표시", "カードにサブエージェントを表示", "在卡片上显示子智能体", "Subagents auf Karten zeigen"],
     "workspace_options.card_activity" => ["Show agent state, time and usage on cards", "카드에 상태·시간·사용량 표시", "カードに状態・時間・使用量を表示", "在卡片上显示状态、时间和用量", "Status, Zeit und Verbrauch auf Karten zeigen"],
     "workspace_options.filters" => ["Filters", "필터", "フィルター", "筛选", "Filter"],
+    "workspace_options.show_sleeping" => ["Show sleeping workspaces", "잠자는 워크스페이스 보이기", "スリープ中のワークスペースを表示", "显示休眠的工作区", "Ruhende Arbeitsbereiche einblenden"],
+    "workspace_options.awake_first" => ["Awake workspaces first", "깨어 있는 워크스페이스 먼저", "起動中のワークスペースを先に", "活动工作区优先", "Aktive Arbeitsbereiche zuerst"],
     "workspace_options.hide_sleeping" => ["Hide sleeping workspaces", "잠자는 워크스페이스 숨기기", "スリープ中のワークスペースを隠す", "隐藏休眠的工作区", "Ruhende Arbeitsbereiche ausblenden"],
     "workspace_options.hide_default_branch" => ["Hide main / master branch", "main·master 브랜치 숨기기", "main / master ブランチを隠す", "隐藏 main / master 分支", "Branch main / master ausblenden"],
     "workspace_options.hide_plugins" => ["Hide plugin workspaces", "플러그인 워크스페이스 숨기기", "プラグインのワークスペースを隠す", "隐藏插件工作区", "Plug-in-Arbeitsbereiche ausblenden"],

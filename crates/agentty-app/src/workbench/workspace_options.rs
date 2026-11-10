@@ -114,7 +114,29 @@ impl Workbench {
                 std::cmp::Reverse(live.or_else(|| self.dormant_info(ws).last_activity_ms).unwrap_or(0))
             }),
         }
+        if options.awake_first {
+            kept = awake_first(kept, |i| self.workspaces[i].tabs.is_empty());
+        }
         kept
+    }
+
+    /// The moon in the workspace list's header: shows the sleeping workspaces (lit) or hides them,
+    /// the same choice as the filter in Workspace Options, a click away.
+    pub(super) fn render_sleeping_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let shown = !self.prefs(cx).workspace_list.hide_sleeping;
+        crate::ui::icon_only(
+            "sidebar-sleeping",
+            "moon",
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.change_settings(cx, |s| s.workspace_list.hide_sleeping = !s.workspace_list.hide_sleeping);
+            }),
+        )
+        .map(|d| if shown { d.bg(hex(Chrome::SELECTED)) } else { d.opacity(0.45) })
+        .tooltip(crate::ui::Tooltip::text(
+            t(cx, if shown { "workspace_options.hide_sleeping" } else { "workspace_options.show_sleeping" }),
+            None,
+        ))
+        .into_any_element()
     }
 
     /// The project a workspace belongs to, for grouping by project: the repository's main folder
@@ -231,6 +253,11 @@ impl Workbench {
                 ],
                 |s, v| s.workspace_list.sort = v,
                 cx,
+            ))
+            .child(switch_row(
+                "sun",
+                t(cx, "workspace_options.awake_first"),
+                toggle("wo-awake-first", options.awake_first, |s| s.workspace_list.awake_first = !s.workspace_list.awake_first, cx),
             ))
             .child(div().mt_2().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             .child(section_title(t(cx, "workspace_options.filters")))
@@ -381,5 +408,26 @@ impl Workbench {
             .when(crate::platform::HAS_MINI_MODE, |d| d.child(div().flex_shrink_0().mr_1().child(self.render_mini_button(cx))))
             .child(div().flex_1().min_w_0().h_full().child(self.render_tab_strip_in(true, cx)))
             .into_any_element()
+    }
+}
+
+/// `order` with the awake workspaces first and the sleeping ones after, each kept in the order it had.
+fn awake_first(order: Vec<usize>, asleep: impl Fn(usize) -> bool) -> Vec<usize> {
+    let (awake, sleeping): (Vec<usize>, Vec<usize>) = order.into_iter().partition(|&i| !asleep(i));
+    awake.into_iter().chain(sleeping).collect()
+}
+
+#[cfg(test)]
+mod awake_first_tests {
+    use super::awake_first;
+
+    #[test]
+    fn awake_workspaces_rise_and_keep_their_order() {
+        // 1, 3 and 5 sleep: the others come first, in the order given, then the sleepers in theirs.
+        let asleep = |i: usize| i % 2 == 1;
+        assert_eq!(awake_first(vec![5, 1, 4, 3, 0, 2], asleep), vec![4, 0, 2, 5, 1, 3]);
+        // Nothing asleep, or everything: the order stays.
+        assert_eq!(awake_first(vec![2, 0, 4], asleep), vec![2, 0, 4]);
+        assert_eq!(awake_first(vec![3, 1], asleep), vec![3, 1]);
     }
 }

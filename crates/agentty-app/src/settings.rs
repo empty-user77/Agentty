@@ -129,6 +129,9 @@ pub struct WorkspaceListOptions {
     pub sort: WorkspaceSort,
     /// Leaves out workspaces with nothing running (asleep, or not opened since Agentty started).
     pub hide_sleeping: bool,
+    /// Within each part of the list, the workspaces with something running come before the sleeping
+    /// ones, each in the order chosen. Only how the list is drawn: off, the order is as it was.
+    pub awake_first: bool,
     /// Leaves out workspaces on the repository's main branch (`main` / `master`).
     pub hide_default_branch: bool,
     /// Leaves out the workspaces plugins made.

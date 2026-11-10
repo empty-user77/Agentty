@@ -525,6 +525,8 @@ impl Workbench {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
+                // Sleeping workspaces shown or hidden, without opening Workspace Options.
+                .child(self.render_sleeping_toggle(cx))
                 .children(bell)
                 .child(
                     icon_only(

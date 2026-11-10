@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format follows
 - A pane running on another account than its window's shows that account's initial in a blue circle on its bar, with a
   blue line under the bar. Clicking it shows the account's plan, its 5-hour and weekly limits with their resets, and
   its usage over the last 7 days.
+- Awake workspaces first, under the order in Workspace Options, lifts the workspaces with something running above the
+  sleeping ones in each group, each in its order; off, the list is as it was. A moon in the workspace list's header
+  shows or hides the sleeping workspaces in one click.
 
 ### Changed
 - The split buttons are two icons again, Split Right and Split Down, instead of a menu that opened on hover.
