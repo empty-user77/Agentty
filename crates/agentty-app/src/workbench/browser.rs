@@ -128,6 +128,9 @@ pub struct BrowserTab {
     pub(super) owner: Option<u64>,
     /// Name of the plugin driving it, shown on the tab.
     owner_name: Option<String>,
+    /// A window a plugin's page opened (a sign-in pop-up): it stays with the plugin's pages while
+    /// the in-app browser is otherwise off.
+    pub(super) from_plugin: bool,
     /// The terminal pane whose agent opened this tab (`agentty browser`, the browser MCP tools).
     /// Only that pane's commands reach it, and no other pane's reach any other tab.
     pub(super) pane: Option<u64>,
@@ -157,6 +160,7 @@ impl BrowserTab {
             net: Network::default(),
             owner: None,
             owner_name: None,
+            from_plugin: false,
             pane: None,
             driven_at: None,
             viewport: None,
@@ -226,6 +230,11 @@ impl BrowserTab {
     /// Where the tab is or is going.
     pub(super) fn address(&self) -> String {
         self.pending.clone().unwrap_or_else(|| self.url.clone())
+    }
+
+    /// A plugin's page, or a window one opened: kept while the in-app browser is off.
+    pub(super) fn of_plugin(&self) -> bool {
+        self.owner.is_some() || self.from_plugin
     }
 
     /// Someone else's page: a plugin's, or a terminal's.
@@ -480,12 +489,29 @@ impl Workbench {
                 return self.new_plugin_instance(&plugin, cx);
             }
         }
-        let Some(browser) = self.browser.as_mut() else { return self.open_browser(url, cx) };
-        if browser.tabs.len() >= MAX_TABS {
+        if self.browser.is_none() {
+            return self.open_browser(url, cx);
+        }
+        // Off: a plugin's panel has no home page to open.
+        if url.is_none() && !settings(cx).in_app_browser() {
             return;
         }
         let url = url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx));
-        browser.tabs.push(BrowserTab::new(url));
+        self.push_browser_tab(url, false, cx);
+    }
+
+    /// A new tab in front, in the panel that is open; `from_plugin` when a plugin's page asked for it.
+    /// With the in-app browser off only a plugin's page gets one. Nothing else is handed to the
+    /// system either: a page must not get the app to open an address of its choosing elsewhere.
+    fn push_browser_tab(&mut self, url: String, from_plugin: bool, cx: &mut Context<Self>) {
+        if !from_plugin && !settings(cx).in_app_browser() {
+            return;
+        }
+        let Some(browser) = self.browser.as_mut() else { return };
+        if browser.tabs.len() >= MAX_TABS {
+            return;
+        }
+        browser.tabs.push(BrowserTab { from_plugin, ..BrowserTab::new(url) });
         browser.active = browser.tabs.len() - 1;
         self.show_address(cx);
         cx.notify();
@@ -541,6 +567,11 @@ impl Workbench {
 
     /// Materializes a requested panel and keeps the native views in sync; called from render.
     pub(super) fn prepare_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !settings(cx).in_app_browser() {
+            // Off (links open in the external browser): what was open at the last save stays closed.
+            self.browser_request = None;
+            self.browser_restore = None;
+        }
         if let Some(url) = self.browser_request.take() {
             // After a restart: every tab that was open, not only the one in front.
             let (tabs, active) = match self.browser_restore.take() {
@@ -732,7 +763,8 @@ impl Workbench {
                         let borrowed = tab.webview.borrow();
                         let Some(view) = borrowed.as_ref() else { continue };
                         views.push(view.id());
-                        popups.extend(view.take_popups());
+                        let from_plugin = tab.of_plugin();
+                        popups.extend(view.take_popups().into_iter().map(|url| (url, from_plugin)));
                         let (url, title, loading, progress, error) = (
                             view.current_url(),
                             view.title().unwrap_or_default(),
@@ -782,8 +814,8 @@ impl Workbench {
                             changed = true;
                         }
                     }
-                    for url in popups {
-                        this.open_browser_tab(Some(url), cx);
+                    for (url, from_plugin) in popups {
+                        this.push_browser_tab(url, from_plugin, cx);
                         changed = true;
                     }
                     interval = Duration::from_millis(if busy { 50 } else { 150 });
