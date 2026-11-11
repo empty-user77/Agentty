@@ -7,7 +7,20 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let output = crate::process::command("git")
+    git_with(repo, &[], args)
+}
+
+/// `git -c <config>… -C <repo> <args>`: `config` holds per-command settings (`key=value`).
+fn git_with(repo: &Path, config: &[String], args: &[&str]) -> Result<String> {
+    let mut command = crate::process::command("git");
+    for setting in config {
+        command.arg("-c").arg(setting);
+    }
+    if !config.is_empty() {
+        // The retry through gh: no sign-in window may come up for it.
+        command.env("GCM_INTERACTIVE", "never").env("GH_PROMPT_DISABLED", "1");
+    }
+    let output = command
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -31,8 +44,76 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
+        // A remote URL can carry `user:token@`: never shown as is.
+        let text = crate::worktree::mask_credentials(&text);
         bail!("{}", if text.is_empty() { format!("git {} failed", args.first().unwrap_or(&"")) } else { text })
     }
+}
+
+/// A command that reaches the remote (fetch, pull, push, ls-remote). A GitHub remote with an SSH
+/// URL needs an SSH key the user registered on GitHub; when there is none but `gh` is signed in
+/// (what Settings → Integrations → GitHub shows as connected), the same command runs once more over
+/// HTTPS with `gh` as the credential helper. That holds for this command only: the remote's URL and
+/// the user's git config stay as they are, and nothing is stored.
+pub(crate) fn git_remote(repo: &Path, args: &[&str]) -> Result<String> {
+    let first = git(repo, args);
+    let Err(err) = &first else { return first };
+    if !ssh_key_refused(&format!("{err:#}")) {
+        return first;
+    }
+    let Some(config) = crate::sync::repo::find_tool("gh").and_then(|gh| gh_over_https(&gh)) else { return first };
+    // Only a remote that these settings really send to GitHub over HTTPS: another host (GitLab,
+    // GitHub Enterprise), an SSH alias or the user's own rewrite would just fail the same way again.
+    if !reaches_github_over_https(repo, &config, args) {
+        return first;
+    }
+    match git_with(repo, &config, args) {
+        Ok(out) => Ok(out),
+        // gh could not sign in either: the SSH error says what to fix. Anything else (a rejected
+        // push, a missing branch) is the answer to the command itself.
+        Err(retry) if https_auth_failed(&format!("{retry:#}")) => first,
+        Err(retry) => Err(retry),
+    }
+}
+
+/// Whether the remote `args` talk to resolves to `https://github.com/…` with `config` applied: the
+/// remote named in the command (its push URL for a push), else the default one.
+fn reaches_github_over_https(repo: &Path, config: &[String], args: &[&str]) -> bool {
+    let sub = args.first().copied().unwrap_or_default();
+    let named = matches!(sub, "fetch" | "push" | "ls-remote").then(|| args[1..].iter().find(|a| !a.starts_with('-'))).flatten();
+    let query: Vec<&str> = match named {
+        Some(remote) if sub == "push" => vec!["remote", "get-url", "--push", "--", remote],
+        Some(remote) => vec!["remote", "get-url", "--", remote],
+        None => vec!["ls-remote", "--get-url"],
+    };
+    git_with(repo, config, &query).is_ok_and(|url| url.trim().starts_with("https://github.com/"))
+}
+
+/// The server turned the SSH key down (none registered for this account, or none at all).
+fn ssh_key_refused(message: &str) -> bool {
+    message.contains("Permission denied (publickey")
+}
+
+fn https_auth_failed(message: &str) -> bool {
+    ["Authentication failed", "could not read Username", "terminal prompts disabled", "Invalid username or token"]
+        .iter()
+        .any(|marker| message.contains(marker))
+}
+
+/// The settings that send a GitHub SSH remote over HTTPS, signed in by `gh` (what
+/// `gh auth setup-git` would configure). `None` for a `gh` path that cannot go into the shell
+/// snippet git runs for its helper.
+fn gh_over_https(gh: &Path) -> Option<Vec<String>> {
+    let gh = gh.to_str().filter(|path| !path.contains(['\'', '\n']))?;
+    Some(vec![
+        "url.https://github.com/.insteadOf=git@github.com:".into(),
+        "url.https://github.com/.insteadOf=ssh://git@github.com/".into(),
+        "url.https://github.com/.insteadOf=ssh://git@github.com:22/".into(),
+        "url.https://github.com/.insteadOf=ssh://git@ssh.github.com:443/".into(),
+        // An empty helper first drops the configured ones for this command only.
+        "credential.https://github.com.helper=".into(),
+        format!("credential.https://github.com.helper=!'{gh}' auth git-credential"),
+    ])
 }
 
 pub fn repo_root(path: &Path) -> Option<PathBuf> {
@@ -371,7 +452,7 @@ pub fn search_remote_branches(repo: &Path, query: &str) -> Result<Vec<String>> {
     let query = query.to_lowercase();
     let mut found = Vec::new();
     for remote in git(repo, &["remote"])?.lines().map(str::trim).filter(|r| !r.is_empty()) {
-        let Ok(raw) = git(repo, &["ls-remote", "--heads", remote]) else { continue };
+        let Ok(raw) = git_remote(repo, &["ls-remote", "--heads", "--", remote]) else { continue };
         found.extend(parse_ls_remote(&raw, remote, &query));
     }
     Ok(found)
@@ -400,7 +481,7 @@ pub fn checkout(repo: &Path, branch: &str, remote: bool) -> Result<()> {
         let (remote_name, local) = branch.split_once('/').unwrap_or(("origin", branch));
         // Found by a remote search but never fetched: fetch just that branch first.
         if git(repo, &["rev-parse", "--verify", "-q", &format!("refs/remotes/{branch}")]).is_err() {
-            git(repo, &["fetch", remote_name, &format!("refs/heads/{local}:refs/remotes/{remote_name}/{local}")])?;
+            git_remote(repo, &["fetch", remote_name, &format!("refs/heads/{local}:refs/remotes/{remote_name}/{local}")])?;
         }
         if git(repo, &["rev-parse", "--verify", "-q", &format!("refs/heads/{local}")]).is_ok() {
             git(repo, &["switch", local])?;
@@ -443,7 +524,7 @@ pub fn delete_remote_branch(repo: &Path, remote_branch: &str) -> Result<()> {
     let (remote, branch) = remote_branch.split_once('/').context("not a remote branch")?;
     ensure!(!remote.starts_with('-') && valid_branch_name(repo, branch), "invalid branch name");
     // The server's answer can quote a remote URL that carries `user:token@`: never shown as is.
-    git(repo, &["push", remote, "--delete", branch])
+    git_remote(repo, &["push", remote, "--delete", branch])
         .map(|_| ())
         .map_err(|err| anyhow::anyhow!(crate::worktree::mask_credentials(&format!("{err:#}"))))
 }
@@ -514,7 +595,7 @@ pub fn operation_in_progress(repo: &Path) -> Option<&'static str> {
 }
 
 pub fn fetch(repo: &Path) -> Result<()> {
-    git(repo, &["fetch", "--prune", "origin"]).map(|_| ())
+    git_remote(repo, &["fetch", "--prune", "origin"]).map(|_| ())
 }
 
 /// What a pull brought in, so "up to date" can be told apart from "12 files changed".
@@ -534,7 +615,7 @@ impl PullOutcome {
 
 pub fn pull(repo: &Path) -> Result<PullOutcome> {
     let before = git(repo, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
-    git(repo, &["pull", "--ff-only"])?;
+    git_remote(repo, &["pull", "--ff-only"])?;
     let after = git(repo, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
     if before.is_empty() || after.is_empty() || before == after {
         return Ok(PullOutcome::default());
@@ -575,9 +656,9 @@ pub fn failure_reason(message: &str) -> String {
 pub fn push(repo: &Path, branch: &str, has_upstream: bool) -> Result<()> {
     ensure!(valid_branch_name(repo, branch), "invalid branch name");
     if has_upstream {
-        git(repo, &["push"]).map(|_| ())
+        git_remote(repo, &["push"]).map(|_| ())
     } else {
-        git(repo, &["push", "-u", "origin", branch]).map(|_| ())
+        git_remote(repo, &["push", "-u", "origin", branch]).map(|_| ())
     }
 }
 
@@ -641,6 +722,84 @@ pub fn branch_web_url(repo_url: &str, branch: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_ssh_key_is_retried_through_gh() {
+        assert!(ssh_key_refused("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."));
+        assert!(ssh_key_refused("git@github.com: Permission denied (publickey,keyboard-interactive)."));
+        // Not an SSH key problem: the answer stays as git gave it.
+        assert!(!ssh_key_refused("fatal: repository 'https://github.com/me/app.git/' not found"));
+        assert!(!ssh_key_refused("! [rejected] main -> main (non-fast-forward)"));
+        assert!(https_auth_failed("fatal: could not read Username for 'https://github.com': terminal prompts disabled"));
+        assert!(!https_auth_failed("! [rejected] main -> main (fetch first)"));
+    }
+
+    #[test]
+    fn gh_signs_in_a_github_ssh_remote_over_https() {
+        let config = gh_over_https(Path::new("/opt/homebrew/bin/gh")).unwrap();
+        assert_eq!(
+            config,
+            [
+                "url.https://github.com/.insteadOf=git@github.com:",
+                "url.https://github.com/.insteadOf=ssh://git@github.com/",
+                "url.https://github.com/.insteadOf=ssh://git@github.com:22/",
+                "url.https://github.com/.insteadOf=ssh://git@ssh.github.com:443/",
+                "credential.https://github.com.helper=",
+                "credential.https://github.com.helper=!'/opt/homebrew/bin/gh' auth git-credential",
+            ]
+        );
+        // A path that would break out of the helper's quotes is not used.
+        assert!(gh_over_https(Path::new("/tmp/it's/gh")).is_none());
+    }
+
+    #[test]
+    fn only_a_github_remote_is_retried_over_https() {
+        let repo = std::env::temp_dir().join(format!("agentty-git-gh-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]).unwrap();
+        let remotes = [
+            ("scp", "git@github.com:example/app.git", true),
+            ("ssh", "ssh://git@github.com/example/app.git", true),
+            ("port22", "ssh://git@github.com:22/example/app.git", true),
+            ("port443", "ssh://git@ssh.github.com:443/example/app.git", true),
+            ("https", "https://github.com/example/app.git", true),
+            ("gitlab", "git@gitlab.com:example/app.git", false),
+            ("enterprise", "git@github.example.com:example/app.git", false),
+            ("alias", "git@github-work:example/app.git", false),
+            ("lookalike", "git@github.com.example.net:example/app.git", false),
+        ];
+        for (name, url, _) in remotes {
+            git(&repo, &["remote", "add", name, url]).unwrap();
+        }
+        let config = gh_over_https(Path::new("/opt/homebrew/bin/gh")).unwrap();
+        for (name, url, github) in remotes {
+            assert_eq!(reaches_github_over_https(&repo, &config, &["fetch", name]), github, "fetch {url}");
+            assert_eq!(reaches_github_over_https(&repo, &config, &["push", "-u", name, "main"]), github, "push {url}");
+            assert_eq!(reaches_github_over_https(&repo, &config, &["ls-remote", "--heads", "--", name]), github, "ls-remote {url}");
+        }
+        // A push URL of its own decides for a push.
+        git(&repo, &["remote", "set-url", "--push", "scp", "git@gitlab.com:example/app.git"]).unwrap();
+        assert!(!reaches_github_over_https(&repo, &config, &["push", "scp"]));
+        assert!(reaches_github_over_https(&repo, &config, &["fetch", "scp"]));
+        // No remote named: the default one (`origin`, missing here) decides.
+        assert!(!reaches_github_over_https(&repo, &config, &["pull", "--ff-only"]));
+        git(&repo, &["remote", "add", "origin", "git@github.com:example/app.git"]).unwrap();
+        assert!(reaches_github_over_https(&repo, &config, &["pull", "--ff-only"]));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_failure_never_shows_a_token_in_a_url() {
+        let repo = std::env::temp_dir().join(format!("agentty-git-masked-url-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]).unwrap();
+        // A remote that cannot be reached: git quotes its URL in the failure.
+        let url = format!("https://someone:example_not_a_real_token@{}/nothing.git", "127.0.0.1:9");
+        git(&repo, &["remote", "add", "origin", &url]).unwrap();
+        let err = format!("{:#}", git(&repo, &["ls-remote", "--heads", "--", "origin"]).unwrap_err());
+        assert!(!err.contains("example_not_a_real_token"), "{err}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 
     #[test]
     fn branch_pages_by_host() {

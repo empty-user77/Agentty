@@ -405,7 +405,7 @@ pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool, delete_remot
     if remote_name.starts_with('-') || !branch_ok(&main, remote_branch) {
         return Ok(Removal::default());
     }
-    match git(&main, &["push", remote_name, "--delete", remote_branch]) {
+    match crate::git::git_remote(&main, &["push", remote_name, "--delete", remote_branch]) {
         Ok(_) => Ok(Removal { remote_deleted: Some(remote.clone()), ..Removal::default() }),
         Err(err) => Ok(Removal { remote_error: Some(mask_credentials(&format!("{err:#}"))), ..Removal::default() }),
     }
