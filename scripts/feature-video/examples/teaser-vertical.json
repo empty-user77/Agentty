@@ -2,7 +2,6 @@
  "about": "Vertical teaser for Shorts / Reels / TikTok: 15-30 s, one claim, one proof. `crop` frames the part of the window that matters in a tall stage.",
  "slug": "feature-teaser",
  "aspect": "9:16",
- "narration": "each",
  "title": { "en": "Feature name", "ko": "기능 이름", "ja": "機能名", "zh": "功能名称" },
  "tagline": { "en": "In 20 seconds", "ko": "20초 만에", "ja": "20 秒で", "zh": "20 秒看懂" },
  "scenes": [

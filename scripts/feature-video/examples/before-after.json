@@ -3,7 +3,6 @@
  "slug": "feature-compare",
  "title": { "en": "Feature name", "ko": "기능 이름", "ja": "機能名", "zh": "功能名称" },
  "tagline": { "en": "Before and after", "ko": "전과 후", "ja": "ビフォー・アフター", "zh": "前后对比" },
- "narration": "en",
  "scenes": [
   {
    "layout": "split",

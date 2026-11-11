@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -45,7 +46,7 @@ OUTRO_LINE = {
     "zh": "免费开源 · macOS · Windows · Linux",
 }
 INTRO_SECONDS, OUTRO_SECONDS, XFADE = 4.2, 4.6, 0.4
-VOICES = {"en": "en-US-AndrewNeural", "ko": "ko-KR-InJoonNeural", "ja": "ja-JP-KeitaNeural", "zh": "zh-CN-YunxiNeural"}
+VOICES = {"en": "en-US-AndrewNeural"}  # the narration is English in every version; only the captions and titles are translated
 # Footage sits in a framed box under the headline band.
 BOX = (120, 150, 1680, 880)
 RADIUS = 18
@@ -329,7 +330,15 @@ def tts(text, voice, rate):
 
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_suffix(".part.mp3")
-        asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(str(part)))
+        # The voice service sometimes returns nothing for a line it speaks fine moments later.
+        for attempt in range(8):
+            try:
+                asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(str(part)))
+                break
+            except edge_tts.exceptions.NoAudioReceived:
+                if attempt == 7:
+                    raise
+                time.sleep(2 + attempt * 2)
         part.rename(path)
     return path, duration(path)
 
@@ -483,10 +492,11 @@ def build(args):
     out = Path(args.out or Path.home() / "Desktop/Agentty-videos" / slug).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"video-{slug}-", dir=args.work or None))
-    voice_mode = board.get("narration", "en")
     rate = board.get("rate", "+0%")
+    if board.get("narration", "en") != "en":
+        print('note: "narration" is ignored: every version is narrated in English')
     voices = {**VOICES, **board.get("voices", {})}
-    spoken = langs if voice_mode == "each" else ["en"]
+    spoken = ["en"]
     print(f"work folder: {work}")
 
     # 1. Narration first: it sets every scene's length.
@@ -587,7 +597,7 @@ def build(args):
              "-t", f"{body_seconds}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-r", str(FPS), str(styled)])
 
         # Narration track: each line at its place, the rest silence, then loudness-normalised.
-        voice = lang if voice_mode == "each" else "en"
+        voice = "en"
         audio_in, mix, labels = [], [], []
         for slot in timeline:
             for line in slot["lines"]:

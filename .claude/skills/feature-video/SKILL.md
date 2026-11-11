@@ -1,6 +1,6 @@
 ---
 name: feature-video
-description: Make a short intro, launch, tutorial or teaser video for an Agentty feature (e.g. "a remote access intro video", "a 9:16 short", asked in any language) — drive a demo debug build through the feature while recording its window and logging every click, blur private text, then build it with HyperFrames (HTML + GSAP rendered by headless Chrome) — a camera that eases into the action, an oversized cursor that causes each click, transitions with a cause, word-by-word captions — with Microsoft neural-voice narration in English, Korean, Japanese and Chinese, between the same branded opening and end card every time. Use when the user asks for a feature video, demo video, promo clip, short, teaser or intro video of the app.
+description: Make a short intro, launch, tutorial or teaser video for an Agentty feature (e.g. "a remote access intro video", "a 9:16 short", asked in any language) — drive a demo debug build through the feature while recording its window and logging every click, blur private text, then build it with HyperFrames (HTML + GSAP rendered by headless Chrome) — a camera that eases into the action, an oversized cursor that causes each click, transitions with a cause, word-by-word captions — with Microsoft neural-voice narration in English in every version and captions and titles in English, Korean, Japanese and Chinese, between the same branded opening and end card every time. Use when the user asks for a feature video, demo video, promo clip, short, teaser or intro video of the app.
 ---
 
 # Feature videos
@@ -38,9 +38,9 @@ jsDelivr and fonts are the Mac's own.
 - `<slug>.{en,ko,ja,zh}.srt`, a copy of `storyboard.json`, and `timeline.json` (where each scene and line sits; `review` reads it).
 
 1920x1080 (or 1080x1920 for `"aspect": "9:16"`, 1080x1080 for `"1:1"`) at 30 fps, H.264 and AAC, loudness
-−16 LUFS. Narration is `en-US-AndrewNeural` in every version by default (`"narration": "en"`). With
-`"narration": "each"`, each language is voiced in its own language (`ko-KR-InJoonNeural`, `ja-JP-KeitaNeural`,
-`zh-CN-YunxiNeural`) and its captions light word by word as they are said. Voices come from Microsoft through
+−16 LUFS. **Narration is always English**: `en-US-AndrewNeural` in every version, whatever the language. A Korean,
+Japanese or Chinese version differs only in its captions, headlines, labels and cards. Never voice a video in another
+language, even if a storyboard asks. The English captions light word by word as they are said. Voices come from Microsoft through
 `edge-tts`; only the narration lines are sent. The audio is narration only: no music and no sound effects (the user
 removed them before).
 
@@ -116,7 +116,8 @@ Mix layouts: a film of only `window` scenes looks like slides. A good 60–90 s 
 on `kinetic` or `title`, puts the proof in footage layouts, and lands on `stat`, `bento` or `steps`.
 
 Common keys:
-- **`say`**: narration lines, one short plain sentence each, in all four languages (English fills gaps).
+- **`say`**: narration lines, one short plain sentence each. The English is spoken; all four languages are shown as
+  captions (English fills gaps).
 - **`headline`** / **`subline`**: 2–5 words / one short line. `title_style` picks the entrance: `mask-up` (words
   rise out of a mask), `slam` (lands big with a three-frame shake), `rise`, `tracking` (words close in from apart),
   `scramble` (characters decode), `glitch`, `highlight` (a marker sweeps the `*starred*` words), `words-blur`,
@@ -165,7 +166,7 @@ Common keys:
 A scene lasts as long as the longest of its footage, its narration and the time its card needs to be read
 (0.5 s + 0.3 s a word). Short footage holds its last frame.
 
-Show the user the scene list with the English and Korean narration in one short message, and **say that a demo
+Show the user the scene list with the English narration and the Korean captions in one short message, and **say that a demo
 window is about to open**, before you record.
 
 ### 3. Record real footage with the demo build
@@ -279,4 +280,4 @@ Taken from the HyperFrames launch-film doctrine:
 - Only Agentty's window is recorded (`screencapture -R` with the window's frame). Never record the whole screen.
 - Every claim in the narration must be true of the build you recorded; every number on a `stat` card and every
   `quote` comes from the recording. Don't record a feature that isn't merged yet unless the user asks for it.
-- This file and the scripts stay in English. Narration and captions are written in all four languages.
+- This file and the scripts stay in English. Narration is spoken in English only; captions and on-screen text are written in all four languages.
