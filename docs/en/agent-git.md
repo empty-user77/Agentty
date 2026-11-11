@@ -12,7 +12,7 @@ description: The git page, branch switching from any pane, and the worktree per 
 - Review the diff file by file, stage what you want, and commit (⌘↩).
 - Browse history, and merge branches.
 
-Agentty drives your own `git`, with your configuration and credentials. Every command runs non-interactively, so nothing can hang waiting for a prompt you can't see — if a push needs credentials your credential helper does not have, it fails with a message instead of stalling. When GitHub turns down the SSH key of a `git@github.com:` remote (no key registered on this computer) and the GitHub CLI is signed in (**Settings → Integrations → GitHub**), Fetch, Pull and Push try once more over HTTPS, signed in by `gh`. Your remote's URL and your git configuration stay as they are.
+Agentty drives your own `git`, with your configuration and credentials. Every command runs non-interactively, so nothing can hang waiting for a prompt you can't see — if a push needs credentials your credential helper does not have, it fails with a message instead of stalling. When git can't sign in to GitHub on its own — the SSH key of a `git@github.com:` remote is turned down (no key registered on this computer), or an `https://github.com/` remote has no saved credentials — and the GitHub CLI is signed in (**Settings → Integrations → GitHub**), Fetch, Pull and Push try once more over HTTPS, signed in by `gh`. Your remote's URL and your git configuration stay as they are.
 
 ## From a pane
 
