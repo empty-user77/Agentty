@@ -17,8 +17,9 @@ fn git_with(repo: &Path, config: &[String], args: &[&str]) -> Result<String> {
         command.arg("-c").arg(setting);
     }
     if !config.is_empty() {
-        // The retry through gh: no sign-in window may come up for it.
-        command.env("GCM_INTERACTIVE", "never").env("GH_PROMPT_DISABLED", "1");
+        // The retry through gh: no sign-in window may come up for it. An empty `GIT_ASKPASS` also
+        // silences `core.askPass`, which `GIT_TERMINAL_PROMPT=0` does not.
+        command.env("GCM_INTERACTIVE", "never").env("GH_PROMPT_DISABLED", "1").env("GIT_ASKPASS", "").env("SSH_ASKPASS", "");
     }
     let output = command
         .arg("-C")
@@ -69,19 +70,23 @@ pub(crate) fn git_remote(repo: &Path, args: &[&str]) -> Result<String> {
     }
     match git_with(repo, &config, args) {
         Ok(out) => Ok(out),
-        // gh could not sign in either: the SSH error says what to fix. Anything else (a rejected
-        // push, a missing branch) is the answer to the command itself.
+        // gh could not sign in, or its account cannot see the repository: the SSH error says what
+        // to fix. Anything else (a rejected push, a missing branch) is the answer to the command.
         Err(retry) if https_auth_failed(&format!("{retry:#}")) => first,
         Err(retry) => Err(retry),
     }
 }
 
 /// Whether the remote `args` talk to resolves to `https://github.com/…` with `config` applied: the
-/// remote named in the command (its push URL for a push), else the default one.
+/// remote named in the command, else the branch's (where it pushes to, for a push), else the
+/// default one. A push is judged by its push URL.
 fn reaches_github_over_https(repo: &Path, config: &[String], args: &[&str]) -> bool {
     let sub = args.first().copied().unwrap_or_default();
-    let named = matches!(sub, "fetch" | "push" | "ls-remote").then(|| args[1..].iter().find(|a| !a.starts_with('-'))).flatten();
-    let query: Vec<&str> = match named {
+    let named = matches!(sub, "fetch" | "push" | "ls-remote")
+        .then(|| args[1..].iter().find(|a| !a.starts_with('-')).map(|r| r.to_string()))
+        .flatten()
+        .or_else(|| (sub == "push").then(|| push_remote(repo)).flatten());
+    let query: Vec<&str> = match named.as_deref() {
         Some(remote) if sub == "push" => vec!["remote", "get-url", "--push", "--", remote],
         Some(remote) => vec!["remote", "get-url", "--", remote],
         None => vec!["ls-remote", "--get-url"],
@@ -89,15 +94,39 @@ fn reaches_github_over_https(repo: &Path, config: &[String], args: &[&str]) -> b
     git_with(repo, config, &query).is_ok_and(|url| url.trim().starts_with("https://github.com/"))
 }
 
-/// The server turned the SSH key down (none registered for this account, or none at all).
-fn ssh_key_refused(message: &str) -> bool {
-    message.contains("Permission denied (publickey")
+/// The remote a plain `git push` on the current branch goes to, in git's order:
+/// `branch.<b>.pushRemote`, `remote.pushDefault`, then the branch's upstream remote. (`@{push}`
+/// would say the same but needs the remote branch fetched once.)
+fn push_remote(repo: &Path) -> Option<String> {
+    let branch = git(repo, &["branch", "--show-current"]).ok()?.trim().to_string();
+    let get = |key: String| git(repo, &["config", "--get", &key]).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    (!branch.is_empty())
+        .then(|| get(format!("branch.{branch}.pushRemote")))
+        .flatten()
+        .or_else(|| get("remote.pushDefault".into()))
+        .or_else(|| (!branch.is_empty()).then(|| get(format!("branch.{branch}.remote"))).flatten())
+        // A remote given as a URL or `.` (this repository) is not a remote's name.
+        .filter(|remote| remote != "." && !remote.starts_with('-') && !remote.contains("://"))
 }
 
+/// The server turned the SSH key down (none registered for this account, or none at all), or ssh
+/// could not even start because github.com is not among the known hosts yet (no terminal to ask in).
+fn ssh_key_refused(message: &str) -> bool {
+    message.contains("Permission denied (publickey") || message.contains("Host key verification failed")
+}
+
+/// The retry could not sign in, or the signed-in account cannot see the repository.
 fn https_auth_failed(message: &str) -> bool {
-    ["Authentication failed", "could not read Username", "terminal prompts disabled", "Invalid username or token"]
-        .iter()
-        .any(|marker| message.contains(marker))
+    [
+        "Authentication failed",
+        "could not read Username",
+        "terminal prompts disabled",
+        "Invalid username or token",
+        "Repository not found",
+        "The requested URL returned error: 403",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
 }
 
 /// The settings that send a GitHub SSH remote over HTTPS, signed in by `gh` (what
@@ -727,6 +756,9 @@ mod tests {
     fn a_refused_ssh_key_is_retried_through_gh() {
         assert!(ssh_key_refused("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."));
         assert!(ssh_key_refused("git@github.com: Permission denied (publickey,keyboard-interactive)."));
+        assert!(ssh_key_refused("Host key verification failed.\nfatal: Could not read from remote repository."));
+        // The signed-in account cannot see it: the SSH error is the one to show.
+        assert!(https_auth_failed("remote: Repository not found.\nfatal: repository 'https://github.com/me/app.git/' not found"));
         // Not an SSH key problem: the answer stays as git gave it.
         assert!(!ssh_key_refused("fatal: repository 'https://github.com/me/app.git/' not found"));
         assert!(!ssh_key_refused("! [rejected] main -> main (non-fast-forward)"));
@@ -785,6 +817,16 @@ mod tests {
         assert!(!reaches_github_over_https(&repo, &config, &["pull", "--ff-only"]));
         git(&repo, &["remote", "add", "origin", "git@github.com:example/app.git"]).unwrap();
         assert!(reaches_github_over_https(&repo, &config, &["pull", "--ff-only"]));
+        // A plain push goes where the branch pushes to: its upstream's remote, unless it has a
+        // push remote of its own.
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "one"]).unwrap();
+        let branch = git(&repo, &["branch", "--show-current"]).unwrap().trim().to_string();
+        git(&repo, &["config", &format!("branch.{branch}.remote"), "gitlab"]).unwrap();
+        git(&repo, &["config", &format!("branch.{branch}.merge"), &format!("refs/heads/{branch}")]).unwrap();
+        assert!(!reaches_github_over_https(&repo, &config, &["push"]));
+        git(&repo, &["config", &format!("branch.{branch}.pushRemote"), "ssh"]).unwrap();
+        assert!(reaches_github_over_https(&repo, &config, &["push"]));
+        assert_eq!(push_remote(&repo).as_deref(), Some("ssh"));
         let _ = std::fs::remove_dir_all(&repo);
     }
 
