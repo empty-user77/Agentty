@@ -95,7 +95,7 @@ Each computer is told apart by an id Agentty keeps in `~/.agentty/computer-id` (
 
 ## Browser
 
-Whether links open in the in-app browser or your default one, whether dev servers open by themselves, and the search engine.
+Whether links open in the in-app browser or your default one, whether dev servers open by themselves, and the search engine. With links set to your default browser, the in-app browser is off: the globe button is hidden, pages open in your default browser, agents get no browser tools, and only the link choice is shown here. Plugins' own pages still open inside Agentty.
 
 ## System check
 
