@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -329,7 +330,15 @@ def tts(text, voice, rate):
 
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_suffix(".part.mp3")
-        asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(str(part)))
+        # The voice service sometimes returns nothing for a line it speaks fine moments later.
+        for attempt in range(8):
+            try:
+                asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(str(part)))
+                break
+            except edge_tts.exceptions.NoAudioReceived:
+                if attempt == 7:
+                    raise
+                time.sleep(2 + attempt * 2)
         part.rename(path)
     return path, duration(path)
 
@@ -484,6 +493,8 @@ def build(args):
     out.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"video-{slug}-", dir=args.work or None))
     rate = board.get("rate", "+0%")
+    if board.get("narration", "en") != "en":
+        print('note: "narration" is ignored: every version is narrated in English')
     voices = {**VOICES, **board.get("voices", {})}
     spoken = ["en"]
     print(f"work folder: {work}")

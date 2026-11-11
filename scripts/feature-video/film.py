@@ -326,8 +326,8 @@ def chunks(words, lang, limit_words=6, limit_chars=16):
 
 
 def caption_groups(text, lang, words, start, length):
-    """Caption groups for one line: word by word when the voice speaks this language (its timings
-    are exact), else the line itself split evenly across the time it is spoken."""
+    """Caption groups for one line: word by word for English, the language spoken (its timings are
+    exact), else the line itself split evenly across the time the English is spoken."""
     if words:
         # The voice service drops punctuation from its words; put it back from the text so the
         # caption reads as written.
