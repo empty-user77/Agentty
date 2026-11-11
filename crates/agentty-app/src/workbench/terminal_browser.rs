@@ -591,14 +591,14 @@ impl Workbench {
 /// What an agent hears when the user turned the in-app browser off.
 pub(super) const BROWSER_OFF: &str = "the in-app browser is off: Agentty is set to open links in the external browser (Settings → Browser)";
 
-/// Closes the pages in `slot` that are not a plugin's; a panel left without pages goes. Returns
+/// Closes the pages in `slot` that are not a plugin's (or a window one opened); a panel left without pages goes. Returns
 /// whether anything closed.
 fn keep_plugin_pages(slot: &mut Option<BrowserPanel>) -> bool {
     let Some(browser) = slot.as_mut() else { return false };
-    if browser.tabs.iter().all(|tab| tab.owner.is_some()) && !browser.tabs.is_empty() {
+    if browser.tabs.iter().all(|tab| tab.of_plugin()) && !browser.tabs.is_empty() {
         return false;
     }
-    let (plugins, others): (Vec<_>, Vec<_>) = std::mem::take(&mut browser.tabs).into_iter().partition(|tab| tab.owner.is_some());
+    let (plugins, others): (Vec<_>, Vec<_>) = std::mem::take(&mut browser.tabs).into_iter().partition(|tab| tab.of_plugin());
     others.into_iter().for_each(drop_terminal_tab);
     if plugins.is_empty() {
         *slot = None;
