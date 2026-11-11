@@ -839,6 +839,8 @@ impl Workbench {
                 .cursor_pointer()
                 .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
         };
+        // Another login than the window's, where no bar above the chat says so (the agent bar is off).
+        let login = (!self.pane_bar_shown(&state.lead, cx)).then(|| self.login_chip_at(&state.lead, true, cx)).flatten();
         // In a narrow pane the chips go to a second line rather than out of the pane.
         let footer = div()
             .flex()
@@ -849,6 +851,7 @@ impl Workbench {
             .px_1()
             .t_small()
             .text_color(hex(Chrome::MUTED))
+            .children(login.map(|mark| div().relative().px_1().child(mark)))
             .children(live.model.clone().map(|model| {
                 chip("chat-footer-model")
                     .text_color(hex(Chrome::FOREGROUND))

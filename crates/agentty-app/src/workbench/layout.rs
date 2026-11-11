@@ -377,6 +377,10 @@ impl Workbench {
         let id = pane.entity_id();
 
         div()
+            // Each pane's own id scope: the panes of a split draw the same controls (the chat, its
+            // buttons, the way back to it), and two elements with one id share their click state —
+            // a press on one is released on the other, so neither does anything.
+            .id(("pane", id.as_u64() as usize))
             .relative()
             .size_full()
             .flex()
@@ -1186,6 +1190,12 @@ pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui:
         .left_0()
         .map(|d| if below { d.bottom_full() } else { d.top_full() })
         .child(gpui::deferred(anchored).with_priority(priority))
+}
+
+/// [`bar_popover`] for a control near the bottom of a pane (a chat's footer): it opens upwards.
+pub(super) fn popover_above(popover: impl IntoElement, priority: usize) -> gpui::Div {
+    let anchored = gpui::anchored().anchor(gpui::Corner::BottomLeft).snap_to_window_with_margin(px(8.)).child(div().mb_1().child(popover));
+    div().absolute().left_0().bottom_full().child(gpui::deferred(anchored).with_priority(priority))
 }
 
 /// Tooltip hint of a folder chip: ⌘-click (Ctrl-click on Windows / Linux) shows the folder.

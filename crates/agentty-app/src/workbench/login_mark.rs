@@ -29,15 +29,30 @@ impl Workbench {
         (login != self.accounts.get(agent)).then(|| (agent, login.map(str::to_string)))
     }
 
+    /// Whether `pane` has a bar over it that carries the mark: a split pane's header, or the agent
+    /// bar (Settings → Appearance).
+    pub(super) fn pane_bar_shown(&self, pane: &Pane, cx: &gpui::App) -> bool {
+        let split = self
+            .locate(pane)
+            .and_then(|(w, t)| self.workspaces[w].tabs.get(t))
+            .is_some_and(|tab| matches!(tab.root, super::PaneNode::Split { .. }));
+        split || crate::settings::settings(cx).agent_bar
+    }
+
     /// The mark, and its menu while open.
     pub(super) fn foreign_login_chip(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.login_chip_at(pane, false, cx)
+    }
+
+    /// The same mark in front of a chat's footer (`in_chat`), its menu opening upwards.
+    pub(super) fn login_chip_at(&self, pane: &Pane, in_chat: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (agent, login) = self.foreign_login_of(pane, cx)?;
         let name = self.login_name(agent, login.as_deref(), cx);
         let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
         let id = pane.entity_id();
-        let open = self.login_mark_open == Some(id);
+        let open = self.login_mark_open == Some((id, in_chat));
         let mark = div()
-            .id(("pane-account", id.as_u64() as usize))
+            .id((if in_chat { "chat-account" } else { "pane-account" }, id.as_u64() as usize))
             .relative()
             .flex_shrink_0()
             .size(px(16.))
@@ -61,7 +76,7 @@ impl Workbench {
                 if this.just_dismissed(MENU_KEY) {
                     return;
                 }
-                this.login_mark_open = if this.login_mark_open == Some(id) { None } else { Some(id) };
+                this.login_mark_open = if this.login_mark_open == Some((id, in_chat)) { None } else { Some((id, in_chat)) };
                 if this.login_mark_open.is_some() {
                     // Fresh plan limits and spend for the menu.
                     this.refresh_account_rows(cx);
@@ -70,7 +85,14 @@ impl Workbench {
                 cx.notify();
             }))
             .child(initial);
-        let menu = open.then(|| super::layout::bar_popover(self.render_login_menu(agent, login.as_deref(), name, cx), 3, cx));
+        let menu = open.then(|| {
+            let menu = self.render_login_menu(agent, login.as_deref(), name, cx);
+            if in_chat {
+                super::layout::popover_above(menu, 3)
+            } else {
+                super::layout::bar_popover(menu, 3, cx)
+            }
+        });
         Some(mark.children(menu).into_any_element())
     }
 

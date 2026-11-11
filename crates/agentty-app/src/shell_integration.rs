@@ -114,15 +114,46 @@ __agentty_leave_gone() {
 
 /// The line that runs `command` (`args` are its arguments, already shell syntax); for an agent, the
 /// copy the pane's Agentty chose (the newest installed, `$AGENTTY_<NAME>_BIN`) when it is still
-/// there, and the shell leaves a folder the agent removed afterwards, keeping the agent's exit status.
+/// there, on the login picked for it (`env` with `__agentty_env`), and the shell leaves a folder the
+/// agent removed afterwards, keeping the agent's exit status.
 fn posix_call(command: &str, args: &str) -> String {
     if !AGENTS.contains(&command) {
         return format!("  command {command} {args}\n");
     }
     let chosen = crate::agent_bins::env_name(command);
     format!(
-        "  if [ -n \"${chosen}\" ] && [ -x \"${chosen}\" ]; then \"${chosen}\" {args}; else command {command} {args}; fi\n  local __agentty_status=$?\n  __agentty_leave_gone\n  return $__agentty_status\n"
+        "  if [ -n \"${chosen}\" ] && [ -x \"${chosen}\" ]; then command env \"${{__agentty_env[@]}}\" \"${chosen}\" {args}; else command env \"${{__agentty_env[@]}}\" {command} {args}; fi\n  local __agentty_status=$?\n  __agentty_leave_gone\n  return $__agentty_status\n"
     )
+}
+
+/// `__agentty_pick_account <agent> <args…>` for zsh and bash: an agent with more than one login asks
+/// Agentty which one (`agentty account-for`, a question in the window) and puts what `env` changes
+/// for it in the caller's `__agentty_env`. Fails when the user closed the question: the agent does
+/// not start then. Commands that start no session are not asked.
+fn posix_account_helper() -> String {
+    let closed = crate::agent_signal::ACCOUNT_CLOSED;
+    format!(
+        r#"__agentty_pick_account() {{
+  [ -n "$AGENTTY_SHELL_API" ] && [ -n "$AGENTTY_BIN" ] && [ -n "$AGENTTY_SOCKET" ] || return 0
+  case "$2" in {BYPASS_SKIP_FIRST}|{CLAUDE_SKIP_FIRST}) return 0;; esac
+  local __agentty_out __agentty_line
+  __agentty_out=$("$AGENTTY_BIN" account-for "$1")
+  case $? in 0) ;; {closed}) return 1;; *) return 0;; esac
+  while IFS= read -r __agentty_line; do
+    [ -n "$__agentty_line" ] && __agentty_env+=("$__agentty_line")
+  done <<< "$__agentty_out"
+  return 0
+}}
+"#
+    )
+}
+
+/// The lines in an agent's wrapper that ask for its login (none for other commands).
+fn posix_account_lines(command: &str) -> String {
+    if !AGENTS.contains(&command) {
+        return String::new();
+    }
+    format!("  local -a __agentty_env=()\n  __agentty_pick_account {command} \"$@\" || return 130\n")
 }
 
 /// `__agentty_guide_ok <args…>`: whether a typed `claude` gets Agentty's guide and skills (the pane
@@ -240,6 +271,7 @@ pub fn zsh_script(aliases: &[CommandAlias], bypass: bool) -> String {
     out.push_str(&posix_guide_helper());
     out.push_str(&posix_bypass_helper());
     out.push_str(&posix_home_helpers());
+    out.push_str(&posix_account_helper());
     for (command, entries) in wrapped(aliases) {
         let _ = writeln!(out, "unalias {command} 2>/dev/null");
         let _ = writeln!(out, "function {command} {{");
@@ -247,6 +279,7 @@ pub fn zsh_script(aliases: &[CommandAlias], bypass: bool) -> String {
             let _ = writeln!(out, "  __agentty_note_home");
             let _ = writeln!(out, "  __agentty_own_tree {command} \"$@\"");
         }
+        out.push_str(&posix_account_lines(&command));
         out.push_str(&posix_guide_lines(&command));
         out.push_str(&posix_bypass_lines(&command, bypass));
         if entries.is_empty() {
@@ -284,6 +317,7 @@ pub fn bash_script(aliases: &[CommandAlias], bypass: bool) -> String {
     out.push_str(&posix_guide_helper());
     out.push_str(&posix_bypass_helper());
     out.push_str(&posix_home_helpers());
+    out.push_str(&posix_account_helper());
     for (command, entries) in wrapped(aliases) {
         let _ = writeln!(out, "unalias {command} 2>/dev/null");
         let _ = writeln!(out, "{command}() {{");
@@ -291,6 +325,7 @@ pub fn bash_script(aliases: &[CommandAlias], bypass: bool) -> String {
             let _ = writeln!(out, "  __agentty_note_home");
             let _ = writeln!(out, "  __agentty_own_tree {command} \"$@\"");
         }
+        out.push_str(&posix_account_lines(&command));
         out.push_str(&posix_guide_lines(&command));
         out.push_str(&posix_bypass_lines(&command, bypass));
         if entries.is_empty() {
@@ -361,6 +396,19 @@ pub fn powershell_script(aliases: &[CommandAlias], bypass: bool) -> String {
         if AGENTS.contains(&command.as_str()) {
             let _ = writeln!(out, "  __agentty_own_tree {} $args", quote(&command));
             let _ = writeln!(out, "  __agentty_sync_dir");
+            // Which login, when the agent has more than one: what `agentty account-for` prints is
+            // set for this call only. A closed question starts nothing.
+            let _ = writeln!(out, "  $__agentty_env = @()");
+            let _ = writeln!(
+                out,
+                "  if ($env:AGENTTY_SHELL_API -and $env:AGENTTY_BIN -and $env:AGENTTY_SOCKET -and -not ($args.Count -gt 0 -and \"$($args[0])\" -in @({}, {}))) {{",
+                list(BYPASS_SKIP_FIRST),
+                list(CLAUDE_SKIP_FIRST)
+            );
+            let _ = writeln!(out, "    $__agentty_env = @(& $env:AGENTTY_BIN account-for {})", quote(&command));
+            let _ = writeln!(out, "    if ($LASTEXITCODE -eq {}) {{ return }}", crate::agent_signal::ACCOUNT_CLOSED);
+            let _ = writeln!(out, "    if ($LASTEXITCODE -ne 0) {{ $__agentty_env = @() }}");
+            let _ = writeln!(out, "  }}");
         }
         let _ = writeln!(out, "  $__agentty_guide = @()");
         if command == "claude" {
@@ -436,11 +484,36 @@ pub fn powershell_script(aliases: &[CommandAlias], bypass: bool) -> String {
             out,
             "  if (-not $__agentty_program) {{ Write-Error \"{command}: the term '{command}' is not recognized as a program\"; return }}"
         );
-        let _ = writeln!(out, "  & $__agentty_program.Source @__agentty_guide @__agentty_bypass @__agentty_hooks @__agentty_args");
+        if AGENTS.contains(&command.as_str()) {
+            out.push_str(POWERSHELL_ACCOUNT_ENV);
+            let _ = writeln!(
+                out,
+                "  try {{ & $__agentty_program.Source @__agentty_guide @__agentty_bypass @__agentty_hooks @__agentty_args }}"
+            );
+            let _ = writeln!(
+                out,
+                "  finally {{ foreach ($__agentty_key in @($__agentty_saved.Keys)) {{ [Environment]::SetEnvironmentVariable($__agentty_key, $__agentty_saved[$__agentty_key]) }} }}"
+            );
+        } else {
+            let _ = writeln!(out, "  & $__agentty_program.Source @__agentty_guide @__agentty_bypass @__agentty_hooks @__agentty_args");
+        }
         let _ = writeln!(out, "}}");
     }
     out
 }
+
+/// Sets what `agentty account-for` printed (`-u NAME`, `NAME=value`) in `$__agentty_env` for the
+/// agent's call, keeping the values it replaces in `$__agentty_saved` to put back afterwards.
+const POWERSHELL_ACCOUNT_ENV: &str = r#"  $__agentty_saved = @{}
+  for ($__agentty_i = 0; $__agentty_i -lt $__agentty_env.Count; $__agentty_i++) {
+    $__agentty_word = "$($__agentty_env[$__agentty_i])"
+    if ($__agentty_word -eq '-u') { $__agentty_i++; $__agentty_name = "$($__agentty_env[$__agentty_i])"; $__agentty_value = $null }
+    elseif ($__agentty_word -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { $__agentty_name = $Matches[1]; $__agentty_value = $Matches[2] }
+    else { continue }
+    if (-not $__agentty_saved.ContainsKey($__agentty_name)) { $__agentty_saved[$__agentty_name] = [Environment]::GetEnvironmentVariable($__agentty_name) }
+    [Environment]::SetEnvironmentVariable($__agentty_name, $__agentty_value)
+  }
+"#;
 
 /// PowerShell's location (`cd`) is not the process's current folder, which is all Agentty can read
 /// from outside. Each prompt copies one into the other, so a pane is saved and split where the user
@@ -789,6 +862,56 @@ mod tests {
             assert_eq!(run("--version", false), "/", "{shell}");
             assert_eq!(run("--resume abc", false), "/", "{shell}");
             assert_eq!(run("", true), "/", "{shell}");
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    /// `claude` typed into a pane starts on the login picked for it: what `agentty account-for`
+    /// prints is set for the agent only, a closed question starts nothing, and `--version` asks nothing.
+    #[test]
+    #[cfg(unix)]
+    fn agent_wrappers_start_on_the_picked_login() {
+        use std::os::unix::fs::PermissionsExt;
+        for (shell, script) in [("zsh", zsh_script(&[], false)), ("bash", bash_script(&[], false))] {
+            let dir = std::env::temp_dir().join(format!("agentty-account-wrapper-{shell}-{}", std::process::id()));
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let executable = |path: &Path, body: &str| {
+                std::fs::write(path, body).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            };
+            // The agent prints the login folder it got and whether the old key is still there.
+            executable(&bin.join("claude"), "#!/bin/sh\necho \"dir=$CLAUDE_CONFIG_DIR key=${EXAMPLE_KEY-unset}\"\n");
+            // Agentty: `CANCEL` closes the question, otherwise the account folder is picked.
+            let answer = "#!/bin/sh\n[ \"$1\" = account-for ] || exit 0\n[ -n \"$CANCEL\" ] && exit 10\nprintf '%s\\n' -u EXAMPLE_KEY 'CLAUDE_CONFIG_DIR=/tmp/example accounts/a1'\n";
+            executable(&dir.join("agentty"), answer);
+            std::fs::write(dir.join("wrappers"), &script).unwrap();
+            let run = |args: &str, cancel: bool| {
+                let flag = if shell == "zsh" { "-f" } else { "--norc" };
+                let mut command = Command::new(shell);
+                command
+                    .args([
+                        flag,
+                        "-c",
+                        &format!("source {}; claude {args}; echo \"after=$CLAUDE_CONFIG_DIR\"", dir.join("wrappers").display()),
+                    ])
+                    .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_CODEX_BIN")
+                    .env_remove("CLAUDE_CONFIG_DIR")
+                    .env("EXAMPLE_KEY", "example_not_a_real_key")
+                    .env("AGENTTY_BIN", dir.join("agentty"))
+                    .env("AGENTTY_SHELL_API", SHELL_API)
+                    .env("AGENTTY_SOCKET", "placeholder");
+                if cancel {
+                    command.env("CANCEL", "1");
+                }
+                let output = command.output().unwrap();
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            };
+            assert_eq!(run("hi", false), "dir=/tmp/example accounts/a1 key=unset\nafter=", "{shell}");
+            assert_eq!(run("hi", true), "after=", "{shell}");
+            assert_eq!(run("--version", false), "dir= key=example_not_a_real_key\nafter=", "{shell}");
             std::fs::remove_dir_all(dir).ok();
         }
     }

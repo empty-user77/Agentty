@@ -1,21 +1,33 @@
 //! Which login a new agent starts on, when its agent has more than one: asked every time, as a list
 //! of the logins with the agent they belong to, their plan and what is left of its limits. The
-//! window's own login is marked and picked to begin with.
+//! window's own login is marked and picked to begin with. The same question comes for an agent typed
+//! into a terminal (`agentty account-for`, from the shell wrappers): the answer is the environment
+//! it starts in.
 
 use super::account_menu::{name_of, usage_line};
 use super::{LaunchTarget, Workbench};
+use crate::agent_signal::{browser_reply, AccountRequest};
 use crate::i18n::t;
 use crate::launch::LaunchChoice;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use agentty_bridge::accounts::AccountStore;
-use agentty_bridge::agent_auth::AuthAgent;
+use agentty_bridge::agent_auth::{AuthAgent, EnvChange};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Window};
+
+/// What the answer starts.
+enum PickFor {
+    /// A tab or pane Agentty opens.
+    Launch { choice: LaunchChoice, target: LaunchTarget },
+    /// An agent typed into the terminal of `pane`, waiting on `reply`.
+    Shell { pane: u64, reply: std::sync::mpsc::Sender<String> },
+}
 
 /// The question while it is open.
 pub(super) struct AccountPick {
-    choice: LaunchChoice,
-    target: LaunchTarget,
+    then: PickFor,
+    /// Tells this question from a later one, for the timer that closes it.
+    serial: u64,
     agent: AuthAgent,
     /// Every login of the agent: its own first (`None`), then the added ones.
     logins: Vec<Option<String>>,
@@ -33,24 +45,124 @@ impl Workbench {
             return false;
         }
         let logins: Vec<Option<String>> = std::iter::once(None).chain(store.of(agent).iter().map(|a| Some(a.id.clone()))).collect();
-        let current = self.accounts.get(agent);
+        let current = self.accounts.get(agent).map(str::to_string);
+        self.open_account_pick(PickFor::Launch { choice: choice.clone(), target }, agent, logins, current.as_deref(), cx);
+        true
+    }
+
+    fn open_account_pick(
+        &mut self,
+        then: PickFor,
+        agent: AuthAgent,
+        logins: Vec<Option<String>>,
+        current: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        // A question still open gives way: an agent typed meanwhile starts on its pane's login.
+        if let Some(PickFor::Shell { reply, .. }) = self.account_pick.take().map(|pick| pick.then) {
+            let _ = reply.send(browser_reply(Ok("null".into())));
+        }
         let selected = logins.iter().position(|id| id.as_deref() == current).unwrap_or(0);
-        self.account_pick = Some(AccountPick { choice: choice.clone(), target, agent, logins, selected });
+        self.account_pick_serial += 1;
+        self.account_pick = Some(AccountPick { then, serial: self.account_pick_serial, agent, logins, selected });
         // Plans and limits for the rows.
         self.refresh_account_rows(cx);
         cx.notify();
-        true
+    }
+
+    /// `agentty account-for`: an agent typed into the terminal of `request.pane` is about to start.
+    /// With more than one login for it, the user picks one; the answer is the environment it starts
+    /// in, and the pane remembers the login (its bar marks one that is not the window's).
+    pub fn ask_shell_account(&mut self, request: AccountRequest, cx: &mut Context<Self>) {
+        let agent = if request.label == "codex" { AuthAgent::Codex } else { AuthAgent::Claude };
+        let store = AccountStore::load();
+        let Some(pane) = self.pane_by_id(request.pane, cx).filter(|_| !store.of(agent).is_empty()) else {
+            let _ = request.reply.send(browser_reply(Ok("null".into())));
+            return;
+        };
+        let _ = request.reply.send(browser_reply(Ok(serde_json::json!({ "asking": true }).to_string())));
+        let logins: Vec<Option<String>> = std::iter::once(None).chain(store.of(agent).iter().map(|a| Some(a.id.clone()))).collect();
+        let current = pane.read(cx).spec.accounts.get(agent).map(str::to_string);
+        self.open_account_pick(PickFor::Shell { pane: request.pane, reply: request.reply }, agent, logins, current.as_deref(), cx);
+        // The shell waits `ACCOUNT_WAIT` for the answer: the question goes with it.
+        let serial = self.account_pick_serial;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(crate::agent_signal::ACCOUNT_WAIT).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.account_pick.as_ref().is_some_and(|pick| pick.serial == serial) {
+                    this.account_pick = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn start_on_login(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pick) = self.account_pick.take() else { return };
         let Some(id) = pick.logins.get(index).cloned() else { return };
-        self.request_launch(LaunchChoice::OnAccount(Box::new(pick.choice), pick.agent, id), pick.target, window, cx);
+        match pick.then {
+            PickFor::Launch { choice, target } => {
+                self.request_launch(LaunchChoice::OnAccount(Box::new(choice), pick.agent, id), target, window, cx);
+            }
+            PickFor::Shell { pane, reply } => {
+                let answer = self.shell_login(pane, pick.agent, id, cx);
+                let _ = reply.send(browser_reply(Ok(answer.to_string())));
+                self.focus_active(window, cx);
+            }
+        }
         cx.notify();
     }
 
+    /// The answer for a typed agent starting on `id` in `pane`: what `env` changes, and the login
+    /// noted on the pane. A login whose folder can't be readied starts nothing.
+    fn shell_login(&mut self, pane_id: u64, agent: AuthAgent, id: Option<String>, cx: &mut Context<Self>) -> serde_json::Value {
+        let Some(pane) = self.pane_by_id(pane_id, cx) else { return serde_json::json!({ "cancel": true }) };
+        let variable = match agent {
+            AuthAgent::Claude => "CLAUDE_CONFIG_DIR",
+            AuthAgent::Codex => "CODEX_HOME",
+        };
+        let changes = match id.as_deref() {
+            Some(account) => match agentty_bridge::accounts::environment(agent, account) {
+                Ok(changes) => changes,
+                Err(err) => {
+                    self.show_toast(format!("{err:#}"), cx);
+                    return serde_json::json!({ "cancel": true });
+                }
+            },
+            // The agent's own login: the folder of an account this pane's shell was given goes. A
+            // folder of the user's own (set in their profile) stays.
+            None => {
+                let given = pane.read(cx).spec.accounts.get(agent).is_some();
+                let inherited = agentty_bridge::accounts::inherited_account_variable(agent).is_some();
+                if given || inherited {
+                    vec![EnvChange::Unset(variable.into())]
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+        let words: Vec<String> = changes
+            .into_iter()
+            .flat_map(|change| match change {
+                EnvChange::Set(name, value) => vec![format!("{name}={value}")],
+                EnvChange::Unset(name) => vec!["-u".to_string(), name],
+            })
+            .collect();
+        pane.update(cx, |view, _| {
+            view.spec.accounts.set(agent, id);
+            view.spec.fixed_account = Some(agent);
+        });
+        self.persist(cx);
+        serde_json::json!({ "env": words })
+    }
+
     fn close_account_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.account_pick.take().is_some() {
+        if let Some(pick) = self.account_pick.take() {
+            // A typed agent the user said no to does not start.
+            if let PickFor::Shell { reply, .. } = pick.then {
+                let _ = reply.send(browser_reply(Ok(serde_json::json!({ "cancel": true }).to_string())));
+            }
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -85,7 +197,11 @@ impl Workbench {
             AuthAgent::Codex => "codex",
         };
         // "Claude Code", or "Claude Code · opus" for a model picked in the launcher.
-        let what = pick.choice.label().unwrap_or_else(|| crate::brand::brand(brand_id).name.to_string());
+        let what = match &pick.then {
+            PickFor::Launch { choice, .. } => choice.label(),
+            PickFor::Shell { .. } => None,
+        }
+        .unwrap_or_else(|| crate::brand::brand(brand_id).name.to_string());
         let current = self.accounts.get(pick.agent);
         let now = crate::ui::now_ms();
 

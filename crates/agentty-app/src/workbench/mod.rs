@@ -599,8 +599,11 @@ pub struct Workbench {
     account_rows: Vec<account_menu::AccountRow>,
     /// Which login a new agent starts on, while that is being asked.
     account_pick: Option<account_pick::AccountPick>,
+    /// Counts the questions asked, so a timer closes only its own.
+    account_pick_serial: u64,
     /// The pane whose login mark has its menu open.
-    login_mark_open: Option<gpui::EntityId>,
+    /// The pane whose login mark has its menu open, and whether it is the mark in its chat.
+    login_mark_open: Option<(gpui::EntityId, bool)>,
     /// Logins whose details are open in Settings → Accounts.
     account_details_open: HashSet<String>,
     /// The session page's Agents and Workflows views (and which one is on screen).
@@ -1030,6 +1033,7 @@ impl Workbench {
             window_targets: Vec::new(),
             account_rows: Vec::new(),
             account_pick: None,
+            account_pick_serial: 0,
             login_mark_open: None,
             account_details_open: HashSet::new(),
             session_board: Default::default(),
@@ -4790,6 +4794,15 @@ impl Workbench {
                 self.move_tab(argument.split_whitespace().next().and_then(|i| i.parse().ok()).unwrap_or(0), target, window, cx);
                 let layout: Vec<String> = self.workspaces.iter().map(|w| format!("{}:{}", w.id, w.tabs.len())).collect();
                 eprintln!("workspaces: {layout:?} active={}", self.active_workspace);
+            }
+            // `tab-into <index>`: what dropping tab <index> of this workspace under its first tab's
+            // active pane does.
+            "tab-into" => {
+                let index = argument.trim().parse().unwrap_or(1);
+                let target = self.workspaces.get(self.active_workspace).and_then(|ws| Some((ws.id, ws.tabs.first()?.active.clone())));
+                if let Some((workspace, target)) = target {
+                    self.move_tab_into_pane(workspace, index, &target, drop_split::DropSide::Bottom, window, cx);
+                }
             }
             "tab-order" => {
                 // `tab-order <from> <to>` in the active workspace.
