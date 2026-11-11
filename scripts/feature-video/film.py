@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -83,7 +84,15 @@ def speak(text, voice, rate):
                     words.append({"w": chunk["text"], "a": round(a, 3), "b": round(a + chunk["duration"] / 1e7, 3)})
             return bytes(audio), words
 
-        audio, words = asyncio.run(go())
+        # The voice service sometimes returns nothing for a line it speaks fine moments later.
+        for attempt in range(8):
+            try:
+                audio, words = asyncio.run(go())
+                break
+            except edge_tts.exceptions.NoAudioReceived:
+                if attempt == 7:
+                    raise
+                time.sleep(2 + attempt * 2)
         part = mp3.with_suffix(".part.mp3")
         part.write_bytes(audio)
         part.rename(mp3)
@@ -361,10 +370,9 @@ def caption_groups(text, lang, words, start, length):
 
 def plan(board, base, langs, work):
     """Every scene's length, narration and prepared footage, shared by all languages."""
-    voice_mode = board.get("narration", "en")
     rate = board.get("rate", "+0%")
     voices = {**v.VOICES, **board.get("voices", {})}
-    spoken = langs if voice_mode == "each" else ["en"]
+    spoken = ["en"]  # every version carries the English narration
     aspect_name = board.get("aspect", "16:9")
     if aspect_name not in ASPECTS:
         sys.exit(f"aspect must be one of {', '.join(ASPECTS)}")
@@ -448,7 +456,7 @@ def plan(board, base, langs, work):
         print(f"scene {i + 1}: {seconds:.1f}s ({layout}, {seam}; footage {footage:.1f}s, narration {spoken_len:.1f}s)")
         t += seconds
     return {"W": W, "H": H, "aspect": aspect_name, "scenes": scenes, "body_end": round(t, 3),
-            "total": round(t + OUTRO, 3), "spoken": spoken, "voice_mode": voice_mode,
+            "total": round(t + OUTRO, 3), "spoken": spoken,
             "theme": motion.theme_of(board)[0], "chapters": bool(board.get("chapters"))}
 
 
@@ -1042,14 +1050,13 @@ h1, h2, .feat, .tag, blockquote { text-wrap: balance; word-break: keep-all; }
 def captions_html(plan_, lang):
     """The caption track: one group at a time, the spoken word lit as it is said."""
     W, H = plan_["W"], plan_["H"]
-    karaoke = plan_["voice_mode"] == "each" or lang == "en"
+    karaoke = lang == "en"
     bottom = 300 if W < H else 64
     groups = []
     for sc in plan_["scenes"]:
         for line in sc["lines"]:
             text = v.text_of(line["say"], lang)
-            voice = lang if plan_["voice_mode"] == "each" else "en"
-            words = line["takes"][voice][2] if karaoke else None
+            words = line["takes"]["en"][2] if karaoke else None
             groups += caption_groups(text, lang, words, sc["start"] + line["start"], line["len"])
     markup, tl = [], ""
     for n, g in enumerate(groups):
@@ -1122,13 +1129,12 @@ def project(plan_, board, lang, root, subtitles=True):
         else:
             tl += seam_tweens(sc["seam"], prev, sc["id"], sc["start"], W, H, origin)
         for j, line in enumerate(sc["lines"]):
-            voice = lang if plan_["voice_mode"] == "each" else "en"
-            mp3 = line["takes"][voice][0]
+            mp3 = line["takes"]["en"][0]
             name = f"vo-{sc['id']}-{j}.mp3"
             if not (root / "assets" / name).exists():
                 shutil.copy(mp3, root / "assets" / name)
             audio.append(f'<audio id="vo{sc["i"]}x{j}" class="clip" data-start="{sc["start"] + line["start"]:.3f}" '
-                         f'data-duration="{line["takes"][voice][1]:.3f}" data-track-index="9" data-volume="1" src="assets/{name}"></audio>')
+                         f'data-duration="{line["takes"]["en"][1]:.3f}" data-track-index="9" data-volume="1" src="assets/{name}"></audio>')
     last = scenes[-1]["id"] if scenes else "intro"
     hosts.append(f'<div id="outro" data-composition-id="outro" data-composition-src="compositions/outro.html" data-start="{plan_["body_end"]:.3f}" data-duration="{OUTRO:.3f}" data-track-index="4" data-track-kind="graphics" data-width="{W}" data-height="{H}"></div>')
     tl += seam_tweens("blur-swap", last, "outro", plan_["body_end"], W, H)

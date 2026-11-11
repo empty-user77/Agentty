@@ -3,7 +3,6 @@
  "slug": "feature-howto",
  "title": { "en": "How to …", "ko": "… 하는 법", "ja": "… のやり方", "zh": "如何 …" },
  "tagline": { "en": "In three steps", "ko": "세 단계로", "ja": "3 ステップで", "zh": "三步完成" },
- "narration": "each",
  "scenes": [
   {
    "layout": "steps",

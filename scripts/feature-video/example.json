@@ -7,7 +7,6 @@
     "ja": "スマホからエージェントを操作",
     "zh": "用手机掌控你的智能体"
   },
-  "narration": "en",
   "scenes": [
     {
       "clip": "footage/enable.mov",
