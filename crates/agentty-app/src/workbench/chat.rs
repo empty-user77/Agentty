@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod chat_view;
-pub(super) use chat_view::footer_model;
+pub(super) use chat_view::{footer_model, Mode as FooterMode};
 pub(super) mod selectable;
 pub(super) mod selection_ui;
 mod slash;

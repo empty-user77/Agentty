@@ -185,6 +185,7 @@ impl Workbench {
         let pane_id = pane.read(cx).pane_id;
         self.pane_subscriptions.remove(&entity);
         self.pane_bounds.borrow_mut().remove(&entity);
+        self.footer_modes.borrow_mut().remove(&entity);
         if self.zoomed.as_ref() == Some(pane) {
             self.zoomed = None;
         }
