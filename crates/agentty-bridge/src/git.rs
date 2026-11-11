@@ -51,15 +51,16 @@ fn git_with(repo: &Path, config: &[String], args: &[&str]) -> Result<String> {
     }
 }
 
-/// A command that reaches the remote (fetch, pull, push, ls-remote). A GitHub remote with an SSH
-/// URL needs an SSH key the user registered on GitHub; when there is none but `gh` is signed in
-/// (what Settings → Integrations → GitHub shows as connected), the same command runs once more over
-/// HTTPS with `gh` as the credential helper. That holds for this command only: the remote's URL and
-/// the user's git config stay as they are, and nothing is stored.
+/// A command that reaches the remote (fetch, pull, push, ls-remote). A GitHub remote needs an SSH
+/// key registered on GitHub (an SSH URL) or credentials git's helper holds (an HTTPS URL); when git
+/// has neither but `gh` is signed in (what Settings → Integrations → GitHub shows as connected),
+/// the same command runs once more over HTTPS with `gh` as the credential helper. That holds for
+/// this command only: the remote's URL and the user's git config stay as they are, and nothing is
+/// stored.
 pub(crate) fn git_remote(repo: &Path, args: &[&str]) -> Result<String> {
     let first = git(repo, args);
     let Err(err) = &first else { return first };
-    if !ssh_key_refused(&format!("{err:#}")) {
+    if !gh_may_sign_in(&format!("{err:#}")) {
         return first;
     }
     let Some(config) = crate::sync::repo::find_tool("gh").and_then(|gh| gh_over_https(&gh)) else { return first };
@@ -70,8 +71,8 @@ pub(crate) fn git_remote(repo: &Path, args: &[&str]) -> Result<String> {
     }
     match git_with(repo, &config, args) {
         Ok(out) => Ok(out),
-        // gh could not sign in, or its account cannot see the repository: the SSH error says what
-        // to fix. Anything else (a rejected push, a missing branch) is the answer to the command.
+        // gh could not sign in, or its account cannot see the repository: the first error says
+        // what to fix. Anything else (a rejected push, a missing branch) is the answer to the command.
         Err(retry) if https_auth_failed(&format!("{retry:#}")) => first,
         Err(retry) => Err(retry),
     }
@@ -107,6 +108,12 @@ fn push_remote(repo: &Path) -> Option<String> {
         .or_else(|| (!branch.is_empty()).then(|| get(format!("branch.{branch}.remote"))).flatten())
         // A remote given as a URL or `.` (this repository) is not a remote's name.
         .filter(|remote| remote != "." && !remote.starts_with('-') && !remote.contains("://"))
+}
+
+/// Git could not sign in on its own: GitHub refused the SSH key, or an HTTPS remote got no (or
+/// wrong) credentials from git's helper.
+fn gh_may_sign_in(message: &str) -> bool {
+    ssh_key_refused(message) || https_auth_failed(message)
 }
 
 /// The server turned the SSH key down (none registered for this account, or none at all), or ssh
@@ -764,6 +771,11 @@ mod tests {
         assert!(!ssh_key_refused("! [rejected] main -> main (non-fast-forward)"));
         assert!(https_auth_failed("fatal: could not read Username for 'https://github.com': terminal prompts disabled"));
         assert!(!https_auth_failed("! [rejected] main -> main (fetch first)"));
+        // An HTTPS remote git holds no credentials for is signed in by gh as well.
+        assert!(gh_may_sign_in("fatal: could not read Username for 'https://github.com': terminal prompts disabled"));
+        assert!(gh_may_sign_in("remote: Invalid username or token. Password authentication is not supported for Git operations."));
+        assert!(gh_may_sign_in("git@github.com: Permission denied (publickey)."));
+        assert!(!gh_may_sign_in("! [rejected] main -> main (non-fast-forward)"));
     }
 
     #[test]
