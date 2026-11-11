@@ -166,7 +166,7 @@ Common keys:
 A scene lasts as long as the longest of its footage, its narration and the time its card needs to be read
 (0.5 s + 0.3 s a word). Short footage holds its last frame.
 
-Show the user the scene list with the English and Korean narration in one short message, and **say that a demo
+Show the user the scene list with the English narration and the Korean captions in one short message, and **say that a demo
 window is about to open**, before you record.
 
 ### 3. Record real footage with the demo build

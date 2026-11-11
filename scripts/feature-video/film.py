@@ -371,6 +371,8 @@ def caption_groups(text, lang, words, start, length):
 def plan(board, base, langs, work):
     """Every scene's length, narration and prepared footage, shared by all languages."""
     rate = board.get("rate", "+0%")
+    if board.get("narration", "en") != "en":
+        print('note: "narration" is ignored: every version is narrated in English')
     voices = {**v.VOICES, **board.get("voices", {})}
     spoken = ["en"]  # every version carries the English narration
     aspect_name = board.get("aspect", "16:9")
