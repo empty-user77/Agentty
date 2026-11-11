@@ -5,11 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-12
+
 ### Fixed
-- Pull, Push and Fetch on the Git page no longer fail on a GitHub repository when git can't sign in on its own (no SSH
-  key registered on GitHub, or no saved credentials for an `https://github.com/` remote) while the GitHub CLI is
-  signed in: they try once more over HTTPS, signed in by `gh`. The remote and the git configuration are left as they
-  are.
+- Pull, Push and Fetch (on the Git page and in a pane's branch menu) no longer fail on a GitHub repository when git
+  can't sign in on its own (no SSH key registered on GitHub, or no saved credentials for an `https://github.com/`
+  remote) while the GitHub CLI is signed in: they try once more over HTTPS, signed in by `gh`. The remote and the git
+  configuration are left as they are.
 
 ## [0.4.2] - 2026-11-11
 
