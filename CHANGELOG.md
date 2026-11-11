@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - In a split tab, the Chat button over an agent's terminal (and the buttons of a pane shown as a chat) could do
   nothing when another pane of the tab drew the same button, e.g. after a tab was dropped into the split.
+- A Claude Code pane shown as a chat no longer reads "Ask" under its composer when the pane is too short for Claude
+  Code to show its mode; it keeps the mode it showed last.
 
 ## [0.4.1] - 2026-11-10
 

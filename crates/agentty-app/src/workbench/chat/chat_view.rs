@@ -38,7 +38,7 @@ pub(super) fn only_the_terminal_answers(view: &crate::terminal::TerminalView) ->
 
 /// The permission mode Claude Code shows under its input box (Shift+Tab moves to the next one).
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Mode {
+pub(in crate::workbench) enum Mode {
     Ask,
     Edits,
     Plan,
@@ -47,9 +47,19 @@ enum Mode {
 }
 
 impl Mode {
-    fn of(lines: &[String]) -> Mode {
-        let screen = lines.iter().rev().take(6).map(|l| l.to_lowercase()).collect::<Vec<_>>().join("\n");
-        if screen.contains("bypass permissions on") {
+    /// The mode Claude Code's footer, the lines under its input box, shows. `None` without one:
+    /// every mode draws a line there ("manual mode on" included), but a short pane leaves it out
+    /// or cuts the screen off at the input itself, and a starting Claude Code has no input box yet.
+    fn of(lines: &[String]) -> Option<Mode> {
+        let bottom_border = lines.iter().rposition(|line| line.trim_start().starts_with("───"))?;
+        let footer = &lines[bottom_border + 1..];
+        let first = footer.iter().map(|line| line.trim()).find(|line| !line.is_empty())?;
+        // Under the box's top border: the input, not the footer.
+        if first.starts_with('❯') || first.starts_with('>') {
+            return None;
+        }
+        let screen = footer.iter().map(|l| l.to_lowercase()).collect::<Vec<_>>().join("\n");
+        Some(if screen.contains("bypass permissions on") {
             Mode::Bypass
         } else if screen.contains("accept edits on") {
             Mode::Edits
@@ -59,7 +69,7 @@ impl Mode {
             Mode::Auto
         } else {
             Mode::Ask
-        }
+        })
     }
 
     /// What the remote apps are told.
@@ -144,6 +154,19 @@ impl Workbench {
         self.chats.get(&pane.entity_id()).is_some_and(|state| state.plain && state.first_load.is_none() && self.chat_in_front(state, cx))
     }
 
+    /// Claude Code's mode in `pane`: what its footer shows, or while a short pane cuts the footer
+    /// off, what it showed last.
+    fn footer_mode(&self, pane: &Pane, lines: &[String]) -> Option<Mode> {
+        let mut known = self.footer_modes.borrow_mut();
+        match Mode::of(lines) {
+            Some(mode) => {
+                known.insert(pane.entity_id(), mode);
+                Some(mode)
+            }
+            None => known.get(&pane.entity_id()).copied(),
+        }
+    }
+
     fn live(&self, state: &ChatState, cx: &App) -> Live {
         self.live_of(&state.lead, state.earlier_tool.as_ref(), cx)
     }
@@ -205,7 +228,7 @@ impl Workbench {
             },
             question_detail: held.map(|(_, body)| body).unwrap_or_default(),
             // A prompt covers the footer the mode is read from: not shown rather than shown wrong.
-            mode: (agent == agentty_bridge::model::Agent::Claude && !waits).then(|| Mode::of(&lines)),
+            mode: (agent == agentty_bridge::model::Agent::Claude && !waits).then(|| self.footer_mode(pane, &lines)).flatten(),
             effort: effort_of(&lines).or_else(|| footer.and_then(|(_, effort)| effort)),
             folder: view.display_cwd(),
             branch: view.git_branch.clone(),
@@ -2282,8 +2305,27 @@ mod tests {
     #[test]
     fn the_mode_is_read_off_the_footer() {
         let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(Mode::of(&lines(&["> ", "  ⏵⏵ accept edits on (shift+tab to cycle)"])), Mode::Edits);
-        assert_eq!(Mode::of(&lines(&["> ", "  ⏸ plan mode on (shift+tab to cycle)"])), Mode::Plan);
-        assert_eq!(Mode::of(&lines(&["> ", "  ? for shortcuts"])), Mode::Ask);
+        let box_ = |footer: &str| lines(&["───────────", "❯\u{a0}", "───────────", footer]);
+        assert_eq!(Mode::of(&box_("  ⏵⏵ accept edits on (shift+tab to cycle)")), Some(Mode::Edits));
+        assert_eq!(Mode::of(&box_("  ⏸ plan mode on (shift+tab to cycle)")), Some(Mode::Plan));
+        assert_eq!(Mode::of(&box_("  ⏵⏵ auto mode on (shift+tab to cycle)")), Some(Mode::Auto));
+        assert_eq!(Mode::of(&box_("  ⏸ manual mode on")), Some(Mode::Ask));
+        assert_eq!(Mode::of(&box_("  ? for shortcuts")), Some(Mode::Ask));
+        // Only the footer counts, not what the conversation above the box says.
+        let quoted = lines(&["⏺ auto mode on means no prompts", "───────────", "❯\u{a0}", "───────────", "  ⏸ plan mode on"]);
+        assert_eq!(Mode::of(&quoted), Some(Mode::Plan));
+    }
+
+    #[test]
+    fn no_footer_says_no_mode() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // What Claude Code draws in a pane a few rows high: the input box, nothing under it.
+        let short = lines(&["▎ Using Opus 5.5", "───────────", "❯\u{a0}Try \"fix typecheck errors\"", "────────"]);
+        assert_eq!(Mode::of(&short), None);
+        // Cut off under the input: the box's top border is the last one.
+        let at_input = lines(&["▎ Using Opus 5.5", "  ◐ medium · /effort", "───────────", "❯\u{a0}Try \"how does <filepath> work?\""]);
+        assert_eq!(Mode::of(&at_input), None);
+        // Starting: no input box yet.
+        assert_eq!(Mode::of(&lines(&[" ▐▛███▜▌   Claude Code v2.1.322", "▎ Using Opus 5.5"])), None);
     }
 }

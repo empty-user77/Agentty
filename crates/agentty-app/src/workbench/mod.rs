@@ -523,6 +523,8 @@ pub struct Workbench {
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
     /// Last laid-out bounds of each pane (responsive headers, file drops).
     pane_bounds: Rc<RefCell<HashMap<EntityId, Bounds<Pixels>>>>,
+    /// The mode each Claude Code pane's footer showed last, for while a short pane cuts it off.
+    footer_modes: RefCell<HashMap<EntityId, chat::FooterMode>>,
     /// Split pane shown enlarged (focus view).
     zoomed: Option<Pane>,
     flow: flow::FlowState,
@@ -987,6 +989,7 @@ impl Workbench {
             split_drag: None,
             split_bounds: Rc::default(),
             pane_bounds: Rc::default(),
+            footer_modes: RefCell::default(),
             zoomed: None,
             flow: flow::FlowState::default(),
             usage: None,
@@ -1519,6 +1522,7 @@ impl Workbench {
         }
         self.pane_subscriptions.remove(&pane.entity_id());
         self.pane_bounds.borrow_mut().remove(&pane.entity_id());
+        self.footer_modes.borrow_mut().remove(&pane.entity_id());
         if self.zoomed.as_ref() == Some(pane) {
             self.zoomed = None;
         }
