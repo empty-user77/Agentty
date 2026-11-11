@@ -182,6 +182,9 @@ pub enum SocketMessage {
     /// `worktree\t{"cwd":…,"label":…}` from `agentty worktree-for` (an agent typed into a shell);
     /// answered on `reply`.
     Worktree(WorktreeRequest),
+    /// `account\t{"label":…}` from `agentty account-for` (an agent typed into a shell): which login it
+    /// starts on, when its agent has more than one; answered on `reply` once the user picked.
+    Account(AccountRequest),
     /// `tasks\t{"cwd":…,"tasks":[…]}` from `agentty tasks`: an agent asks to start work in parallel
     /// sessions; answered on `reply` once the user said yes or no.
     Tasks(TasksRequest),
@@ -273,6 +276,18 @@ pub struct WorktreeRequest {
     /// `claude` or `codex`: folder name and branch suffix of the tree.
     pub label: String,
     /// One JSON line, as [`browser_reply`] makes it: the tree's path, or `null` to stay put.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// `agentty account-for`: an agent typed into a shell pane asks which login it starts on.
+#[derive(Debug, Clone)]
+pub struct AccountRequest {
+    /// The pane the connection belongs to.
+    pub pane: u64,
+    /// `claude` or `codex`.
+    pub label: String,
+    /// One JSON line, as [`browser_reply`] makes it: `{"asking":true}` while the user is asked, then
+    /// `{"env":[…]}` (the words `env` takes) or `{"cancel":true}`; `null` to start as typed.
     pub reply: std::sync::mpsc::Sender<String>,
 }
 
@@ -667,6 +682,36 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
             continue;
         }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("account\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let label = request["label"].as_str().unwrap_or_default();
+            if !is_agent_label(label) {
+                if let Some(writer) = writer.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(writer, "{}", browser_reply(Err("bad request".into())));
+                }
+                continue;
+            }
+            let (reply, answer) = std::sync::mpsc::channel();
+            if tx.unbounded_send(SocketMessage::Account(AccountRequest { pane, label: label.to_string(), reply })).is_err() {
+                return;
+            }
+            // The first answer says at once whether the user is asked; the pick then takes up to
+            // `ACCOUNT_WAIT` (the question closes then).
+            let mut wait = Duration::from_secs(5);
+            loop {
+                let response = answer.recv_timeout(wait).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
+                if let Some(writer) = writer.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(writer, "{response}");
+                }
+                if !is_asking(&response) {
+                    break;
+                }
+                wait = ACCOUNT_WAIT + Duration::from_secs(5);
+            }
+            continue;
+        }
         if let (Some(json), Some(pane)) = (line.strip_prefix("tasks\t"), pane) {
             let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
             let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
@@ -807,6 +852,14 @@ pub fn is_agent_label(label: &str) -> bool {
 /// and the dialog closes.
 pub const ASK_WAIT: Duration = Duration::from_secs(30);
 
+/// How long an agent typed into a shell waits for the user to pick its login. Without an answer by
+/// then the question closes and the agent starts on the pane's login.
+pub const ACCOUNT_WAIT: Duration = Duration::from_secs(120);
+
+/// The exit status of `agentty account-for` when the user closed the question: the agent does not
+/// start. Any other failure starts it as typed.
+pub const ACCOUNT_CLOSED: i32 = 10;
+
 /// How long creating a working tree may take (`git worktree add`).
 const TREE_WAIT: Duration = Duration::from_secs(30);
 
@@ -857,6 +910,69 @@ pub fn worktree_for(args: &[String]) -> i32 {
     0
 }
 
+/// `agentty account-for <claude|codex>`: run by the shell wrappers right before an agent starts in a
+/// pane. When the agent has more than one login, Agentty asks which one, and this prints the words
+/// `env` takes to start the agent on it (`-u NAME` and `NAME=value`), one per line. Exits
+/// [`ACCOUNT_CLOSED`] when the user closed the question (the agent does not start), 0 otherwise —
+/// quietly on errors, so the agent starts as typed.
+pub fn account_for(args: &[String]) -> i32 {
+    use std::io::Write;
+    let (Some(label), Ok(socket)) = (args.first(), std::env::var("AGENTTY_SOCKET")) else { return 0 };
+    if !is_agent_label(label) {
+        return 0;
+    }
+    let Ok(mut stream) = crate::ipc::connect(&socket) else { return 0 };
+    let request = serde_json::json!({ "label": label });
+    if writeln!(stream, "account\t{request}").is_err() {
+        return 0;
+    }
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let _ = reader.read_line(&mut line);
+    let mut reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    if reply["result"]["asking"] == true {
+        let _ = reader.get_ref().set_read_timeout(Some(ACCOUNT_WAIT + Duration::from_secs(10)));
+        line.clear();
+        let _ = reader.read_line(&mut line);
+        reply = serde_json::from_str(line.trim()).unwrap_or_default();
+    }
+    if reply["result"]["cancel"] == true {
+        return ACCOUNT_CLOSED;
+    }
+    for word in env_words(&reply["result"]["env"]) {
+        println!("{word}");
+    }
+    0
+}
+
+/// The words of an `account` answer, keeping only what `env` reads as an option or an assignment:
+/// nothing that could start another program.
+fn env_words(value: &serde_json::Value) -> Vec<String> {
+    let words: Vec<&str> = value.as_array().map(|a| a.iter().filter_map(|w| w.as_str()).collect()).unwrap_or_default();
+    let name_ok = |name: &str| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit())
+    };
+    // `env` reads options only before the first assignment: every `-u` goes first.
+    let (mut unset, mut set) = (Vec::new(), Vec::new());
+    let mut words = words.into_iter();
+    while let Some(word) = words.next() {
+        if word == "-u" {
+            match words.next() {
+                Some(name) if name_ok(name) => unset.extend(["-u".to_string(), name.to_string()]),
+                _ => return Vec::new(),
+            }
+        } else if word.split_once('=').is_some_and(|(name, value)| name_ok(name) && !value.contains('\n')) {
+            set.push(word.to_string());
+        } else {
+            return Vec::new();
+        }
+    }
+    unset.extend(set);
+    unset
+}
+
 /// `agentty notify <message>`: posts a notification for the pane this command runs in.
 pub fn send_notify(message: &str) -> anyhow::Result<()> {
     use std::io::Write;
@@ -904,6 +1020,18 @@ pub fn forward_signal(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_account_answer_only_sets_and_unsets_variables() {
+        let answer = serde_json::json!(["CLAUDE_CONFIG_DIR=/tmp/example accounts/a1", "-u", "ANTHROPIC_API_KEY"]);
+        assert_eq!(super::env_words(&answer), ["-u", "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR=/tmp/example accounts/a1"]);
+        // Anything `env` would run, or read as another option, refuses the whole answer.
+        assert!(super::env_words(&serde_json::json!(["/bin/sh"])).is_empty());
+        assert!(super::env_words(&serde_json::json!(["-i"])).is_empty());
+        assert!(super::env_words(&serde_json::json!(["-u", "-i"])).is_empty());
+        assert!(super::env_words(&serde_json::json!(["A B=1"])).is_empty());
+        assert!(super::env_words(&serde_json::Value::Null).is_empty());
+    }
+
     #[test]
     fn a_question_to_the_user_is_told_apart_from_the_answer() {
         // The wrapper keeps waiting after "asking", and starts the agent on anything else.

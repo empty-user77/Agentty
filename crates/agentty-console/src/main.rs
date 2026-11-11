@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "plan",
     "db",
     "worktree-for",
+    "account-for",
     "notify",
     "help",
     "--help",

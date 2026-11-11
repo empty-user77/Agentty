@@ -28,6 +28,7 @@ pub const CLI_COMMANDS: &[&str] = &[
     "plan",
     "db",
     "worktree-for",
+    "account-for",
     "notify",
 ];
 

@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Typing `claude` or `codex` into a terminal (a split pane included) asks which account to run it on when that agent
+  has more than one, the same question a new tab asks; Esc closes it without starting the agent. The pane is then
+  marked when the account is not its window's.
+- With the status bar off, a pane shown as a chat carries the account mark under its composer.
+
+### Fixed
+- In a split tab, the Chat button over an agent's terminal (and the buttons of a pane shown as a chat) could do
+  nothing when another pane of the tab drew the same button, e.g. after a tab was dropped into the split.
+
 ## [0.4.1] - 2026-11-10
 
 ### Added

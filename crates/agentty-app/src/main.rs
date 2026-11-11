@@ -608,6 +608,11 @@ fn main() {
         std::process::exit(agent_signal::worktree_for(&args[2..]));
     }
 
+    // `agentty account-for <agent>`: the shell wrappers ask which login a typed agent starts on.
+    if args.get(1).map(String::as_str) == Some("account-for") {
+        std::process::exit(agent_signal::account_for(&args[2..]));
+    }
+
     if args.get(1).map(String::as_str) == Some("notify") {
         if let Err(err) = agent_signal::send_notify(&args[2..].join(" ")) {
             eprintln!("agentty: {err:#}");
@@ -899,6 +904,17 @@ fn main() {
                             }
                             agent_signal::SocketMessage::Worktree(request) => {
                                 workbench::worktrees::answer_worktree_request(&windows, request, cx)
+                            }
+                            agent_signal::SocketMessage::Account(request) => {
+                                // The window holding the asking pane asks; without one, the agent starts as typed.
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.ask_shell_account(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Ok("null".into())));
+                                    }
+                                }
                             }
                             agent_signal::SocketMessage::Tasks(request) => {
                                 // The window holding the asking pane shows the question.
