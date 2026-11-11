@@ -77,6 +77,9 @@ impl Workbench {
         // Only a pane's connection is heard for the browser (`agent_signal::serve`), and it speaks
         // for that pane only.
         let Some(pane) = request.pane else { return send(Err("run it inside an Agentty terminal".into())) };
+        if !crate::settings::settings(cx).in_app_browser() {
+            return send(Err(super::terminal_browser::BROWSER_OFF.into()));
+        }
         match request.command.as_str() {
             "open" | "navigate" => {
                 if request.command == "navigate" && arg(0).is_none() {

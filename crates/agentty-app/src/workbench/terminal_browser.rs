@@ -130,6 +130,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
+        if !settings(cx).in_app_browser() {
+            return Err(BROWSER_OFF.into());
+        }
         if opener == Opener::User {
             // A click is the user asking to see it: a page over the window steps aside.
             self.page = None;
@@ -382,7 +385,7 @@ impl Workbench {
     /// and it is a local address, else in the default browser (as any link). Done before the next
     /// frame (a web view needs the window).
     pub(super) fn open_link_for_terminal(&mut self, pane: u64, url: String, opener: Opener, cx: &mut Context<Self>) {
-        let in_app = settings(cx).link_opener == crate::settings::LinkOpener::InApp
+        let in_app = settings(cx).in_app_browser()
             && super::browser::is_local_url(&url)
             && crate::platform::HAS_WEBVIEW
             && crate::webview::available();
@@ -408,6 +411,9 @@ impl Workbench {
     /// hand open, the panel shows the browser of the terminal in front, the browsers of closed
     /// terminals close, and each tab keeps its own responsive size.
     pub(super) fn sync_terminal_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !settings(cx).in_app_browser() {
+            self.shut_in_app_browser(window, cx);
+        }
         for (pane, url, opener) in std::mem::take(&mut self.terminal_links) {
             if let Err(err) = self.open_terminal_tab(pane, Some(url), opener, window, cx) {
                 eprintln!("agentty: could not open a page for terminal {pane}: {err}");
@@ -439,6 +445,28 @@ impl Workbench {
         self.close_orphaned_terminal_browsers(window, cx);
         remove_closed_profiles();
         self.sync_tab_viewports(cx);
+    }
+
+    /// Links were set to open in the external browser: every page of the in-app browser closes
+    /// (the user's, the terminals' kept out of sight) except plugins' own.
+    fn shut_in_app_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_links.clear();
+        let kept: Vec<u64> = self.pane_browsers.keys().copied().collect();
+        for pane in kept {
+            if let Some(browser) = self.pane_browsers.remove(&pane) {
+                browser.tabs.into_iter().for_each(drop_terminal_tab);
+            }
+        }
+        let mut changed = keep_plugin_pages(&mut self.stashed_browser);
+        if keep_plugin_pages(&mut self.browser) {
+            changed = true;
+            if self.browser.is_none() {
+                crate::webview::focus_gpui_view(window);
+            }
+        }
+        if changed {
+            cx.notify();
+        }
     }
 
     fn close_orphaned_terminal_browsers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -560,6 +588,27 @@ impl Workbench {
 }
 
 /// A terminal's tab going away: its page, and its own cookies when it had some.
+/// What an agent hears when the user turned the in-app browser off.
+pub(super) const BROWSER_OFF: &str = "the in-app browser is off: Agentty is set to open links in the external browser (Settings → Browser)";
+
+/// Closes the pages in `slot` that are not a plugin's; a panel left without pages goes. Returns
+/// whether anything closed.
+fn keep_plugin_pages(slot: &mut Option<BrowserPanel>) -> bool {
+    let Some(browser) = slot.as_mut() else { return false };
+    if browser.tabs.iter().all(|tab| tab.owner.is_some()) && !browser.tabs.is_empty() {
+        return false;
+    }
+    let (plugins, others): (Vec<_>, Vec<_>) = std::mem::take(&mut browser.tabs).into_iter().partition(|tab| tab.owner.is_some());
+    others.into_iter().for_each(drop_terminal_tab);
+    if plugins.is_empty() {
+        *slot = None;
+    } else {
+        browser.tabs = plugins;
+        browser.active = browser.active.min(browser.tabs.len() - 1);
+    }
+    true
+}
+
 pub(super) fn drop_terminal_tab(tab: BrowserTab) {
     let profile = tab.profile;
     drop(tab);

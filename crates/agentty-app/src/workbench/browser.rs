@@ -9,7 +9,7 @@
 
 use super::Workbench;
 use crate::i18n::{t, tf};
-use crate::settings::{settings, LinkOpener};
+use crate::settings::settings;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_only, icon_only_sized, Tooltip, TypeScale};
@@ -372,7 +372,7 @@ impl Workbench {
     /// at — a dev server, a local page, a file — and its own address bar still loads anything the
     /// user types there on purpose.
     pub(super) fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
-        let in_app = settings(cx).link_opener == LinkOpener::InApp && is_local_url(&url);
+        let in_app = settings(cx).in_app_browser() && is_local_url(&url);
         if in_app {
             self.open_browser(Some(url), cx);
         } else {
@@ -408,12 +408,16 @@ impl Workbench {
             self.focus_active(window, cx);
             return cx.notify();
         }
+        // Links open in the external browser: the in-app one is off, and there is nothing to open.
+        if !settings(cx).in_app_browser() {
+            return;
+        }
         self.open_browser(None, cx);
     }
 
     /// Shows the panel (loading `url` in the tab in front). The panel is built on the next render.
     pub(super) fn open_browser(&mut self, url: Option<String>, cx: &mut Context<Self>) {
-        if !crate::platform::HAS_WEBVIEW {
+        if !crate::platform::HAS_WEBVIEW || !settings(cx).in_app_browser() {
             // No embedded browser on this platform: the default browser opens the page instead.
             return cx.open_url(&url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx)));
         }

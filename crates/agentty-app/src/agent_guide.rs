@@ -49,6 +49,14 @@ edit another worktree by its path from where you are: Agentty shows each pane's 
 from where the session is, and refuses such an edit until you have switched. Never stop Agentty processes by name (`pkill agentty`): other \
 sessions depend on them. Talk to the user in the language they use.";
 
+/// [`GUIDE`] without the in-app browser, for when the user turned it off (links open in the
+/// external browser).
+fn guide_without_browser() -> String {
+    let start = GUIDE.find("- `agentty browser ...`").expect("the guide names the browser");
+    let end = GUIDE.find("- `agentty db ...`").expect("the guide names the databases");
+    format!("{}{}", &GUIDE[..start], &GUIDE[end..])
+}
+
 const SKILL_TASKS: &str = "\
 ---
 name: agentty-parallel-tasks
@@ -97,8 +105,9 @@ pub fn dir() -> PathBuf {
     agentty_bridge::fsutil::data_dir().join("agent-guide")
 }
 
+/// The guide for a new agent: without the in-app browser while the user has it off.
 pub fn guide_file() -> PathBuf {
-    dir().join("guide.md")
+    dir().join(if crate::settings::in_app_browser_enabled() { "guide.md" } else { "guide-no-browser.md" })
 }
 
 pub fn plugin_dir() -> PathBuf {
@@ -115,6 +124,7 @@ fn write_in(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(plugin.join(".claude-plugin"))?;
     std::fs::create_dir_all(plugin.join("skills").join("agentty-parallel-tasks"))?;
     write_if_changed(&dir.join("guide.md"), GUIDE)?;
+    write_if_changed(&dir.join("guide-no-browser.md"), &guide_without_browser())?;
     write_if_changed(&plugin.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)?;
     write_if_changed(&plugin.join("skills").join("agentty-parallel-tasks").join("SKILL.md"), SKILL_TASKS)?;
     Ok(())
@@ -150,7 +160,7 @@ pub fn codex_override() -> Option<String> {
     if !enabled() || user_codex_instructions() {
         return None;
     }
-    Some(codex_value(GUIDE))
+    Some(if crate::settings::in_app_browser_enabled() { codex_value(GUIDE) } else { codex_value(&guide_without_browser()) })
 }
 
 /// `developer_instructions="…"`: a TOML basic string (JSON string escapes are valid TOML ones).
@@ -186,6 +196,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         write_in(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("guide.md")).unwrap(), GUIDE);
+        let without = std::fs::read_to_string(dir.join("guide-no-browser.md")).unwrap();
+        assert!(!without.contains("agentty browser") && without.contains("`agentty db ...`") && without.contains("`agentty tasks`"));
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("claude-plugin/.claude-plugin/plugin.json")).unwrap()).unwrap();
         assert_eq!(manifest["name"], "agentty");

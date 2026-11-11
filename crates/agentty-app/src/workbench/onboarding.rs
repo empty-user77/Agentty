@@ -81,12 +81,17 @@ struct Guide {
 }
 
 impl Task {
-    fn all() -> Vec<Task> {
+    fn all(cx: &gpui::App) -> Vec<Task> {
+        Self::list(crate::settings::settings(cx).in_app_browser())
+    }
+
+    /// The tasks, with the browser's only while the in-app browser is on (links open in it).
+    fn list(browser: bool) -> Vec<Task> {
         let mut tasks = vec![Task::Split, Task::Flow];
         if crate::platform::HAS_MINI_MODE {
             tasks.push(Task::Mini);
         }
-        if crate::platform::HAS_WEBVIEW {
+        if crate::platform::HAS_WEBVIEW && browser {
             tasks.push(Task::Browser);
         }
         tasks.push(Task::Files);
@@ -294,7 +299,7 @@ impl Workbench {
     pub(super) fn open_onboarding(&mut self, cx: &mut Context<Self>) {
         self.page = None;
         self.onboarding =
-            Some(Onboarding { step: Step::Appearance, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
+            Some(Onboarding { step: Step::Appearance, current: Task::all(cx)[0], progress: HashMap::new(), seen: HashSet::new() });
         cx.notify();
     }
 
@@ -410,14 +415,14 @@ impl Workbench {
             "do" => self.onboarding_do_step(window, cx),
             "finish" => self.finish_onboarding(window, cx),
             "next" => {
-                let next = self.onboarding.as_ref().and_then(|o| Task::all().into_iter().find(|t| !o.finished(*t)));
+                let next = self.onboarding.as_ref().and_then(|o| Task::all(cx).into_iter().find(|t| !o.finished(*t)));
                 if let Some(next) = next {
                     self.onboarding_go(next, cx);
                 }
             }
             // A task by name (`tour files`): straight to it, whatever is finished.
             name => {
-                if let Some(task) = Task::all().into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(name)) {
+                if let Some(task) = Task::all(cx).into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(name)) {
                     self.open_onboarding(cx);
                     self.go_to(Step::Tour, cx);
                     self.onboarding_go(task, cx);
@@ -430,7 +435,7 @@ impl Workbench {
                 "current": format!("{:?}", o.current),
                 "step": o.progress.get(&o.current).copied().unwrap_or(0),
                 "of": o.current.guide().steps.len(),
-                "finished": Task::all().into_iter().filter(|t| o.finished(*t)).map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "finished": Task::all(cx).into_iter().filter(|t| o.finished(*t)).map(|t| format!("{t:?}")).collect::<Vec<_>>(),
                 "ring": self.tour_target(),
             }),
             None => serde_json::json!(null),
@@ -479,7 +484,7 @@ impl Workbench {
 
     /// The tour card: bottom left, clear of the browser and the panels docked at the right.
     fn render_onboarding_tour(&self, onboarding: &Onboarding, cx: &mut Context<Self>) -> AnyElement {
-        let tasks = Task::all();
+        let tasks = Task::all(cx);
         let task = onboarding.current;
         let guide = task.guide();
         let position = tasks.iter().position(|t| *t == task).unwrap_or(0);
@@ -722,7 +727,8 @@ mod tests {
 
     #[test]
     fn every_task_is_a_set_of_steps_that_can_be_followed() {
-        let tasks = Task::all();
+        assert!(!Task::list(false).contains(&Task::Browser));
+        let tasks = Task::list(true);
         let unique: std::collections::HashSet<_> = tasks.iter().collect();
         assert_eq!(unique.len(), tasks.len());
         assert_eq!(tasks[0], Task::Split);
