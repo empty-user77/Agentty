@@ -2078,9 +2078,85 @@ impl Workbench {
                 .child(div().flex_1().min_h_0().child(self.render_pane(pane, split, active, cx)))
                 .into_any_element()
         } else {
-            self.render_chat_body(state, working, last_tool, &workers, cx)
+            self.render_team_reading(pane, state, self.render_chat_body(state, working, last_tool, &workers, cx), cx)
         };
         Some(div().size_full().flex().flex_col().bg(hex(Chrome::EDITOR)).child(header).child(body).into_any_element())
+    }
+
+    /// A team chat's conversation, as a plain chat's: a press on its text starts a selection and
+    /// takes the keyboard there (⌘C copies it, typing goes on in the composer); a click elsewhere
+    /// drops it and gives the keyboard back to the composer.
+    fn render_team_reading(&self, pane: &Pane, state: &ChatState, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        let id = pane.entity_id();
+        let target = pane.clone();
+        // Typing while text is selected goes to the composer, an input method's too.
+        let typed = state.input.as_ref().map(|(input, _)| input.clone());
+        let reading = state.reading.clone();
+        div()
+            .id(SharedString::from(format!("team-chat-{}", id.as_u64())))
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .relative()
+            .key_context("ChatReading")
+            .track_focus(&state.reading)
+            .on_action(cx.listener(|this, _: &crate::workbench::CopyChatSelection, _, cx| {
+                if let Some(text) = selectable::selected_text() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    this.show_toast(t(cx, "chat.copied"), cx);
+                }
+            }))
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseUpEvent, window, cx| {
+                    this.selection_ended(id, event.position, cx);
+                    if selectable::selected_text().is_none() {
+                        selectable::clear();
+                        // Nothing selected: the keyboard goes back to the composer (unless the
+                        // press was in the composer itself, which already has it).
+                        if let Some(state) = this.chats.get(&id) {
+                            if state.reading.is_focused(window) {
+                                if let Some((input, _)) = state.input.as_ref() {
+                                    window.focus(&gpui::Focusable::focus_handle(input, cx));
+                                }
+                            }
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| this.selection_menu(id, event.position, cx)),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _: &gpui::MouseDownEvent, window, cx| {
+                    this.mark_active(&target, cx);
+                    this.chat_select = None;
+                    if selectable::take_press() {
+                        if let Some(state) = this.chats.get(&target.entity_id()) {
+                            window.focus(&state.reading);
+                        }
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |area, _, window, cx| {
+                        if let Some(input) = typed {
+                            window.handle_input(&reading, gpui::ElementInputHandler::new(area, input), cx);
+                        }
+                    },
+                )
+                .absolute()
+                .size_0(),
+            )
+            .child(body)
+            .into_any_element()
     }
 
     fn render_chat_body(
@@ -2872,29 +2948,27 @@ fn lead_block(text: &str, cx: &App) -> AnyElement {
     out.into_any_element()
 }
 
-/// Text with a little Markdown: headings stand out, code blocks are monospaced.
+/// Text with a little Markdown: headings stand out, code blocks are monospaced. Every line is
+/// selectable, as a plain chat's text is (dragged over, across lines and messages, copied with ⌘C).
 fn text_block(text: &str, color: u32) -> gpui::Div {
     let mut out = div().flex().flex_col().gap_0p5().t_body().text_color(hex(color));
     let mut code = false;
+    let line_text = |line: String| selectable::selectable(if line.is_empty() { " ".to_string() } else { line }, Vec::new());
     for line in text.lines().take(600) {
         if line.trim_start().starts_with("```") {
             code = !code;
             continue;
         }
         let line_div = if code {
-            div().px_2().bg(hex(Chrome::PANEL)).font_family("JetBrains Mono").t_small().child(if line.is_empty() {
-                " ".to_string()
-            } else {
-                line.to_string()
-            })
+            div().px_2().bg(hex(Chrome::PANEL)).font_family("JetBrains Mono").t_small().child(line_text(line.to_string()))
         } else if let Some(heading) = line.strip_prefix('#') {
             div()
                 .pt_1()
                 .font_weight(crate::theme::EMPHASIS)
                 .text_color(hex(Chrome::BRIGHT))
-                .child(heading.trim_start_matches('#').trim().to_string())
+                .child(line_text(heading.trim_start_matches('#').trim().to_string()))
         } else {
-            div().child(if line.is_empty() { " ".to_string() } else { line.replace("**", "") })
+            div().child(line_text(line.replace("**", "")))
         };
         out = out.child(line_div);
     }
