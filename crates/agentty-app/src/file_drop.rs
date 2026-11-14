@@ -201,7 +201,7 @@ pub fn install(ns_window: Id) {
             replace(
                 sel!(performDragOperation:),
                 std::mem::transmute::<extern "C" fn(&Object, Sel, Id) -> BOOL, objc::runtime::Imp>(perform_drag_operation),
-                "c@:@",
+                crate::native::BOOL_OF_OBJECT.to_str().unwrap_or_default(),
             );
         });
         let types: Id = msg_send![class!(NSMutableArray), array];
