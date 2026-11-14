@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows
   shortcuts show them that way, and they follow a switch of layout.
 - Shortcuts written with Shift and a symbol work again in the file editor on macOS: ⌥⇧⌘[ / ⌥⇧⌘] (fold / unfold
   every region), ⇧⌘\ (matching bracket) and ⌃⇧- (navigate forward).
+- ⇧⌘G in the file editor's find bar goes to the previous match instead of opening Git.
 - Windows: a Ctrl+Alt shortcut no longer takes a character typed with AltGr on a layout Windows reports AltGr on as
   Ctrl+Alt (AltGr+B is `{` on Croatian, which toggled the files panel).
 

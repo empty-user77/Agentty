@@ -20,6 +20,8 @@ actions!(code_editor, [FindNext, FindPrevious, FindReplace, ToggleCase, ToggleWo
 
 /// The bar's own key context: steps work while typing in it, and the editor's keys don't.
 const CONTEXT: &str = "EditorFind";
+/// A field of the bar.
+const FIELD: &str = "EditorFind > TextInput";
 
 /// Matches counted and highlighted at most: past this a query is too common to step through, and
 /// a huge file stays responsive while typing.
@@ -30,12 +32,15 @@ pub type Match = (Pos, Pos);
 
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
-    // ⇧⌘G opens Git everywhere else: only the bar takes it over.
+    // ⇧⌘G opens Git everywhere else: only the bar takes it over. Its fields are text inputs, one
+    // context deeper than the bar, and gpui ranks the window's context-free ⇧⌘G as deep as the
+    // innermost context: bound on the field itself, the bar's (registered later) wins the tie.
     crate::bind(
         cx,
         [
             key("cmd-g", FindNext, Some(CONTEXT)),
             key("cmd-shift-g", FindPrevious, Some(CONTEXT)),
+            key("cmd-shift-g", FindPrevious, Some(FIELD)),
             key("cmd-g", FindNext, Some(super::CONTEXT)),
             // F3 and ⇧F3 as well: off the Mac ⌘G and ⇧⌘G become Ctrl+Shift+G and Ctrl+Alt+Shift+G
             // in the bar, which nobody guesses.
