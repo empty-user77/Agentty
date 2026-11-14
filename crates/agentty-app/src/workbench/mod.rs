@@ -565,6 +565,10 @@ pub struct Workbench {
     tab_menu: Option<tab_menu::TabMenu>,
     /// A right-click menu took the keyboard (see `render`): it goes back to the active pane after.
     menu_has_keyboard: bool,
+    /// A page took the keyboard from a pane it covers (see `render`), and whether one showed at the
+    /// last render.
+    page_has_keyboard: bool,
+    page_was_shown: bool,
     /// A file tab's right-click menu: which tab, and where.
     file_tab_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
     /// The tab under the pointer (no line beside it in the strip).
@@ -1018,6 +1022,8 @@ impl Workbench {
             updates: update::Updates::default(),
             tab_menu: None,
             menu_has_keyboard: false,
+            page_has_keyboard: false,
+            page_was_shown: false,
             file_tab_menu: None,
             tab_hover: None,
             todo_menu: None,
@@ -3555,6 +3561,22 @@ impl Render for Workbench {
         } else if std::mem::take(&mut self.menu_has_keyboard) && self.focus_handle.is_focused(window) {
             self.focus_active(window, cx);
         }
+        // A page (Monitoring, AgentGit, Settings, ...) drawn over the panes: whatever had the
+        // keyboard there (a terminal, a chat's composer, the session search) is no longer in the
+        // window's tree, and gpui then finds no action from it, so every shortcut and menu item
+        // stopped working until a click. The workbench takes the keyboard while that is so, and
+        // the active pane gets it back when the page goes. `contains_focused` reads the frame
+        // drawn last, so this looks from the page's second frame on (asked for below).
+        let page_shown = self.page.is_some();
+        if page_shown && !self.page_was_shown {
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        } else if page_shown && !self.focus_handle.contains_focused(window, cx) {
+            window.focus(&self.focus_handle, cx);
+            self.page_has_keyboard = true;
+        } else if !page_shown && std::mem::take(&mut self.page_has_keyboard) && self.focus_handle.is_focused(window) {
+            self.focus_active(window, cx);
+        }
+        self.page_was_shown = page_shown;
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
