@@ -11,6 +11,11 @@ verdict for the maintainer, not a merge.
 
 ## Rules
 
+- **Review only problems this pull request's changes cause.** A finding must be something the diff
+  introduces or breaks — compare against `origin/main` and show that the problem does not exist
+  there. Behavior that already existed before the pull request is not a finding, even when the
+  change now reaches it on one more path; leave it out of the report's findings (mention it to the
+  user separately only if it matters).
 - **Read, never run, until the review is done.** Fetch the head into a ref; do not check it out in
   the main folder. Building runs code (`build.rs`, proc macros, dependencies, tests, npm scripts), so
   build or test only after step 4 found nothing that executes at build or test time, and only in a
@@ -170,6 +175,8 @@ verdict for the maintainer, not a merge.
 - Anything else that worries you, said plainly.
 
 ## Report
+
+Before writing, drop every finding that is not caused by this pull request's changes (see Rules).
 
 Lead with the verdict, then the findings, then what was checked.
 
