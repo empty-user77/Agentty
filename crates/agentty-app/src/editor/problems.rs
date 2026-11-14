@@ -18,7 +18,7 @@ actions!(code_editor, [NextProblem, PreviousProblem]);
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     let c = Some(super::CONTEXT);
-    cx.bind_keys([key("f8", NextProblem, c), key("shift-f8", PreviousProblem, c)]);
+    crate::bind(cx, [key("f8", NextProblem, c), key("shift-f8", PreviousProblem, c)]);
 }
 
 /// How often the editor looks for new reports and for a pause in typing.

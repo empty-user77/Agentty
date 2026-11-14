@@ -5273,7 +5273,7 @@ impl Workbench {
                     .detach();
                 }
             }
-            "click" | "post-click" | "move" | "scroll" | "key" | "text" | "press" | "drag-to" | "release" => {
+            "click" | "post-click" | "move" | "scroll" | "key" | "rawkey" | "text" | "press" | "drag-to" | "release" => {
                 let (command, argument) = (command.to_string(), argument.to_string());
                 if let Some(ns) = crate::native::ns_window(window) {
                     cx.spawn(async move |_, _| crate::debug::synthetic_input(ns, &command, &argument)).detach();

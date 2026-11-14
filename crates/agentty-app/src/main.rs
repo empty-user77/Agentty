@@ -39,6 +39,7 @@ mod i18n;
 mod idea_view;
 mod instance;
 mod ipc;
+mod keyboard_layout;
 mod keymap;
 mod launch;
 mod metrics;
@@ -431,87 +432,120 @@ pub fn key<A: gpui::Action>(keys: &str, action: A, context: Option<&str>) -> Key
     KeyBinding::new(&keymap::binding(keys, context), action, context)
 }
 
+/// Shortcuts follow the keyboard layout (keys macOS moves ⌘ shortcuts to, AltGr keys left free on
+/// Windows), and so do the menus that show them: everything is bound again for a new layout.
+fn follow_keyboard_layout(cx: &mut App) {
+    if !keyboard_layout::refresh(cx) {
+        return;
+    }
+    cx.clear_key_bindings();
+    bind_keys(cx);
+    set_app_menus(cx);
+    cx.refresh_windows();
+}
+
+/// Binds shortcuts made with [`key`] as the active keyboard layout needs them: without those that
+/// would take a character it types ([`keymap::takes_typed_character`]), and with the form gpui
+/// reports a shifted symbol in ([`keymap::typed_twin`]). Every binding goes through here, and they
+/// are all bound again when the layout changes.
+pub fn bind(cx: &mut App, bindings: impl IntoIterator<Item = KeyBinding>) {
+    let mut bound = Vec::new();
+    for binding in bindings {
+        if keymap::takes_typed_character(&binding) {
+            continue;
+        }
+        let twin = keymap::typed_twin(&binding);
+        // The written form first: the menus show the first binding of an action (⇧⌘[, not ⌘{).
+        bound.push(binding);
+        bound.extend(twin);
+    }
+    cx.bind_keys(bound);
+}
+
 fn bind_keys(cx: &mut App) {
     use workbench::*;
-    cx.bind_keys([
-        key("cmd-q", Quit, None),
-        key("cmd-shift-n", NewWindow, None),
-        key("cmd-t", NewTerminalTab, None),
-        key("alt-cmd-c", NewClaudeTab, None),
-        key("alt-cmd-x", NewCodexTab, None),
-        // ⌘N: a new tab where you are; in the workspace list, a new workspace.
-        key("cmd-n", NewTerminalTab, None),
-        key("cmd-n", NewWorkspace, Some("Sidebar")),
-        key("cmd-w", ClosePane, None),
-        key("cmd-shift-w", CloseTab, None),
-        key("cmd-d", SplitRight, None),
-        key("cmd-shift-d", SplitDown, None),
-        key("cmd-]", NextPane, None),
-        key("cmd-[", PreviousPane, None),
-        key("cmd-shift-]", NextTab, None),
-        key("cmd-shift-[", PreviousTab, None),
-        key("ctrl-tab", NextTab, None),
-        key("ctrl-shift-tab", PreviousTab, None),
-        key("cmd-alt-down", NextWorkspace, None),
-        key("cmd-alt-up", PreviousWorkspace, None),
-        key("cmd-b", ToggleSidebar, None),
-        key("cmd-shift-e", ShowWorkspaces, None),
-        key("cmd-shift-s", ShowSessions, None),
-        key("cmd-shift-f", OpenFlow, None),
-        key("cmd-alt-u", OpenUsage, None),
-        key("cmd-,", OpenSettings, None),
-        key("cmd-shift-x", OpenExtensions, None),
-        key("cmd-shift-g", OpenGit, None),
-        key("ctrl-cmd-m", ToggleMini, None),
-        key("cmd-shift-b", ToggleBrowser, None),
-        key("cmd-shift-r", HardReloadBrowser, None),
-        key("cmd-alt-b", ToggleFiles, None),
-        key("cmd-p", GoToFile, None),
-        key("cmd-f", FindInTerminal, None),
-        key("cmd-=", ZoomIn, None),
-        key("cmd-+", ZoomIn, None),
-        key("cmd--", ZoomOut, None),
-        key("cmd-0", ZoomReset, None),
-        key("cmd-shift-u", JumpToUnread, None),
-        key("cmd-shift-p", OpenPalette, None),
-        key("cmd-shift-enter", ToggleZoom, None),
-        key("cmd-shift-j", ToggleChatView, None),
-        key("cmd-shift-o", SearchSessions, None),
-        key("ctrl-1", GoToTab1, None),
-        key("ctrl-2", GoToTab2, None),
-        key("ctrl-3", GoToTab3, None),
-        key("ctrl-4", GoToTab4, None),
-        key("ctrl-5", GoToTab5, None),
-        key("ctrl-6", GoToTab6, None),
-        key("ctrl-7", GoToTab7, None),
-        key("ctrl-8", GoToTab8, None),
-        key("ctrl-9", GoToTab9, None),
-        key("cmd-1", GoToWorkspace1, None),
-        key("cmd-2", GoToWorkspace2, None),
-        key("cmd-3", GoToWorkspace3, None),
-        key("cmd-4", GoToWorkspace4, None),
-        key("cmd-5", GoToWorkspace5, None),
-        key("cmd-6", GoToWorkspace6, None),
-        key("cmd-7", GoToWorkspace7, None),
-        key("cmd-8", GoToWorkspace8, None),
-        key("cmd-9", GoToWorkspace9, None),
-        key("cmd-enter", git_view::CommitChanges, Some("GitView")),
-        key("cmd-p", git_view::RemoteAction, Some("GitView")),
-        key("cmd-shift-t", git_view::Fetch, Some("GitView")),
-        key("cmd-r", git_view::Refresh, Some("GitView")),
-        key("cmd-c", terminal::Copy, Some("Terminal")),
-        key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
-        key("cmd-c", workbench::diff_body::DiffCopy, Some(workbench::diff_body::CONTEXT)),
-        key("cmd-a", workbench::diff_body::DiffSelectAll, Some(workbench::diff_body::CONTEXT)),
-        key("cmd-k", workbench::diff_body::DiffAsk, Some(workbench::diff_body::CONTEXT)),
-        key("escape", workbench::diff_body::DiffClear, Some(workbench::diff_body::CONTEXT)),
-        key("cmd-v", terminal::Paste, Some("Terminal")),
-        key("cmd-k", terminal::Clear, Some("Terminal")),
-        key("cmd-a", terminal::SelectAll, Some("Terminal")),
-    ]);
+    crate::bind(
+        cx,
+        [
+            key("cmd-q", Quit, None),
+            key("cmd-shift-n", NewWindow, None),
+            key("cmd-t", NewTerminalTab, None),
+            key("alt-cmd-c", NewClaudeTab, None),
+            key("alt-cmd-x", NewCodexTab, None),
+            // ⌘N: a new tab where you are; in the workspace list, a new workspace.
+            key("cmd-n", NewTerminalTab, None),
+            key("cmd-n", NewWorkspace, Some("Sidebar")),
+            key("cmd-w", ClosePane, None),
+            key("cmd-shift-w", CloseTab, None),
+            key("cmd-d", SplitRight, None),
+            key("cmd-shift-d", SplitDown, None),
+            key("cmd-]", NextPane, None),
+            key("cmd-[", PreviousPane, None),
+            key("cmd-shift-]", NextTab, None),
+            key("cmd-shift-[", PreviousTab, None),
+            key("ctrl-tab", NextTab, None),
+            key("ctrl-shift-tab", PreviousTab, None),
+            key("cmd-alt-down", NextWorkspace, None),
+            key("cmd-alt-up", PreviousWorkspace, None),
+            key("cmd-b", ToggleSidebar, None),
+            key("cmd-shift-e", ShowWorkspaces, None),
+            key("cmd-shift-s", ShowSessions, None),
+            key("cmd-shift-f", OpenFlow, None),
+            key("cmd-alt-u", OpenUsage, None),
+            key("cmd-,", OpenSettings, None),
+            key("cmd-shift-x", OpenExtensions, None),
+            key("cmd-shift-g", OpenGit, None),
+            key("ctrl-cmd-m", ToggleMini, None),
+            key("cmd-shift-b", ToggleBrowser, None),
+            key("cmd-shift-r", HardReloadBrowser, None),
+            key("cmd-alt-b", ToggleFiles, None),
+            key("cmd-p", GoToFile, None),
+            key("cmd-f", FindInTerminal, None),
+            key("cmd-=", ZoomIn, None),
+            key("cmd-+", ZoomIn, None),
+            key("cmd--", ZoomOut, None),
+            key("cmd-0", ZoomReset, None),
+            key("cmd-shift-u", JumpToUnread, None),
+            key("cmd-shift-p", OpenPalette, None),
+            key("cmd-shift-enter", ToggleZoom, None),
+            key("cmd-shift-j", ToggleChatView, None),
+            key("cmd-shift-o", SearchSessions, None),
+            key("ctrl-1", GoToTab1, None),
+            key("ctrl-2", GoToTab2, None),
+            key("ctrl-3", GoToTab3, None),
+            key("ctrl-4", GoToTab4, None),
+            key("ctrl-5", GoToTab5, None),
+            key("ctrl-6", GoToTab6, None),
+            key("ctrl-7", GoToTab7, None),
+            key("ctrl-8", GoToTab8, None),
+            key("ctrl-9", GoToTab9, None),
+            key("cmd-1", GoToWorkspace1, None),
+            key("cmd-2", GoToWorkspace2, None),
+            key("cmd-3", GoToWorkspace3, None),
+            key("cmd-4", GoToWorkspace4, None),
+            key("cmd-5", GoToWorkspace5, None),
+            key("cmd-6", GoToWorkspace6, None),
+            key("cmd-7", GoToWorkspace7, None),
+            key("cmd-8", GoToWorkspace8, None),
+            key("cmd-9", GoToWorkspace9, None),
+            key("cmd-enter", git_view::CommitChanges, Some("GitView")),
+            key("cmd-p", git_view::RemoteAction, Some("GitView")),
+            key("cmd-shift-t", git_view::Fetch, Some("GitView")),
+            key("cmd-r", git_view::Refresh, Some("GitView")),
+            key("cmd-c", terminal::Copy, Some("Terminal")),
+            key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
+            key("cmd-c", workbench::diff_body::DiffCopy, Some(workbench::diff_body::CONTEXT)),
+            key("cmd-a", workbench::diff_body::DiffSelectAll, Some(workbench::diff_body::CONTEXT)),
+            key("cmd-k", workbench::diff_body::DiffAsk, Some(workbench::diff_body::CONTEXT)),
+            key("escape", workbench::diff_body::DiffClear, Some(workbench::diff_body::CONTEXT)),
+            key("cmd-v", terminal::Paste, Some("Terminal")),
+            key("cmd-k", terminal::Clear, Some("Terminal")),
+            key("cmd-a", terminal::SelectAll, Some("Terminal")),
+        ],
+    );
     // Voice input records on macOS only; elsewhere ⇧⌘M would translate onto mini mode's chord.
     if workbench::voice_input_available() {
-        cx.bind_keys([key("cmd-shift-m", ToggleVoiceInput, None)]);
+        crate::bind(cx, [key("cmd-shift-m", ToggleVoiceInput, None)]);
     }
     text_input::bind_keys(cx);
     editor::bind_keys(cx);
@@ -758,9 +792,23 @@ fn main() {
             }
         })
         .detach();
+        keyboard_layout::refresh(cx);
         bind_keys(cx);
         register_app_actions(cx);
         set_app_menus(cx);
+        cx.on_keyboard_layout_change(|cx| {
+            follow_keyboard_layout(cx);
+            // gpui can read the layout before the system has finished switching, and then not
+            // again: look once more shortly after, and have it read the layout again if so.
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                if cx.update(|cx| keyboard_layout::read_too_early(cx)).unwrap_or(false) {
+                    keyboard_layout::read_again();
+                }
+            })
+            .detach();
+        })
+        .detach();
 
         let Some(_) = open_window(0, cx) else {
             eprintln!("agentty: failed to open the window");
