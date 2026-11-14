@@ -44,6 +44,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format
         run: cargo fmt --all -- --check
+      # Settings → About → Open source lists every crate the app links on macOS, Windows and Linux.
+      - name: Open source list is current
+        run: python3 scripts/third-party-licenses.py --list --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The app without on-device voice (no whisper.cpp, no cmake needed): reuses the dependencies the

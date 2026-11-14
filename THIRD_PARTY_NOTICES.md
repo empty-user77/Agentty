@@ -1,6 +1,8 @@
 # Third-Party Notices
 
 Agentty is licensed under Apache-2.0. It bundles or links the following components under their own licenses.
+The app lists every one of them, every crate included, under Settings → About → Open source
+(`crates/agentty-app/assets/licenses/open-source.tsv`, written by `scripts/third-party-licenses.py --list`).
 
 ## Bundled fonts (`crates/agentty-app/assets/fonts/`)
 

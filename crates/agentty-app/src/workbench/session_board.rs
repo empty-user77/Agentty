@@ -538,15 +538,15 @@ impl Workbench {
                 None => div().into_any_element(),
             },
             Some(Thread::Run(id)) => self.render_run_workflow(id, cx),
-            None => div().p_6().child(hint(t(cx, "sessions.no_agents"))).into_any_element(),
+            None => self.render_board_empty(cx),
         };
+        let mono = self.session_board.selected.is_some();
         div()
             .size_full()
             .flex()
-            .font_family(MONO)
             .child(threads)
             .child(self.render_threads_splitter(cx))
-            .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body))
+            .child(div().flex_1().min_w_0().h_full().overflow_hidden().when(mono, |d| d.font_family(MONO)).child(body))
             .into_any_element()
     }
 
@@ -629,8 +629,35 @@ impl Workbench {
                         .children(sub.map(|s| div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(s))),
                 )
         };
-        let heading =
-            |key: &'static str, cx: &gpui::App| div().px_2().pt_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, key));
+        let heading = |icon_name: &'static str, key: &'static str, count: usize, cx: &gpui::App| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .pt_3()
+                .pb_1()
+                .child(icon(icon_name, 12., hex(Chrome::MUTED)))
+                .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(t(cx, key)))
+                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(count.to_string()))
+        };
+        // An empty group: a dashed box, so the space reads as "nothing here yet" rather than as text.
+        let empty = |id: &'static str, icon_name: &'static str, label: SharedString| {
+            div()
+                .id(id)
+                .mx_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .border_dashed()
+                .border_color(hex(Chrome::BORDER))
+                .child(icon(icon_name, 13., hex(Chrome::MUTED)))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(label))
+        };
         let mut list = div()
             .id("session-threads")
             .w(px(self.threads_width(cx)))
@@ -643,10 +670,17 @@ impl Workbench {
             .gap_0p5();
 
         if on {
-            list = list.child(heading("orch.list", cx));
+            list = list.child(heading("orbit", "orch.list", self.session_board.shown(on).len(), cx));
         }
         if on && self.session_board.shown(on).is_empty() {
-            list = list.child(div().px_2().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "orch.list_empty")));
+            // Nothing to list yet: the first one starts from here.
+            list = list.child(
+                empty("orch-list-new", "plus", t(cx, "orch.new").into()).cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER))).on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group: None }, window, cx)
+                    }),
+                ),
+            );
         }
         for record in self.session_board.shown(on).iter().rev() {
             let id = record.id;
@@ -687,9 +721,9 @@ impl Workbench {
             );
         }
 
-        list = list.child(heading("sessions.threads", cx));
+        list = list.child(heading("bot", "sessions.threads", sessions.len(), cx));
         if sessions.is_empty() {
-            list = list.child(div().px_2().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "sessions.no_agents_short")));
+            list = list.child(empty("sessions-list-empty", "moon", t(cx, "sessions.no_agents_short").into()));
         }
         for pane in sessions {
             let view = pane.read(cx);
@@ -717,7 +751,7 @@ impl Workbench {
             );
         }
         if !self.session_board.runs.is_empty() {
-            list = list.child(heading("sessions.runs", cx));
+            list = list.child(heading("columns-2", "sessions.runs", self.session_board.runs.len(), cx));
             for run in self.session_board.runs.iter().rev() {
                 let id = run.id;
                 let (done, all) = self.run_progress(run, cx);
@@ -738,6 +772,45 @@ impl Workbench {
             }
         }
         list.into_any_element()
+    }
+
+    /// Nothing picked (no orchestration and no running session): what shows here, and how to start.
+    fn render_board_empty(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = crate::settings::settings(cx).orchestration;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .p_6()
+            .child(icon("orbit", 28., hex(Chrome::MUTED)))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "sessions.empty_title")))
+            .child(div().max_w(px(420.)).text_center().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sessions.no_agents")))
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .gap_2()
+                    .when(on, |d| {
+                        d.child(crate::ui::action_button_with_icon(
+                            "board-empty-orchestration",
+                            "orbit",
+                            t(cx, "orch.new"),
+                            cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group: None }, window, cx)
+                            }),
+                        ))
+                    })
+                    .child(crate::ui::action_button_with_icon(
+                        "board-empty-claude",
+                        "plus",
+                        t(cx, "new.claude"),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.launch_agent_tab("claude", window, cx)),
+                    )),
+            )
+            .into_any_element()
     }
 
     /// An orchestration whose terminal is closed: its goal, its stage, Resume (or Open) and Delete.

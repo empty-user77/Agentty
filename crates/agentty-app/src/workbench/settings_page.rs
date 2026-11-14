@@ -64,6 +64,8 @@ pub enum SettingsSection {
     /// Helper tools on Windows / Linux (hidden on macOS).
     System,
     About,
+    /// About → Open source: everything Agentty is built with and its licenses (not in the sidebar).
+    OpenSource,
 }
 
 impl SettingsSection {
@@ -112,6 +114,7 @@ impl SettingsSection {
             Self::Backup => "settings.backup",
             Self::System => "settings.system",
             Self::About => "settings.about",
+            Self::OpenSource => "settings.open_source",
         }
     }
 
@@ -135,6 +138,7 @@ impl SettingsSection {
             Self::Backup => "history",
             Self::System => "wrench",
             Self::About => "info",
+            Self::OpenSource => "file-text",
         }
     }
 
@@ -159,6 +163,7 @@ impl SettingsSection {
             Self::Backup => "settings.desc.backup",
             Self::System => "settings.desc.system",
             Self::About => "settings.desc.about",
+            Self::OpenSource => "settings.desc.open_source",
         }
     }
 }
@@ -1133,6 +1138,11 @@ impl Workbench {
                             }))
                             .child(link("about-releases", t(cx, "update.notes").into(), "https://github.com/empty-user77/Agentty/releases"))
                             .child(link("about-license", "Apache-2.0".into(), "https://www.apache.org/licenses/LICENSE-2.0"))
+                            .child(action_button(
+                                "about-open-source",
+                                t(cx, "settings.open_source"),
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings_section(SettingsSection::OpenSource, cx)),
+                            ))
                             .child(link("about-privacy", t(cx, "legal.privacy").into(), super::update::PRIVACY_URL))
                             .child(link("about-terms", t(cx, "legal.terms").into(), super::update::TERMS_URL))
                             .child(link("about-eula", t(cx, "legal.eula").into(), super::update::EULA_URL))
@@ -2083,13 +2093,14 @@ impl Workbench {
             SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),
+            SettingsSection::OpenSource => self.render_open_source(cx).into_any_element(),
             SettingsSection::Ai => self.render_ai_settings(cx).into_any_element(),
             SettingsSection::Agents => self.render_agents_settings(cx).into_any_element(),
             SettingsSection::Integrations => self.render_integrations(window, cx).into_any_element(),
         }
     }
 
-    pub(super) fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         start_settings_frame();
         let section_id = self.settings_section;
         SCROLL.with(|s| *s.borrow_mut() = Some(self.settings_scroll.clone()));
@@ -2097,40 +2108,66 @@ impl Workbench {
         let content = self.settings_content(section_id, window, cx);
         let nav = self.render_settings_nav(section_id, window, cx);
         let scroll = self.settings_scroll.clone();
-        div().size_full().flex().bg(hex(Chrome::EDITOR)).child(nav).child(
-            div().relative().group(crate::ui::SCROLL_GROUP).flex_1().min_w_0().h_full().child(crate::ui::scrollbar(scroll.clone())).child(
-                div().id("settings-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
+        let title = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .pb_5()
+            .mb_6()
+            .border_b_1()
+            .border_color(hex(Chrome::BORDER))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, section_id.label())))
+            .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, section_id.description())));
+        if section_id == SettingsSection::OpenSource {
+            // Hundreds of lines: the list scrolls on its own and draws only what is in view.
+            let column = || div().w_full().max_w(px(860.)).px_8();
+            return div()
+                .size_full()
+                .flex()
+                .bg(hex(Chrome::EDITOR))
+                .child(nav)
+                .child(
                     div()
-                        .relative()
-                        .max_w(px(860.))
-                        .px_8()
-                        .pt_8()
-                        .pb_10()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
                         .flex()
                         .flex_col()
-                        .child(measure_settings_column())
-                        .child(
+                        .child(column().pt_8().flex_shrink_0().child(title).child(content))
+                        .child(column().flex_1().min_h_0().pb_6().child(super::open_source::open_source_list().size_full())),
+                )
+                .into_any_element();
+        }
+        div()
+            .size_full()
+            .flex()
+            .bg(hex(Chrome::EDITOR))
+            .child(nav)
+            .child(
+                div()
+                    .relative()
+                    .group(crate::ui::SCROLL_GROUP)
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(crate::ui::scrollbar(scroll.clone()))
+                    .child(
+                        div().id("settings-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
                             div()
+                                .relative()
+                                .max_w(px(860.))
+                                .px_8()
+                                .pt_8()
+                                .pb_10()
                                 .flex()
                                 .flex_col()
-                                .gap_1()
-                                .pb_5()
-                                .mb_6()
-                                .border_b_1()
-                                .border_color(hex(Chrome::BORDER))
-                                .child(
-                                    div()
-                                        .t_heading()
-                                        .font_weight(crate::theme::EMPHASIS)
-                                        .text_color(hex(Chrome::BRIGHT))
-                                        .child(t(cx, section_id.label())),
-                                )
-                                .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, section_id.description()))),
-                        )
-                        .child(content),
-                ),
-            ),
-        )
+                                .child(measure_settings_column())
+                                .child(title)
+                                .child(content),
+                        ),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Opens a section from outside the page (a link on another page, a notice).
@@ -2325,7 +2362,8 @@ impl Workbench {
                     .child(t(cx, group)),
             );
             for section in shown {
-                let active = section == section_id;
+                // The open source page is part of About.
+                let active = section == section_id || (section == SettingsSection::About && section_id == SettingsSection::OpenSource);
                 nav = nav.child(
                     item(
                         SharedString::from(format!("settings-nav-{section:?}")),

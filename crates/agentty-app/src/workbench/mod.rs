@@ -53,6 +53,7 @@ mod notify_settings;
 mod office;
 mod onboarding;
 mod onboarding_setup;
+mod open_source;
 mod orchestration;
 
 /// The orchestration mark's colour (outside the workbench: the menu bar, the mini window).
@@ -4879,6 +4880,7 @@ impl Workbench {
                     "appearance" => settings_page::SettingsSection::Appearance,
                     "shortcuts" => settings_page::SettingsSection::Shortcuts,
                     "about" => settings_page::SettingsSection::About,
+                    "open-source" => settings_page::SettingsSection::OpenSource,
                     "browser" => settings_page::SettingsSection::Browser,
                     "project" => settings_page::SettingsSection::Project,
                     "accounts" => settings_page::SettingsSection::Accounts,
