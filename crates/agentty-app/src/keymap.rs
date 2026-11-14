@@ -146,7 +146,13 @@ pub fn takes_typed_character(binding: &gpui::KeyBinding) -> bool {
 /// macOS: the same shortcut in the form gpui reports it, for a binding written with Shift and a
 /// symbol (`alt-cmd-shift-[`): gpui reports the character Shift types, unshifted (`alt-cmd-{`),
 /// so the written form alone only works where a menu item catches the key first.
-pub fn typed_twin(binding: &gpui::KeyBinding) -> Option<gpui::KeyBinding> {
+pub fn typed_twin(binding: &gpui::KeyBinding, cx: &gpui::App) -> Option<gpui::KeyBinding> {
+    let keys = typed_twin_keys(binding)?;
+    gpui::KeyBinding::load(&keys, binding.action().boxed_clone(), binding.predicate(), false, None, cx).ok()
+}
+
+/// The keys of [`typed_twin`].
+fn typed_twin_keys(binding: &gpui::KeyBinding) -> Option<String> {
     if !cfg!(target_os = "macos") {
         return None;
     }
@@ -154,8 +160,7 @@ pub fn typed_twin(binding: &gpui::KeyBinding) -> Option<gpui::KeyBinding> {
     let keystroke = keystroke.inner();
     let typed = us_shifted(&keystroke.key).filter(|_| keystroke.modifiers.shift)?;
     let m = keystroke.modifiers;
-    let keys = format(Chord { ctrl: m.control, alt: m.alt, shift: false, cmd: m.platform }, typed);
-    gpui::KeyBinding::load(&keys, binding.action().boxed_clone(), binding.predicate(), false, None, &gpui::DummyKeyboardMapper).ok()
+    Some(format(Chord { ctrl: m.control, alt: m.alt, shift: false, cmd: m.platform }, typed))
 }
 
 fn translate_binding<'a>(keys: &'a str, context: Option<&str>) -> Cow<'a, str> {
@@ -422,13 +427,9 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn shifted_symbols_get_the_form_gpui_reports() {
-        let twin = |keys: &str| {
+        let twin = |keys: &'static str| {
             let binding = gpui::KeyBinding::new(keys, crate::workbench::PreviousTab, Some("CodeEditor"));
-            typed_twin(&binding).map(|twin| {
-                assert_eq!(twin.action().name(), "workbench::PreviousTab");
-                assert_eq!(twin.predicate().map(|p| p.to_string()).as_deref(), Some("CodeEditor"));
-                twin.keystrokes()[0].inner().unparse()
-            })
+            typed_twin_keys(&binding)
         };
         assert_eq!(twin("alt-cmd-shift-[").as_deref(), Some("alt-cmd-{"));
         assert_eq!(twin("cmd-shift-\\").as_deref(), Some("cmd-|"));

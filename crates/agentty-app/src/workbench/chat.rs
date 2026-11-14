@@ -2118,7 +2118,7 @@ impl Workbench {
                         if let Some(state) = this.chats.get(&id) {
                             if state.reading.is_focused(window) {
                                 if let Some((input, _)) = state.input.as_ref() {
-                                    window.focus(&gpui::Focusable::focus_handle(input, cx));
+                                    window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
                                 }
                             }
                         }
@@ -2138,7 +2138,7 @@ impl Workbench {
                     this.chat_select = None;
                     if selectable::take_press() {
                         if let Some(state) = this.chats.get(&target.entity_id()) {
-                            window.focus(&state.reading);
+                            window.focus(&state.reading, cx);
                         }
                     }
                     cx.notify();

@@ -459,7 +459,7 @@ pub fn bind(cx: &mut App, bindings: impl IntoIterator<Item = KeyBinding>) {
         if keymap::takes_typed_character(&binding) {
             continue;
         }
-        let twin = keymap::typed_twin(&binding);
+        let twin = keymap::typed_twin(&binding, cx);
         // The written form first: the menus show the first binding of an action (⇧⌘[, not ⌘{).
         bound.push(binding);
         bound.extend(twin);
@@ -805,7 +805,7 @@ fn main() {
             // again: look once more shortly after, and have it read the layout again if so.
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                if cx.update(|cx| keyboard_layout::read_too_early(cx)).unwrap_or(false) {
+                if cx.update(|cx| keyboard_layout::read_too_early(cx)) {
                     keyboard_layout::read_again();
                 }
             })
