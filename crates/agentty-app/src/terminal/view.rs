@@ -3217,7 +3217,7 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
+        window.handle_input(&self.focus, super::keys_first::KeysFirst(ElementInputHandler::new(bounds, self.view.clone())), cx);
         let over_link = self.view.read(cx).hover_link.is_some();
         window.set_cursor_style(if over_link { CursorStyle::PointingHand } else { CursorStyle::IBeam }, &frame.hitbox);
 

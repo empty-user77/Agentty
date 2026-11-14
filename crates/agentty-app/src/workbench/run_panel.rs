@@ -1020,7 +1020,18 @@ impl Workbench {
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("PID {pid}"))),
             )
             .child(
-                icon_only_sized(("run-process-kill", index), "x", 22., 13., |_, _, _| {})
+                // Its own button rather than `icon_only_sized`: that one sets a hover fill already,
+                // and gpui takes one hover style per element (a second is a debug assertion).
+                div()
+                    .id(("run-process-kill", index))
+                    .flex_shrink_0()
+                    .size(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .child(icon("x", 13., hex(Chrome::FOREGROUND)))
                     .tooltip(Tooltip::text(tf(cx, "run.kill", &[("port", &first.to_string())]), None))
                     .when(stopping, |d| d.opacity(0.4))
                     .when(!stopping, |d| d.hover(|s| s.bg(hex_alpha(Chrome::ERROR, 0.35))))
