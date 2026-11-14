@@ -43,6 +43,7 @@ Before every commit and push: stage the change in its own command, run the `secu
 
 - Commit or push only when the user explicitly asks. Conventional commit messages (`feat:`, `fix:`, …).
 - Never force-push or rewrite history without explicit approval.
+- A contributed pull request is reviewed with the `pr-review` skill (`.claude/skills/pr-review`) before it is merged.
 - Work that goes on its own branch goes in its own worktree, branched from the project's default branch (`origin/HEAD`,
   usually `main`) — not from whatever branch the main folder has checked out — unless the user asks for another base.
 
