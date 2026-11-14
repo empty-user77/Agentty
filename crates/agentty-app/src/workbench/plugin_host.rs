@@ -581,7 +581,7 @@ impl Workbench {
         });
         cx.spawn(async move |_, cx| {
             let result = task.await;
-            let _ = cx.update(|cx| match result {
+            cx.update(|cx| match result {
                 Ok((id, session_cwd, turns)) => {
                     let skip = turns.len().saturating_sub(max_turns);
                     let list: Vec<Value> = turns[skip..]
@@ -1028,7 +1028,7 @@ impl Workbench {
             if let Err(error) = &result {
                 eprintln!("agentty: html-video failed: {error}");
             }
-            let _ = cx.update(|cx| call.reply(result.map_err(|e| (codes::INVALID_PARAMS, e)), cx));
+            cx.update(|cx| call.reply(result.map_err(|e| (codes::INVALID_PARAMS, e)), cx));
         })
         .detach();
     }

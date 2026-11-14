@@ -542,7 +542,7 @@ pub(super) fn highlighted(label: &str, element: impl IntoElement) -> gpui::AnyEl
             let viewport = handle.bounds();
             let offset = handle.offset();
             let mut target = offset.y - (bounds.origin.y - viewport.origin.y) + px(140.);
-            let max = handle.max_offset().height;
+            let max = handle.max_offset().y;
             if max > px(0.) {
                 target = target.max(-max);
             }
@@ -1256,7 +1256,7 @@ impl Workbench {
         let field = div()
             .flex_1()
             .min_w_0()
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx)))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx))
             .flex()
             .px_2()
             .py_1()
@@ -1411,7 +1411,7 @@ impl Workbench {
                 .flex_1()
                 .min_w_0()
                 // The whole box focuses the field (the text element alone can be narrower than the box).
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx)))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx))
                 .flex()
                 .px_2()
                 .py_1()
@@ -1513,7 +1513,7 @@ impl Workbench {
                         let _ = std::fs::copy(path, dir.join(name));
                     }
                 }
-                let _ = cx.update(reload_themes);
+                cx.update(reload_themes);
             }
         })
         .detach();

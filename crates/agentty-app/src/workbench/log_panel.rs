@@ -905,7 +905,7 @@ impl Workbench {
             .child(
                 div()
                     .w(px(300.))
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w(px(140.))
                     .h(px(24.))
                     .px_2()

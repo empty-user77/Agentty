@@ -214,7 +214,7 @@ impl CodeEditor {
         });
         input.update(cx, |input, cx| {
             input.set_text(prefix.to_string(), cx);
-            window.focus(&input.focus_handle(cx));
+            window.focus(&input.focus_handle(cx), cx);
         });
         self.picker = Some(Picker {
             input,
@@ -291,7 +291,7 @@ impl CodeEditor {
     pub fn close_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(picker) = self.picker.take() {
             picker.call_off_search();
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             if self.docs.is_empty() {
                 cx.emit(EditorEvent::Empty);
             }
@@ -476,7 +476,7 @@ impl CodeEditor {
         picker.call_off_search();
         self.picked_project = Some(picker.project.clone());
         self.picker = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         match row.target {
             Target::At { path, pos, len } => self.go_to(&path, pos, len, window, cx),
             Target::Line(line) => {
@@ -517,7 +517,7 @@ impl CodeEditor {
                     self.activate(index, window, cx);
                 }
                 self.place_cursor(pos, len, cx);
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
             }
             None => {
                 let project = self.project_root().unwrap_or_default();

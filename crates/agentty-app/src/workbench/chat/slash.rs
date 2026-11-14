@@ -125,7 +125,7 @@ impl Workbench {
         let Some((input, _)) = self.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
         let input = input.clone();
         input.update(cx, |input, cx| input.set_text(format!("{invocation} "), cx));
-        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+        window.focus(&gpui::Focusable::focus_handle(&input, cx), cx);
     }
 
     /// The list, over the composer it belongs to.

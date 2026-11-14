@@ -137,7 +137,7 @@ pub fn call(pane: u64, plugin_id: &str, tool: &str, arguments: Value, reply: Sen
     touch(cx);
     cx.spawn(async move |cx| {
         cx.background_executor().timer(CALL_TIMEOUT).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             if let Some(call) = host_mut(cx).tool_calls.remove(&request_id) {
                 super::log(&call.plugin, format!("tool {request_id} got no answer in {}s", CALL_TIMEOUT.as_secs()), cx);
                 let _ = call.reply.send(answer(Err(format!("the plugin did not answer in {}s", CALL_TIMEOUT.as_secs()))));

@@ -471,9 +471,9 @@ impl CodeEditor {
         let layout = self.layout.as_ref()?;
         let top = layout.point_at(problem.start)?;
         let (corner, at) = if f32::from(top.y - layout.corners().0.y) > 72. {
-            (gpui::Corner::BottomLeft, gpui::point(top.x, top.y - px(4.)))
+            (gpui::Anchor::BottomLeft, gpui::point(top.x, top.y - px(4.)))
         } else {
-            (gpui::Corner::TopLeft, layout.point_below(problem.start)?)
+            (gpui::Anchor::TopLeft, layout.point_below(problem.start)?)
         };
         let glyph = match problem.severity {
             Severity::Error => "circle-x",

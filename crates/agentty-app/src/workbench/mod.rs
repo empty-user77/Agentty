@@ -1502,16 +1502,16 @@ impl Workbench {
     fn focus_pane(&self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
         // A chat's lead shown as the chat: the keyboard goes to its composer.
         if let Some(input) = self.chat_input_for(pane, cx) {
-            return window.focus(&input.focus_handle(cx));
+            return window.focus(&input.focus_handle(cx), cx);
         }
         let handle = pane.read(cx).focus_handle(cx);
-        window.focus(&handle);
+        window.focus(&handle, cx);
     }
 
     pub(super) fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.active_pane() {
             Some(pane) => self.focus_pane(&pane, window, cx),
-            None => window.focus(&self.focus_handle),
+            None => window.focus(&self.focus_handle, cx),
         }
     }
 
@@ -1671,7 +1671,7 @@ impl Workbench {
         self.detect_agents(cx);
         // Tools may have been installed since: the start page's setup bar follows.
         self.run_system_check(false, cx);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -2081,7 +2081,7 @@ impl Workbench {
     /// Empties a search box (its ✕ button, or Escape in it); the list shows everything again.
     pub(super) fn clear_search(&mut self, input: &Entity<TextInput>, window: &mut Window, cx: &mut Context<Self>) {
         input.update(cx, |i, cx| i.set_text("", cx));
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -2092,7 +2092,7 @@ impl Workbench {
         if self.sessions.is_empty() {
             self.refresh_sessions(cx);
         }
-        window.focus(&self.session_search.focus_handle(cx));
+        window.focus(&self.session_search.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -2261,7 +2261,7 @@ impl Workbench {
         self.page = None;
         self.panel = SidePanel::Workspaces;
         self.sidebar_open = true;
-        window.focus(&self.workspace_search.focus_handle(cx));
+        window.focus(&self.workspace_search.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -2546,10 +2546,10 @@ impl Workbench {
         cx.spawn(async move |_, cx| {
             for _ in 0..60 {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                let ready = pane.read_with(cx, |view, _| view.live_agent.is_some()).unwrap_or(false);
+                let ready = pane.read_with(cx, |view, _| view.live_agent.is_some());
                 if ready {
                     cx.background_executor().timer(std::time::Duration::from_millis(1_200)).await;
-                    let _ = pane.update(cx, |view, cx| view.submit_prompt(command.to_string(), cx));
+                    pane.update(cx, |view, cx| view.submit_prompt(command.to_string(), cx));
                     return;
                 }
             }
@@ -2968,7 +2968,7 @@ impl Workbench {
             // closing under it sent what was picked to the terminal instead of the field.
             _ => {}
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.workspace_menu = None;
         self.rename = Some(Rename { target, input, _subscription: subscription });
         cx.notify();
@@ -3562,7 +3562,7 @@ impl Render for Workbench {
         // The onboarding card answers ⌘↩: on a fresh window nothing holds the keyboard yet, and a
         // key reaches no one without a focused element.
         if self.onboarding.as_ref().is_some_and(|o| o.is_modal()) && window.focused(cx).is_none() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         }
         self.prepare_plugins_page(window, cx);
         self.prepare_style_preview(cx);
@@ -4068,7 +4068,7 @@ impl Workbench {
             }
             _ => {}
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.new_workspace = Some((input, subscription));
         self.detect_agents(cx);
         cx.notify();
@@ -4357,7 +4357,7 @@ impl Workbench {
                     cx.spawn(async move |_, cx| {
                         // Give the agent's TUI time to start before typing.
                         cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
-                        let _ = cx.update(|cx| deliver(&pane, cx));
+                        cx.update(|cx| deliver(&pane, cx));
                     })
                     .detach();
                 }
@@ -4505,7 +4505,7 @@ impl Workbench {
                 window.refresh();
                 cx.spawn(async move |_, cx| {
                     cx.background_executor().timer(std::time::Duration::from_millis(900)).await;
-                    let _ = cx.update(|_| {
+                    cx.update(|_| {
                         if let Err(err) = crate::debug::capture_own_window(&path) {
                             eprintln!("agentty: snapshot failed: {err:#}");
                         }
@@ -4586,7 +4586,7 @@ impl Workbench {
                 let keys: Vec<String> = argument.split_whitespace().map(str::to_string).collect();
                 window.defer(cx, move |window, cx| {
                     for key in keys {
-                        match gpui::Keystroke::parse(&key) {
+                        match gpui::Keystroke::parse_with_os(&key, cx.platform_info().os) {
                             Ok(keystroke) => {
                                 let handled = window.dispatch_keystroke(keystroke, cx);
                                 eprintln!("keystroke {key}: {handled}");

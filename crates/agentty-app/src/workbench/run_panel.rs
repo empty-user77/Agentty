@@ -414,11 +414,11 @@ impl Workbench {
             subscriptions.push(cx.subscribe_in(&input, window, move |this, _, event: &TextInputEvent, window, cx| match event {
                 TextInputEvent::Confirmed => this.finish_add_run(true, window, cx),
                 TextInputEvent::Cancelled => this.finish_add_run(false, window, cx),
-                TextInputEvent::Next | TextInputEvent::Previous => window.focus(&other.focus_handle(cx)),
+                TextInputEvent::Next | TextInputEvent::Previous => window.focus(&other.focus_handle(cx), cx),
                 _ => {}
             }));
         }
-        window.focus(&command.focus_handle(cx));
+        window.focus(&command.focus_handle(cx), cx);
         self.runs.adding = Some(AddRun { root, dir, name, command, _subscriptions: subscriptions });
         cx.notify();
     }
@@ -428,7 +428,7 @@ impl Workbench {
         let command = adding.command.read(cx).text().trim().to_string();
         if save && command.is_empty() {
             // Nothing to run: the dialog stays, with the field to fill.
-            window.focus(&adding.command.focus_handle(cx));
+            window.focus(&adding.command.focus_handle(cx), cx);
             self.runs.adding = Some(adding);
             return;
         }
@@ -841,7 +841,7 @@ impl Workbench {
         let _ = window;
         Some(
             gpui::deferred(
-                gpui::anchored().anchor(gpui::Corner::BottomRight).position(position).snap_to_window_with_margin(px(8.)).child(panel),
+                gpui::anchored().anchor(gpui::Anchor::BottomRight).position(position).snap_to_window_with_margin(px(8.)).child(panel),
             )
             .with_priority(3)
             .into_any_element(),

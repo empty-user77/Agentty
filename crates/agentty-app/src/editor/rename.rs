@@ -72,7 +72,7 @@ impl CodeEditor {
 
     pub(super) fn close_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.rename.take().is_some() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }

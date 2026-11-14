@@ -1562,7 +1562,7 @@ impl Workbench {
                     move |bounds, _, window, _| {
                         // The wheel moves the chart (both ways); with ⌘ or Ctrl it zooms around the pointer.
                         let entity = entity.clone();
-                        window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                        window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, _, cx| {
                             if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&event.position) {
                                 return;
                             }
@@ -2022,7 +2022,7 @@ impl Workbench {
             .flex_col()
             .justify_end()
             .gap_0p5()
-            .on_scroll_wheel(cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(move |this, event: &gpui::ScrollEvent, window, cx| {
                 let dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
                 let board = &mut this.session_board;
                 board.feed_wheel += dy / FEED_ROW;

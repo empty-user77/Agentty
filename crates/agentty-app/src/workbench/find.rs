@@ -18,7 +18,7 @@ impl Workbench {
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pane) = self.active_pane() else { return };
         if let Some(bar) = self.find_bar.as_ref().filter(|b| b.pane == pane) {
-            window.focus(&bar.input.focus_handle(cx));
+            window.focus(&bar.input.focus_handle(cx), cx);
             return;
         }
         self.close_find(window, cx);
@@ -38,7 +38,7 @@ impl Workbench {
             }
             cx.notify();
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.find_bar = Some(FindBar { pane, input, _subscription: subscription });
         cx.notify();
     }

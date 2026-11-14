@@ -202,7 +202,7 @@ impl Workbench {
             bar = bar
                 .child(icon("history", IconSize::INLINE, hex(Chrome::BLUE)))
                 .child(crate::brand::avatar(latest.agent.id(), 16.))
-                .child(div().flex_shrink().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                .child(div().flex_shrink_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(tf(
                     cx,
                     "resume.hint",
                     &[("n", &sessions.len().to_string()), ("title", &latest.title), ("ago", &relative_time(now, latest.updated_at))],

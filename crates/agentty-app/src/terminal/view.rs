@@ -22,7 +22,7 @@ use gpui::{
     actions, div, fill, font, outline, point, prelude::*, px, relative, size, App, BorderStyle, Bounds, ClipboardItem, Context,
     CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, StrikethroughStyle, Style, Task, TextRun, UTF16Selection,
+    PaintQuad, Pixels, Point, ScrollEvent, ShapedLine, SharedString, StrikethroughStyle, Style, Task, TextRun, UTF16Selection,
     UnderlineStyle, Window,
 };
 use std::ops::Range;
@@ -2366,7 +2366,7 @@ impl TerminalView {
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.activate(cx);
         if crate::keymap::link_modifier(&event.modifiers) {
             if let Some(target) = self.grid_point(event.position).and_then(|(point, _)| self.link_at(point)) {
@@ -2516,7 +2516,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(layout) = self.layout else { return };
         let delta = event.delta.pixel_delta(layout.line_height).y;
         self.scroll_remainder += delta / layout.line_height;
@@ -2619,7 +2619,7 @@ impl Render for TerminalView {
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .on_scroll(cx.listener(Self::on_scroll))
             .relative()
             .child(TerminalElement { view: cx.entity(), focus: self.focus_handle.clone() })
             .children(self.render_link_hint(cx))
@@ -3225,7 +3225,7 @@ impl Element for TerminalElement {
                     window.paint_quad(quad);
                 }
                 for (origin, line) in &frame.lines {
-                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                    let _ = line.paint(*origin, frame.line_height, gpui::TextAlign::Left, None, window, cx);
                 }
                 for quad in frame.decorations.drain(..) {
                     window.paint_quad(quad);
@@ -3234,12 +3234,12 @@ impl Element for TerminalElement {
                     window.paint_quad(cursor);
                 }
                 if let Some((origin, line)) = &frame.cursor_text {
-                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                    let _ = line.paint(*origin, frame.line_height, gpui::TextAlign::Left, None, window, cx);
                 }
                 if let Some((backdrop, glyphs)) = frame.marked.take() {
                     window.paint_quad(backdrop);
                     for (origin, line) in glyphs {
-                        let _ = line.paint(origin, frame.line_height, window, cx);
+                        let _ = line.paint(origin, frame.line_height, gpui::TextAlign::Left, None, window, cx);
                     }
                 }
             })

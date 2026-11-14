@@ -705,7 +705,7 @@ fn path_label(path: &str) -> Div {
         .flex()
         .overflow_hidden()
         .whitespace_nowrap()
-        .child(div().flex_shrink().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(dir))
+        .child(div().flex_shrink_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(dir))
         .child(div().flex_shrink_0().text_color(hex(Chrome::FOREGROUND)).child(name))
 }
 
@@ -1074,7 +1074,7 @@ impl GitView {
                             range.filter_map(|i| visible.get(i).copied()).map(|index| this.render_file_row(index, cx)).collect::<Vec<_>>()
                         }),
                     )
-                    .track_scroll(handle)
+                    .track_scroll(&handle)
                     .size_full(),
                 )
                 .group(crate::ui::SCROLL_GROUP)
@@ -1203,7 +1203,7 @@ impl GitView {
                         range.map(|i| this.render_commit_row(i, cx)).collect::<Vec<_>>()
                     }),
                 )
-                .track_scroll(handle)
+                .track_scroll(&handle)
                 .size_full(),
             )
             .group(crate::ui::SCROLL_GROUP)
@@ -1471,7 +1471,7 @@ impl Render for GitView {
                     // Clicks elsewhere give the page keyboard focus (for its shortcuts), but never take it
                     // away from a text field that just got it.
                     if !window.focused(cx).is_some_and(|f| f != this.focus_handle) {
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                     }
                 }),
             )

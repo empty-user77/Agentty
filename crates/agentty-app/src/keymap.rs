@@ -86,6 +86,24 @@ fn translate(chord: Chord, key: &str, text_field: bool) -> Chord {
 }
 
 /// The keystroke string to bind on this platform for a binding written for macOS.
+/// [`binding`] for gpui's `KeyBinding::new`, which takes `&'static str`. A translated binding
+/// is kept for the life of the app; each distinct one is stored once.
+pub fn static_binding(keys: &'static str, context: Option<&str>) -> &'static str {
+    match binding(keys, context) {
+        Cow::Borrowed(keys) => keys,
+        Cow::Owned(translated) => {
+            static SEEN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+            let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(known) = seen.iter().find(|known| **known == translated) {
+                return known;
+            }
+            let leaked: &'static str = Box::leak(translated.into_boxed_str());
+            seen.push(leaked);
+            leaked
+        }
+    }
+}
+
 pub fn binding<'a>(keys: &'a str, context: Option<&str>) -> Cow<'a, str> {
     if cfg!(target_os = "macos") {
         return Cow::Borrowed(keys);

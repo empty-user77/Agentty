@@ -152,7 +152,7 @@ impl CodeEditor {
     /// Closes the bar; the match that was selected stays selected, in the editor that has focus again.
     pub fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.find.take().is_some() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }

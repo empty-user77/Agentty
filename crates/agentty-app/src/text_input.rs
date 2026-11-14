@@ -394,7 +394,7 @@ impl TextInput {
 
     /// Gives this field the keyboard and selects what is in it (⌘L in the browser's address bar).
     pub fn focus_and_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.selected_range = 0..self.content.len();
         cx.notify();
     }
@@ -517,7 +517,7 @@ impl TextInput {
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -972,7 +972,7 @@ impl TextElement {
             let lines = std::mem::take(&mut prepaint.lines);
             for (index, (_, line)) in lines.iter().enumerate() {
                 let origin = point(bounds.origin.x, bounds.origin.y + line_height * index as f32);
-                let _ = line.paint(origin, line_height, window, cx);
+                let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
             }
             let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
             if caret {
@@ -988,7 +988,7 @@ impl TextElement {
         }
         let Some(line) = prepaint.line.take() else { return };
         let scroll = self.input.read(cx).scroll_x;
-        let _ = line.paint(point(bounds.origin.x - scroll, bounds.origin.y), line_height, window, cx);
+        let _ = line.paint(point(bounds.origin.x - scroll, bounds.origin.y), line_height, gpui::TextAlign::Left, None, window, cx);
         let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
         if caret {
             if let Some(cursor) = prepaint.cursor.take() {
@@ -1208,7 +1208,7 @@ impl TextInput {
             MenuAction::Paste => self.paste(&Paste, window, cx),
             MenuAction::SelectAll => self.select_all(&SelectAll, window, cx),
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 }
@@ -1283,7 +1283,7 @@ impl Render for TextInput {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle);
+                    window.focus(&this.focus_handle, cx);
                     this.menu_at = Some(event.position);
                     cx.stop_propagation();
                     cx.notify();

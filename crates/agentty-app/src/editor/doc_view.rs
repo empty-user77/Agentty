@@ -75,7 +75,7 @@ impl CodeEditor {
         let rows = (wide + 1).clamp(2, 24);
         let input = cx.new(|cx| TextInput::new(text.clone(), "", window, cx).composer(rows));
         input.update(cx, |input, cx| {
-            window.focus(&gpui::Focusable::focus_handle(input, cx));
+            window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
             input.select_from(text.len(), cx);
         });
         let events = cx.subscribe_in(&input, window, |this, field, event: &TextInputEvent, window, cx| match event {
@@ -91,7 +91,7 @@ impl CodeEditor {
             }
             TextInputEvent::Cancelled => {
                 this.paragraph_edit = None;
-                window.focus(&this.focus_handle);
+                window.focus(&this.focus_handle, cx);
                 cx.notify();
             }
             // Only this field's own edit: Enter has already moved on to the next paragraph's. The

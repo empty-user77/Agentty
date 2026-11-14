@@ -140,7 +140,7 @@ impl Workbench {
             }
             cx.notify();
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.palette = Some(Palette { input, items, selected: 0, _subscription: subscription });
         self.launcher_open = false;
         self.notices_open = false;

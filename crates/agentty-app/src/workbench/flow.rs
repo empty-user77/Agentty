@@ -890,7 +890,7 @@ impl Workbench {
                     move |bounds, _, window, _| {
                         // The wheel moves the view; with ⌘ or Ctrl it zooms around the pointer.
                         let entity = entity.clone();
-                        window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                        window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, _, cx| {
                             if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&event.position) {
                                 return;
                             }

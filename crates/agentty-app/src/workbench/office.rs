@@ -408,6 +408,7 @@ fn bubble(text: String, width: f32) -> gpui::Div {
                 .line_clamp(3)
                 // A hard, pixel-art shadow.
                 .shadow(vec![gpui::BoxShadow {
+                    inset: false,
                     color: shadow(0.45),
                     offset: point(px(3.), px(3.)),
                     blur_radius: px(0.),
@@ -591,6 +592,7 @@ impl Workbench {
                 .text_color(rgb(color))
                 .font_family("JetBrains Mono")
                 .shadow(vec![gpui::BoxShadow {
+                    inset: false,
                     color: glow(color, 0.25),
                     offset: point(px(0.), px(0.)),
                     blur_radius: px(8.),
@@ -621,6 +623,7 @@ impl Workbench {
                 sign(tf(cx, "office.working", &[("n", &working.to_string())]), if working > 0 { 0xf6d860 } else { LABEL_DIM }).t_caption(),
             ))
             .child(board.shadow(vec![gpui::BoxShadow {
+                inset: false,
                 color: shadow(0.4),
                 offset: point(px(3.), px(3.)),
                 blur_radius: px(0.),

@@ -18,7 +18,7 @@ IEC Power Symbols (MIT).
 
 | Crate | License |
 |---|---|
-| [gpui](https://github.com/zed-industries/zed) | Apache-2.0 |
+| [gpui](https://github.com/zed-industries/zed), as [agentty-gpui](https://github.com/empty-user77/agentty-gpui) (Zed's crates with Agentty's changes) | Apache-2.0 |
 | [alacritty_terminal](https://github.com/alacritty/alacritty) | Apache-2.0 |
 | serde, serde_json, anyhow, futures, uuid, chrono, dirs, libc, clap | MIT OR Apache-2.0 |
 | plist | MIT |

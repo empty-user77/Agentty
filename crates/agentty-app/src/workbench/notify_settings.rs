@@ -474,7 +474,7 @@ impl Workbench {
                 // The whole box focuses the field: the text element of an empty field is only as
                 // wide as its hint, so a click anywhere else in the box did nothing at all.
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                    window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+                    window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx);
                     // Otherwise the workbench behind, which tracks focus too, takes it back on the same click.
                     window.prevent_default();
                     cx.stop_propagation();

@@ -723,7 +723,7 @@ fn remove_everywhere(agent: AuthAgent, id: String, cx: &mut gpui::App) {
     });
     cx.spawn(async move |cx| {
         let result = task.await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             crate::with_active_workbench(cx, |wb, _, cx| {
                 if let Err(err) = result {
                     wb.show_toast(format!("{err:#}"), cx);
