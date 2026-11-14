@@ -563,6 +563,8 @@ pub struct Workbench {
     mini_generation: u64,
     pub updates: update::Updates,
     tab_menu: Option<tab_menu::TabMenu>,
+    /// A right-click menu took the keyboard (see `render`): it goes back to the active pane after.
+    menu_has_keyboard: bool,
     /// A file tab's right-click menu: which tab, and where.
     file_tab_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
     /// The tab under the pointer (no line beside it in the strip).
@@ -1015,6 +1017,7 @@ impl Workbench {
             mini_generation: 0,
             updates: update::Updates::default(),
             tab_menu: None,
+            menu_has_keyboard: false,
             file_tab_menu: None,
             tab_hover: None,
             todo_menu: None,
@@ -2084,6 +2087,26 @@ impl Workbench {
         input.update(cx, |i, cx| i.set_text("", cx));
         window.focus(&input.focus_handle(cx), cx);
         cx.notify();
+    }
+
+    /// Whether a right-click menu is open (workspace, tab, file tab, pane, plugin tab).
+    fn has_context_menu(&self) -> bool {
+        self.workspace_menu.is_some()
+            || self.tab_menu.is_some()
+            || self.file_tab_menu.is_some()
+            || self.pane_menu.is_some()
+            || self.plugin_tab_menu.is_some()
+    }
+
+    /// Closes whichever right-click menu is open. Whether one was.
+    fn close_context_menus(&mut self) -> bool {
+        let open = self.has_context_menu();
+        self.workspace_menu = None;
+        self.tab_menu = None;
+        self.file_tab_menu = None;
+        self.pane_menu = None;
+        self.plugin_tab_menu = None;
+        open
     }
 
     pub(super) fn focus_session_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3520,6 +3543,18 @@ impl Render for Workbench {
             crate::metrics::screen(cx, screen);
         }
         self.agent_window.viewport = window.viewport_size();
+        // While a right-click menu is open the workbench itself has the keyboard: Esc then reaches
+        // its handler and closes the menu (from a pane or a chat, their own Esc would take it, and
+        // a click on the sidebar can leave the keyboard on nothing drawn). Once the menu is gone,
+        // however it went, the keyboard goes back to the active pane.
+        if self.has_context_menu() {
+            if !self.focus_handle.is_focused(window) {
+                window.focus(&self.focus_handle, cx);
+                self.menu_has_keyboard = true;
+            }
+        } else if std::mem::take(&mut self.menu_has_keyboard) && self.focus_handle.is_focused(window) {
+            self.focus_active(window, cx);
+        }
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
@@ -3658,6 +3693,14 @@ impl Render for Workbench {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
                     // One Esc does one thing: a recording goes on until the next.
+                    return cx.stop_propagation();
+                }
+                // Esc closes an open right-click menu (and only that: the terminal under it never
+                // sees the key).
+                if event.keystroke.key == "escape" && this.close_context_menus() {
+                    this.menu_has_keyboard = false;
+                    this.focus_active(window, cx);
+                    cx.notify();
                     return cx.stop_propagation();
                 }
                 // ⌘↩ is Continue on the onboarding card.
@@ -5328,9 +5371,11 @@ impl Workbench {
                     .as_ref()
                     .map(|f| (f.keyword.focus_handle(cx).is_focused(window), f.expansion.focus_handle(cx).is_focused(window)));
                 eprintln!(
-                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={} chat={:?}",
+                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={} inside={} any={} chat={:?}",
                     self.sidebar_focus.is_focused(window),
                     self.focus_handle.is_focused(window),
+                    self.focus_handle.contains_focused(window, cx),
+                    window.focused(cx).is_some(),
                     self.chat_notify_focus(window, cx)
                 );
             }

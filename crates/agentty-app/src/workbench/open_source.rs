@@ -207,7 +207,8 @@ mod tests {
     /// (CI also runs `scripts/third-party-licenses.py --list --check`, which catches added crates).
     #[test]
     fn crates_match_the_lockfile() {
-        let lock = include_str!("../../../../Cargo.lock");
+        // A Windows checkout may have CRLF line ends.
+        let lock = include_str!("../../../../Cargo.lock").replace('\r', "");
         for component in COMPONENTS.iter().filter(|c| !c.bundled) {
             let entry = format!("name = \"{}\"\nversion = \"{}\"", component.name, component.version);
             assert!(

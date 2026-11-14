@@ -33,7 +33,8 @@ pub(super) enum Task {
     Split,
     Browser,
     Files,
-    Flow,
+    /// A team of agents: a goal, the orchestrator's plan, the workers running it wave by wave.
+    Orchestrate,
     Mini,
 }
 
@@ -45,8 +46,6 @@ pub(super) enum TourEvent {
     MiniEntered,
     MiniLeft,
     FolderOpened,
-    /// The two example cards of Session Flow were linked.
-    DemoLinked,
     /// A working tree was picked in the files panel (a real one, or one of the tour's examples).
     TreePicked,
 }
@@ -87,7 +86,7 @@ impl Task {
 
     /// The tasks, with the browser's only while the in-app browser is on (links open in it).
     fn list(browser: bool) -> Vec<Task> {
-        let mut tasks = vec![Task::Split, Task::Flow];
+        let mut tasks = vec![Task::Split, Task::Orchestrate];
         if crate::platform::HAS_MINI_MODE {
             tasks.push(Task::Mini);
         }
@@ -146,32 +145,32 @@ impl Task {
                     ),
                 ],
             },
-            Task::Flow => Guide {
+            Task::Orchestrate => Guide {
                 glyph: "orbit",
-                title: "onboarding.flow",
-                what: "onboarding.flow_what",
+                title: "onboarding.orch",
+                what: "onboarding.orch_what",
                 steps: vec![
                     step(
-                        "onboarding.flow_1",
-                        "onboarding.flow_1_done",
+                        "onboarding.orch_1",
+                        "onboarding.orch_1_done",
                         Some("⇧⌘F"),
                         Some("activity-flow"),
                         Check::State(|w| w.page == Some(Page::Flow)),
                         Some(|w, _, cx| w.open_page(Page::Flow, cx)),
                     ),
-                    // Two example cards are on the page for this step (`flow.rs`), so there is always
-                    // something to drag, and nothing real is ever sent.
+                    // An example orchestration is listed for this step (`session_board.rs`): nothing
+                    // runs, it only shows what a real one looks like.
                     step(
-                        "onboarding.flow_2",
-                        "onboarding.flow_2_done",
+                        "onboarding.orch_2",
+                        "onboarding.orch_2_done",
                         None,
-                        Some("flow-demo-handle"),
-                        Check::Event(TourEvent::DemoLinked),
-                        Some(|w, _, cx| w.flow_demo_link(super::flow::DEMO_SOURCE, super::flow::DEMO_TARGET, cx)),
+                        Some("orch-demo-row"),
+                        Check::State(|w| w.showing_demo_orchestration()),
+                        Some(|w, _, cx| w.show_demo_orchestration(cx)),
                     ),
                     step(
-                        "onboarding.flow_3",
-                        "onboarding.flow_3_done",
+                        "onboarding.orch_3",
+                        "onboarding.orch_3_done",
                         Some("⇧⌘F"),
                         Some("activity-flow"),
                         Check::State(|w| w.page != Some(Page::Flow)),
@@ -363,9 +362,22 @@ impl Workbench {
         self.onboarding.as_ref().is_some_and(|o| o.step == Step::Tour && o.current == Task::Files && !o.finished(Task::Files))
     }
 
-    /// Whether the Session Flow page shows its two example cards: only while the tour teaches it.
-    pub(super) fn tour_shows_flow_demo(&self) -> bool {
-        self.onboarding.as_ref().is_some_and(|o| o.step == Step::Tour && o.current == Task::Flow && !o.finished(Task::Flow))
+    /// Whether the orchestration page lists the tour's example orchestration: only while the tour
+    /// teaches orchestration.
+    pub(super) fn tour_shows_orchestration_demo(&self) -> bool {
+        self.onboarding.as_ref().is_some_and(|o| o.step == Step::Tour && o.current == Task::Orchestrate && !o.finished(Task::Orchestrate))
+    }
+
+    fn showing_demo_orchestration(&self) -> bool {
+        self.page == Some(Page::Flow)
+            && self.session_board.selected == Some(super::session_board::Thread::Orchestration(super::session_board::DEMO_ORCHESTRATION))
+    }
+
+    /// "Do this step for me": picks the example orchestration.
+    fn show_demo_orchestration(&mut self, cx: &mut Context<Self>) {
+        self.open_page(Page::Flow, cx);
+        self.session_board.selected = Some(super::session_board::Thread::Orchestration(super::session_board::DEMO_ORCHESTRATION));
+        cx.notify();
     }
 
     /// Element id of the control the step to do now wants pressed, for a ring around it.
