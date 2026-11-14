@@ -673,6 +673,8 @@ impl Workbench {
         panel = panel.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER))).child(
             div()
                 .id("account-manage")
+                .relative()
+                .when(self.tour_target() == Some("account-manage"), |d| d.child(crate::ui::pulse_ring("account-manage-ring", false)))
                 .px_2()
                 .py_1()
                 .rounded_md()

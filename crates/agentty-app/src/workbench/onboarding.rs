@@ -31,7 +31,8 @@ pub(super) enum Step {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum Task {
     Split,
-    Browser,
+    /// Several AIs and several logins of each: the account menu, and switching between them.
+    Accounts,
     Files,
     /// A team of agents: a goal, the orchestrator's plan, the workers running it wave by wave.
     Orchestrate,
@@ -80,19 +81,13 @@ struct Guide {
 }
 
 impl Task {
-    fn all(cx: &gpui::App) -> Vec<Task> {
-        Self::list(crate::settings::settings(cx).in_app_browser())
-    }
-
-    /// The tasks, with the browser's only while the in-app browser is on (links open in it).
-    fn list(browser: bool) -> Vec<Task> {
+    /// The tasks, in the order the tour teaches them.
+    fn all() -> Vec<Task> {
         let mut tasks = vec![Task::Split, Task::Orchestrate];
         if crate::platform::HAS_MINI_MODE {
             tasks.push(Task::Mini);
         }
-        if crate::platform::HAS_WEBVIEW && browser {
-            tasks.push(Task::Browser);
-        }
+        tasks.push(Task::Accounts);
         tasks.push(Task::Files);
         tasks
     }
@@ -197,26 +192,43 @@ impl Task {
                     step("onboarding.mini_2", "onboarding.mini_2_done", Some("⌃⌘M"), None, Check::Event(TourEvent::MiniLeft), None),
                 ],
             },
-            Task::Browser => Guide {
-                glyph: "globe",
-                title: "onboarding.browser",
-                what: "onboarding.browser_what",
+            Task::Accounts => Guide {
+                glyph: "key-round",
+                title: "onboarding.accounts",
+                what: "onboarding.accounts_what",
                 steps: vec![
                     step(
-                        "onboarding.browser_1",
-                        "onboarding.browser_1_done",
-                        Some("⇧⌘B"),
-                        Some("header-browser"),
-                        Check::State(|w| w.browser.is_some()),
-                        Some(|w, window, cx| w.toggle_browser(window, cx)),
+                        "onboarding.accounts_1",
+                        "onboarding.accounts_1_done",
+                        None,
+                        Some("activity-account"),
+                        Check::State(|w| w.account_menu_open),
+                        Some(|w, _, cx| w.toggle_account_menu(cx)),
                     ),
                     step(
-                        "onboarding.browser_2",
-                        "onboarding.browser_2_done",
-                        Some("⇧⌘B"),
-                        Some("header-browser"),
-                        Check::State(|w| w.browser.is_none()),
-                        Some(|w, window, cx| w.toggle_browser(window, cx)),
+                        "onboarding.accounts_2",
+                        "onboarding.accounts_2_done",
+                        None,
+                        Some("account-manage"),
+                        Check::State(|w| {
+                            w.page == Some(Page::Settings) && w.settings_section == super::settings_page::SettingsSection::Accounts
+                        }),
+                        Some(|w, _, cx| {
+                            w.account_menu_open = false;
+                            w.open_settings_section(super::settings_page::SettingsSection::Accounts, cx);
+                        }),
+                    ),
+                    step(
+                        "onboarding.accounts_3",
+                        "onboarding.accounts_3_done",
+                        Some("⌘W"),
+                        None,
+                        Check::State(|w| w.page != Some(Page::Settings)),
+                        Some(|w, window, cx| {
+                            w.page = None;
+                            w.focus_active(window, cx);
+                            cx.notify();
+                        }),
                     ),
                 ],
             },
@@ -298,7 +310,7 @@ impl Workbench {
     pub(super) fn open_onboarding(&mut self, cx: &mut Context<Self>) {
         self.page = None;
         self.onboarding =
-            Some(Onboarding { step: Step::Appearance, current: Task::all(cx)[0], progress: HashMap::new(), seen: HashSet::new() });
+            Some(Onboarding { step: Step::Appearance, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
         cx.notify();
     }
 
@@ -427,14 +439,14 @@ impl Workbench {
             "do" => self.onboarding_do_step(window, cx),
             "finish" => self.finish_onboarding(window, cx),
             "next" => {
-                let next = self.onboarding.as_ref().and_then(|o| Task::all(cx).into_iter().find(|t| !o.finished(*t)));
+                let next = self.onboarding.as_ref().and_then(|o| Task::all().into_iter().find(|t| !o.finished(*t)));
                 if let Some(next) = next {
                     self.onboarding_go(next, cx);
                 }
             }
             // A task by name (`tour files`): straight to it, whatever is finished.
             name => {
-                if let Some(task) = Task::all(cx).into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(name)) {
+                if let Some(task) = Task::all().into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(name)) {
                     self.open_onboarding(cx);
                     self.go_to(Step::Tour, cx);
                     self.onboarding_go(task, cx);
@@ -447,7 +459,7 @@ impl Workbench {
                 "current": format!("{:?}", o.current),
                 "step": o.progress.get(&o.current).copied().unwrap_or(0),
                 "of": o.current.guide().steps.len(),
-                "finished": Task::all(cx).into_iter().filter(|t| o.finished(*t)).map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "finished": Task::all().into_iter().filter(|t| o.finished(*t)).map(|t| format!("{t:?}")).collect::<Vec<_>>(),
                 "ring": self.tour_target(),
             }),
             None => serde_json::json!(null),
@@ -496,7 +508,7 @@ impl Workbench {
 
     /// The tour card: bottom left, clear of the browser and the panels docked at the right.
     fn render_onboarding_tour(&self, onboarding: &Onboarding, cx: &mut Context<Self>) -> AnyElement {
-        let tasks = Task::all(cx);
+        let tasks = Task::all();
         let task = onboarding.current;
         let guide = task.guide();
         let position = tasks.iter().position(|t| *t == task).unwrap_or(0);
@@ -610,7 +622,8 @@ impl Workbench {
             .absolute()
             // Right of the activity bar, and narrow enough to stay clear of the dialogs in the middle
             // of the window (the folder picker a step may open).
-            .left(px(56.))
+            // Beside the account menu while that is open (it opens at the same corner).
+            .left(px(if self.account_menu_open { 56. + super::account_menu::MENU_WIDTH + 8. } else { 56. }))
             .bottom(px(32.))
             .w(px(340.))
             .p_3()
@@ -739,8 +752,7 @@ mod tests {
 
     #[test]
     fn every_task_is_a_set_of_steps_that_can_be_followed() {
-        assert!(!Task::list(false).contains(&Task::Browser));
-        let tasks = Task::list(true);
+        let tasks = Task::all();
         let unique: std::collections::HashSet<_> = tasks.iter().collect();
         assert_eq!(unique.len(), tasks.len());
         assert_eq!(tasks[0], Task::Split);
