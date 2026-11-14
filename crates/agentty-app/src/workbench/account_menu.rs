@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 const MENU_KEY: &str = "account-menu";
 const LOGIN_POLL: Duration = Duration::from_secs(2);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const LOGIN_RECHECK: Duration = Duration::from_secs(60 * 60);
 pub(super) const MENU_WIDTH: f32 = 320.;
 
 /// One line of the menu. `id` is `None` for the agent's own login.
@@ -37,6 +38,13 @@ impl AccountRow {
     /// Signed out, or about to be: the row offers to sign in again.
     pub(super) fn needs_login(&self, now_ms: u64) -> bool {
         !self.signed_in || self.account.renew_soon(now_ms)
+    }
+
+    /// Whether the account icon should say a login wants renewing: one about to end, or an added
+    /// account that is signed out. The agents' own login signed out is left alone: a CLI the user
+    /// never logged into would keep the mark up for good.
+    pub(super) fn wants_attention(&self, now_ms: u64) -> bool {
+        self.account.renew_soon(now_ms) || (self.id.is_some() && !self.signed_in)
     }
 
     /// "Signed out" or "Login ends soon", when one applies.
@@ -370,6 +378,24 @@ impl Workbench {
             self.refresh_account_rows(cx);
         }
         cx.notify();
+    }
+
+    /// Whether any login wants renewing, for the mark on the account icon.
+    pub(super) fn login_needs_attention(&self) -> bool {
+        let now = crate::ui::now_ms();
+        self.account_rows.iter().any(|row| row.wants_attention(now))
+    }
+
+    /// Reads the logins again every hour, so the account icon's mark shows up while the app stays
+    /// open as a login nears its end.
+    pub(super) fn start_login_watch(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(LOGIN_RECHECK).await;
+            if this.update(cx, |this, cx| this.refresh_account_rows(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
     }
 
     pub(super) fn refresh_account_rows(&mut self, cx: &mut Context<Self>) {
