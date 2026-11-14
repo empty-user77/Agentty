@@ -488,6 +488,26 @@ impl Workbench {
                                     .border_color(hex(Chrome::ACTIVITY_BAR))
                                     .bg(hex(Chrome::BLUE)),
                             )
+                        })
+                        // A login that ends soon (or an added one signed out): a warning sign at
+                        // the upper right corner, on a disc of the bar's colour.
+                        .when(self.login_needs_attention(), |d| {
+                            const BADGE: f32 = 13.;
+                            let left = ACTIVITY_BAR_WIDTH / 2. + IconSize::ACTIVITY / 2. - BADGE + 3.;
+                            let top = 48. / 2. - IconSize::ACTIVITY / 2. - 3.;
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left(px(left))
+                                    .top(px(top))
+                                    .size(px(BADGE))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(hex(Chrome::ACTIVITY_BAR))
+                                    .child(icon("triangle-alert", 10., hex(Chrome::WARNING))),
+                            )
                         }),
                     )
                     .child(item(

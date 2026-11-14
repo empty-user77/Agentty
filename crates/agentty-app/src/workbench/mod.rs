@@ -1220,6 +1220,7 @@ impl Workbench {
         this.start_sync(cx);
         this.start_browser_budget(cx);
         this.start_trash_expiry(cx);
+        this.start_login_watch(cx);
         browsers_page::clear_previews();
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
@@ -3667,6 +3668,10 @@ impl Render for Workbench {
                 }
                 // A close confirmation owns the keyboard.
                 if this.close_confirm_key(event, window, cx) {
+                    return cx.stop_propagation();
+                }
+                // So does a question (new worktree or the same one, ...): Enter takes the blue answer.
+                if this.ask_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
                 // So does the side chat's: Enter opens it, Esc does not.
