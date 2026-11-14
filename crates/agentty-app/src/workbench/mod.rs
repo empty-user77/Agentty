@@ -1220,6 +1220,7 @@ impl Workbench {
         this.start_sync(cx);
         this.start_browser_budget(cx);
         this.start_trash_expiry(cx);
+        this.start_login_watch(cx);
         browsers_page::clear_previews();
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
