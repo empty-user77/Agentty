@@ -1202,7 +1202,7 @@ impl Workbench {
     }
 
     /// What the next message replies to, over the input, with a button that drops it.
-    fn render_quote(&self, state: &ChatState, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    pub(super) fn render_quote(&self, state: &ChatState, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let quote = state.quote.as_ref()?;
         let id = state.lead.entity_id();
         let first = quote.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().to_string();
