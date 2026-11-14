@@ -214,6 +214,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "759cab1d34cd3b4cf9520cc9144e0ee9155cdd59838adcd4f50f298c0b9cdc6b"
 dependencies = [
  "accesskit",
  "agentty-gpui-collections",
@@ -278,6 +280,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-apple"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b9b23f76da06f40b49e1a53b794658d2e461ec351774477060b6ad06c302e7"
 dependencies = [
  "agentty-gpui",
  "agentty-gpui-collections",
@@ -316,6 +320,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-collections"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbabf92dcf66973a274319987362c8279b5e1221a83c4d35bc86f9fb5f06da2"
 dependencies = [
  "agentty-gpui-util",
  "indexmap",
@@ -325,6 +331,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-derive-refineable"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81f791f7562e562627282aa93386bb597f6b8d11c073d037f3aa2378a4d411cf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -334,6 +342,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-http-client"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22c81c6e1ca6ccc66aa8fb9bef8db4cda4fde6116adcbeee16992f622a854ac4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -350,6 +360,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-linux"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c962fc70028a1c2f94287a87a1ca3cf254b50af904a7a94cbe0d5622093f4c78"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -393,6 +405,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-macos"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02211fee71851e3f6102300aaec9b724f8f15383dd71464b0543c099da375d48"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -432,6 +446,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f6c752942461c90f49244fdad31e2ef583a7465ce3730ef5a7a04678a2a63e6"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -442,6 +458,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-platform"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "094d7ac7919bc5b3db55f37232a3bcd1d2fcdb56271785d51ad6882ef329aad6"
 dependencies = [
  "agentty-gpui",
  "agentty-gpui-linux",
@@ -454,6 +472,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-refineable"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c17b597ef73dc896df9ea87e4f831119c49eaa6d4aa06362d4ce803a002769bd"
 dependencies = [
  "agentty-gpui-derive-refineable",
 ]
@@ -461,6 +481,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-scheduler"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c37e04c228d2044bed1313eb6d2fc0a607fbab333f99c849718b6d5b17e5285"
 dependencies = [
  "async-task",
  "backtrace",
@@ -475,6 +497,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-shared-string"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef6e48a4708aeb2d1fc0127d4b386d1b00cc47b10b93629cffbea39941194afc"
 dependencies = [
  "schemars",
  "serde",
@@ -484,6 +508,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-sum-tree"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e980deb478a68047883cb2e018352054c7d4e75c54b80f57c4c83c36b2c83a7c"
 dependencies = [
  "agentty-gpui-ztracing",
  "heapless",
@@ -494,6 +520,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-util"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fdbc11acb7e8190cc9f04327d0f2ee440e047b9c28dc9ffbd7dc82e933b5560"
 dependencies = [
  "anyhow",
  "log",
@@ -503,6 +531,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-wgpu"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6c83ec969c5d28d9436a3e7b8900eb6b7ff85645bc3580dde26ed1526a630f6"
 dependencies = [
  "agentty-gpui",
  "agentty-gpui-collections",
@@ -528,6 +558,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-windows"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dc8d9029c1063555e1ccc55e551662a54074907f636aaf0ca5c42086eba696b"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -556,6 +588,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-ztracing"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "183b9d5c34f348aa95a2ce38e1d1c30e061a8ef13230f9b04f5175de025c6270"
 dependencies = [
  "agentty-gpui-ztracing-macro",
  "tracing",
@@ -564,6 +598,8 @@ dependencies = [
 [[package]]
 name = "agentty-gpui-ztracing-macro"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "058b9be744af35282b171f35c1ec9814c54b32c7b77bedc5dc91a02f61bef59f"
 
 [[package]]
 name = "ahash"
@@ -2917,7 +2953,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -3185,7 +3221,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
