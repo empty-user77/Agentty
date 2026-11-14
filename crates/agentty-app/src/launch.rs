@@ -826,6 +826,55 @@ pub fn powershell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+/// The longest command line Windows starts a program with: 32,767 UTF-16 units with the
+/// terminating null. Past it `CreateProcess` fails with "The filename or extension is too long"
+/// (os error 206).
+#[cfg_attr(not(windows), allow(dead_code))]
+const MAX_COMMAND_LINE: usize = 32_766;
+
+/// At most how long a command line gets on Windows: every argument quoted and every `"` and `\`
+/// escaped.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn command_line_length<'a>(parts: impl IntoIterator<Item = &'a str>) -> usize {
+    parts.into_iter().map(|part| part.encode_utf16().count() + part.matches(['"', '\\']).count() + 3).sum()
+}
+
+/// An agent's arguments with a prompt too long for its own command line replaced by what `spill`
+/// returns for it (a short prompt that points to a file with the whole one). The agent is started
+/// by PowerShell with `CreateProcess`, so the same limit holds there; room is left for the
+/// program's full path and the npm shim's script that PowerShell adds.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn fit_prompt(mut args: Vec<String>, spill: impl FnOnce(&str) -> Option<String>) -> Vec<String> {
+    const ROOM: usize = 1024;
+    if command_line_length(args.iter().map(String::as_str)) + ROOM > MAX_COMMAND_LINE {
+        if let Some(last) = args.last_mut() {
+            if let Some(pointer) = spill(last) {
+                *last = pointer;
+            }
+        }
+    }
+    args
+}
+
+/// A pane script too long for `-EncodedCommand` (which spends 8 characters of the command line on
+/// every 3 of the script) saved in `dir`, and the short script that runs it: it reads the file,
+/// deletes it and runs the text in the pane's own scope, so functions and variables stay for the
+/// shell afterwards as they do with `-EncodedCommand`. It is read as text, not run as a `.ps1`:
+/// Windows PowerShell's default `Restricted` policy refuses script files, not commands.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn script_from_file(dir: &std::path::Path, script: &str) -> Option<String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(dir).ok()?;
+    let path = dir.join(format!("pane-{}-{}.txt", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::write(&path, format!("Remove-Variable __agentty_launch -ErrorAction SilentlyContinue\n{script}")).ok()?;
+    let path = powershell_quote(&path.display().to_string());
+    Some(format!(
+        "$__agentty_launch = [System.IO.File]::ReadAllText({path}, [System.Text.Encoding]::UTF8)\n\
+         Remove-Item -LiteralPath {path} -ErrorAction SilentlyContinue\n\
+         Invoke-Expression $__agentty_launch"
+    ))
+}
+
 /// Windows PowerShell 5.1 passes arguments to native programs without escaping embedded double
 /// quotes; pre-escaping them (CRT rules) makes the program see the original text. PowerShell 7.3+
 /// passes arguments correctly and gets them unchanged.
@@ -996,8 +1045,18 @@ mod windows {
         }
     }
 
-    fn encoded(program: String, script: &str) -> (String, Vec<String>) {
-        (program, vec!["-NoLogo".into(), "-NoExit".into(), "-EncodedCommand".into(), encode_powershell(script)])
+    /// PowerShell running `script`. A script too long for the command line (a long prompt next to
+    /// the shell's functions is enough) runs from a file instead.
+    pub(super) fn encoded(program: String, script: &str) -> (String, Vec<String>) {
+        let flags = ["-NoLogo", "-NoExit", "-EncodedCommand"];
+        let mut command = encode_powershell(script);
+        if super::command_line_length([program.as_str(), command.as_str()].into_iter().chain(flags)) > super::MAX_COMMAND_LINE {
+            let dir = agentty_bridge::fsutil::data_dir().join("launch");
+            if let Some(bootstrap) = super::script_from_file(&dir, script) {
+                command = encode_powershell(&bootstrap);
+            }
+        }
+        (program, flags.into_iter().map(String::from).chain([command]).collect())
     }
 
     pub fn argv(spec: &LaunchSpec, auth: &AuthSetup) -> (String, Vec<String>) {
@@ -1019,7 +1078,11 @@ mod windows {
                 Some(profile) => encoded(shell, &profile),
                 None => (shell, vec!["-NoLogo".into()]),
             },
-            Some(args) => {
+            Some(mut args) => {
+                if matches!(spec.start, Start::Prompt(_)) {
+                    let title = Some(spec.title.as_str()).filter(|t| !t.trim().is_empty());
+                    args = super::fit_prompt(args, |prompt| agentty_bridge::plugins::spill_prompt(prompt, title).ok());
+                }
                 let script = powershell_agent_script(&args, auth, is_legacy(&powershell), profile.as_deref());
                 encoded(powershell, &script)
             }
@@ -1501,7 +1564,6 @@ pub(crate) mod tests {
 
     /// PowerShell to run generated scripts with: `$AGENTTY_TEST_PWSH` or `pwsh` on PATH. Tests
     /// that need it are skipped (and say so) when there is none.
-    #[cfg(unix)]
     pub(crate) fn test_pwsh() -> Option<std::path::PathBuf> {
         std::env::var_os("AGENTTY_TEST_PWSH").map(Into::into).or_else(|| agentty_bridge::process::which("pwsh")).or_else(|| {
             eprintln!("pwsh not found: skipping PowerShell execution test");
@@ -1621,5 +1683,59 @@ pub(crate) mod tests {
         assert_eq!(node_shim("npm run '%PATH%'"), "npm run '%PATH%'");
         assert_eq!(node_shim("cargo run"), "cargo run");
         assert_eq!(node_shim("irm https://claude.ai/install.ps1 | iex"), "irm https://claude.ai/install.ps1 | iex");
+    }
+
+    #[test]
+    fn a_prompt_too_long_for_the_command_line_is_replaced() {
+        let args = |prompt: &str| vec!["claude".to_string(), "--".into(), prompt.to_string()];
+        let last = |args: Vec<String>| args.last().cloned().unwrap_or_default();
+        assert_eq!(last(fit_prompt(args("fix the tests"), |_| Some("pointer".into()))), "fix the tests");
+        assert_eq!(last(fit_prompt(args(&"x".repeat(40_000)), |p| Some(format!("read the file ({})", p.len())))), "read the file (40000)");
+        // Quotes and backslashes are escaped on the way, so they count twice.
+        assert_eq!(last(fit_prompt(args(&"\"".repeat(16_000)), |_| Some("pointer".into()))), "pointer");
+        // With nothing to replace it, the prompt stays as it was.
+        assert_eq!(last(fit_prompt(args(&"x".repeat(40_000)), |_| None)).len(), 40_000);
+    }
+
+    #[test]
+    fn command_line_length_counts_quotes_escapes_and_wide_characters() {
+        assert_eq!(command_line_length(["ab"]), 5);
+        assert_eq!(command_line_length([r#"a"b\c"#]), 10);
+        // A character outside the Basic Multilingual Plane takes two UTF-16 units.
+        assert_eq!(command_line_length(["é😀"]), 6);
+    }
+
+    /// A pane script past the command line's limit runs from a file: under Windows PowerShell's
+    /// `Restricted` policy and PowerShell 7 alike, non-ASCII text intact, its functions and
+    /// variables left for the shell, the file and the loader's variable gone.
+    #[cfg(windows)]
+    #[test]
+    fn a_pane_script_too_long_for_the_command_line_runs_from_a_file() {
+        let dir = std::env::temp_dir().join(format!("agentty-launch-test-{}", std::process::id()));
+        let script = "function Get-AgenttyProbe { 'probe' }\n$probe = 'é—' * 10000\nWrite-Output \"length=$($probe.Length)\"\n# "
+            .to_string()
+            + &"é—'\"".repeat(5_000);
+        let (_, short) = super::windows::encoded("pwsh".into(), "Write-Output hi");
+        assert_eq!(short, ["-NoLogo", "-NoExit", "-EncodedCommand", &encode_powershell("Write-Output hi")]);
+        assert!(command_line_length(["pwsh", &encode_powershell(&script)]) > MAX_COMMAND_LINE);
+        let mut shells = vec![agentty_bridge::process::windows_powershell()];
+        if let Some(pwsh) = test_pwsh() {
+            shells.push(std::process::Command::new(pwsh));
+        }
+        for mut shell in shells {
+            let bootstrap = script_from_file(&dir, &script).unwrap();
+            let check = format!(
+                "{bootstrap}\nGet-AgenttyProbe\nWrite-Output \"same=$($probe -ceq ('é—' * 10000)) left=$(Test-Path variable:__agentty_launch)\""
+            );
+            let output = shell
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Restricted", "-EncodedCommand", &encode_powershell(&check)])
+                .output()
+                .unwrap();
+            let out = String::from_utf8_lossy(&output.stdout).to_string() + &String::from_utf8_lossy(&output.stderr);
+            assert!(out.contains("length=20000"), "{out}");
+            assert!(out.contains("probe\r\nsame=True left=False") || out.contains("probe\nsame=True left=False"), "{out}");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the script file is deleted once read");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

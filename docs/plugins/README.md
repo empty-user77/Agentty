@@ -326,7 +326,8 @@ await plugin.injectPrompt({
 - Every target but `ask` goes straight through, so `prompt.inject` alone is enough to open a
   session and set an agent to work on something the user has not read. That is what an
   [AgentOS](agentos.md) is built on, and it is why the permission says so.
-- Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file.
+- Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file. On Windows so
+  is a prompt too long for the agent's command line (about 30 000 characters).
 
 Prefer `ask` for anything a user starts from another app or a link.
 

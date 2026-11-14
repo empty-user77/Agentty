@@ -268,10 +268,19 @@ pub fn spill_long_prompt(text: &str, title: Option<&str>) -> std::io::Result<Str
     if text.len() <= INLINE_PROMPT_LIMIT {
         return Ok(text.to_string());
     }
+    spill_prompt(text, title)
+}
+
+/// Writes a prompt into `~/.agentty/prompts/` (0600) and returns a short prompt pointing to it.
+pub fn spill_prompt(text: &str, title: Option<&str>) -> std::io::Result<String> {
+    // Several agents can start in the same millisecond (`agentty tasks --plan`): the counter keeps
+    // their files apart.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = crate::fsutil::data_dir().join("prompts");
     std::fs::create_dir_all(&dir)?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let path = dir.join(format!("prompt-{stamp}.md"));
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("prompt-{stamp}-{n}.md"));
     std::fs::write(&path, text)?;
     #[cfg(unix)]
     {

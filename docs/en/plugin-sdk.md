@@ -179,7 +179,8 @@ await plugin.injectPrompt({
 - `ask` (the default) shows **Send to…**, where the user sees the prompt and picks the destination.
 - `active` types into the focused pane, `pane` into `paneId`, `workspace` into `workspaceId`, and `newWorkspace` / `newTab` start a new session with the prompt.
 - Terminals only ever get the text typed in — Enter is never pressed for `injectPrompt`.
-- Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file.
+- Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file. On Windows so
+  is a prompt too long for the agent's command line (about 30 000 characters).
 
 Prefer `ask` for anything the user starts from another app or from a link.
 
