@@ -3669,6 +3669,10 @@ impl Render for Workbench {
                 if this.close_confirm_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
+                // So does a question (new worktree or the same one, ...): Enter takes the blue answer.
+                if this.ask_key(event, window, cx) {
+                    return cx.stop_propagation();
+                }
                 // So does the side chat's: Enter opens it, Esc does not.
                 if let Some(pane) = this.side_chat_confirm.clone() {
                     let m = &event.keystroke.modifiers;

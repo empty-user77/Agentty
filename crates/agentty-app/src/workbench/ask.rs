@@ -40,6 +40,11 @@ pub enum AskAction {
     DeleteOrchestration(u64),
 }
 
+/// The answer Enter takes: the highlighted one, unless it is destructive.
+fn default_choice(choices: &[AskChoice]) -> Option<&AskChoice> {
+    choices.iter().find(|choice| choice.primary && !choice.danger)
+}
+
 #[derive(Clone)]
 pub struct AskChoice {
     pub label: SharedString,
@@ -74,6 +79,34 @@ impl Workbench {
         let Some(ask) = self.ask.take() else { return false };
         self.release(&ask);
         cx.notify();
+        true
+    }
+
+    /// The question owns the keyboard while it is open: Enter takes the highlighted (blue) answer,
+    /// Esc closes it as a click on the backdrop does, and every other key goes nowhere (not to the
+    /// terminal behind it). A destructive (red) answer is never taken by Enter: it stays a click.
+    /// Returns whether the key was consumed.
+    pub(super) fn ask_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(ask) = self.ask.as_ref() else { return false };
+        let m = &event.keystroke.modifiers;
+        // Shortcuts (cmd-Q, cmd-W, ...) are actions, not typing: they keep working.
+        if m.platform || m.control {
+            return false;
+        }
+        if !event.is_held {
+            match event.keystroke.key.as_str() {
+                "enter" => {
+                    if let Some(action) = default_choice(&ask.choices).map(|choice| choice.action.clone()) {
+                        self.perform_ask(action, window, cx);
+                    }
+                }
+                "escape" => {
+                    self.dismiss_ask(cx);
+                    self.focus_active(window, cx);
+                }
+                _ => {}
+            }
+        }
         true
     }
 
@@ -198,5 +231,29 @@ impl Workbench {
                         .child(buttons),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice(primary: bool, danger: bool, tree: &str) -> AskChoice {
+        AskChoice { label: tree.to_string().into(), action: AskAction::OpenTree(tree.into()), primary, danger }
+    }
+
+    fn picked(choices: &[AskChoice]) -> Option<String> {
+        default_choice(choices).map(|c| c.label.to_string())
+    }
+
+    #[test]
+    fn enter_takes_the_blue_answer() {
+        assert_eq!(picked(&[choice(false, false, "same"), choice(true, false, "new")]), Some("new".into()));
+    }
+
+    #[test]
+    fn enter_never_takes_a_destructive_answer() {
+        assert_eq!(picked(&[choice(true, true, "delete")]), None);
+        assert_eq!(picked(&[choice(false, false, "keep"), choice(false, true, "delete")]), None);
     }
 }
