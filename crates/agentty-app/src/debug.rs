@@ -291,8 +291,81 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                     }
                 }
             }
+            // `rawkey 28 alt`: the physical key (a macOS key code) with modifiers, its characters
+            // taken from the keyboard layout in use, as AppKit fills a real key press. Tests what
+            // a layout types (⌥8 is `[` on Portuguese) end to end.
+            ("rawkey", _) => {
+                let () = msg_send![ns_window, makeKeyWindow];
+                let Some(code) = argument.split_whitespace().next().and_then(|c| c.parse::<u16>().ok()) else { return };
+                let modifiers = flags(argument);
+                // Carbon modifier bits for UCKeyTranslate: ⌘ 1, ⇧ 2, ⌥ 8, ⌃ 16.
+                let carbon = |with_command: bool| -> u32 {
+                    let mut m = 0;
+                    if with_command && modifiers & (1 << 20) != 0 {
+                        m |= 1;
+                    }
+                    if modifiers & (1 << 17) != 0 {
+                        m |= 2;
+                    }
+                    if modifiers & (1 << 19) != 0 {
+                        m |= 8;
+                    }
+                    m
+                };
+                let chars = layout_chars(code, carbon(true));
+                let ignoring = layout_chars(code, 0);
+                let (chars, ignoring) = (NSString::alloc(nil).init_str(&chars), NSString::alloc(nil).init_str(&ignoring));
+                for kind in [10u64, 11u64] {
+                    let event: id = msg_send![class!(NSEvent), keyEventWithType: kind location: NSPoint::new(0., 0.) modifierFlags: modifiers timestamp: 0.0f64 windowNumber: number context: nil characters: chars charactersIgnoringModifiers: ignoring isARepeat: false keyCode: code];
+                    // Through the application, as a real key press goes: the menus' shortcuts first.
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let () = msg_send![app, sendEvent: event];
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// What the key with `code` types on the keyboard layout in use, with Carbon `modifiers`.
+#[cfg(target_os = "macos")]
+fn layout_chars(code: u16, modifiers: u32) -> String {
+    use std::ffi::c_void;
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+        fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *mut c_void;
+        fn LMGetKbdType() -> u8;
+        fn UCKeyTranslate(
+            layout: *const c_void,
+            code: u16,
+            action: u16,
+            modifiers: u32,
+            keyboard_type: u32,
+            options: u32,
+            dead_key_state: *mut u32,
+            max_length: usize,
+            length: *mut usize,
+            text: *mut u16,
+        ) -> i32;
+        static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+    }
+    // SAFETY: the layout data belongs to the input source, released after use.
+    unsafe {
+        let source = TISCopyCurrentKeyboardLayoutInputSource();
+        if source.is_null() {
+            return String::new();
+        }
+        let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) as core_foundation::data::CFDataRef;
+        let mut text = [0u16; 8];
+        let mut length = 0usize;
+        if !data.is_null() {
+            let layout = core_foundation::data::CFDataGetBytePtr(data) as *const c_void;
+            let mut dead = 0u32;
+            UCKeyTranslate(layout, code, 0, modifiers, LMGetKbdType() as u32, 1, &mut dead, text.len(), &mut length, text.as_mut_ptr());
+        }
+        core_foundation::base::CFRelease(source as _);
+        String::from_utf16_lossy(&text[..length])
     }
 }
 

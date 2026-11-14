@@ -24,7 +24,7 @@ actions!(code_editor, [TriggerCompletion, Dismiss]);
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     let c = Some(super::CONTEXT);
-    cx.bind_keys([key("ctrl-space", TriggerCompletion, c), key("escape", Dismiss, c)]);
+    crate::bind(cx, [key("ctrl-space", TriggerCompletion, c), key("escape", Dismiss, c)]);
 }
 
 /// Rows the list shows at once.

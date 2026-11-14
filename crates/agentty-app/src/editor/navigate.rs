@@ -58,27 +58,30 @@ const FLASH: std::time::Duration = std::time::Duration::from_millis(2600);
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     let c = Some(super::CONTEXT);
-    cx.bind_keys([
-        key("cmd-p", GoToFile, c),
-        key("cmd-shift-o", GoToFileSymbol, c),
-        key("cmd-alt-o", GoToSymbol, c),
-        key("ctrl-g", GoToLine, c),
-        // VS Code's and IntelliJ's: in the editor it wins over the app's Flow page.
-        key("cmd-shift-f", FindInFiles, c),
-        // Find in the file. The app's ⌘F becomes Ctrl+Shift+F off the Mac (Ctrl+F stays with the
-        // terminals), which the line above takes in the editor: an editor takes Ctrl+F itself.
-        key("cmd-f", crate::workbench::FindInTerminal, c),
-        key("f12", GoToDefinition, c),
-        key("cmd-f12", GoToImplementation, c),
-        key("shift-f12", FindUsages, c),
-        key("alt-f7", FindUsages, c),
-        key("ctrl--", NavigateBack, c),
-        key("ctrl-shift--", NavigateForward, c),
-        key("cmd-alt-left", NavigateBack, c),
-        key("cmd-alt-right", NavigateForward, c),
-        key("ctrl-n", PickerNext, Some(PICKER)),
-        key("ctrl-p", PickerPrevious, Some(PICKER)),
-    ]);
+    crate::bind(
+        cx,
+        [
+            key("cmd-p", GoToFile, c),
+            key("cmd-shift-o", GoToFileSymbol, c),
+            key("cmd-alt-o", GoToSymbol, c),
+            key("ctrl-g", GoToLine, c),
+            // VS Code's and IntelliJ's: in the editor it wins over the app's Flow page.
+            key("cmd-shift-f", FindInFiles, c),
+            // Find in the file. The app's ⌘F becomes Ctrl+Shift+F off the Mac (Ctrl+F stays with the
+            // terminals), which the line above takes in the editor: an editor takes Ctrl+F itself.
+            key("cmd-f", crate::workbench::FindInTerminal, c),
+            key("f12", GoToDefinition, c),
+            key("cmd-f12", GoToImplementation, c),
+            key("shift-f12", FindUsages, c),
+            key("alt-f7", FindUsages, c),
+            key("ctrl--", NavigateBack, c),
+            key("ctrl-shift--", NavigateForward, c),
+            key("cmd-alt-left", NavigateBack, c),
+            key("cmd-alt-right", NavigateForward, c),
+            key("ctrl-n", PickerNext, Some(PICKER)),
+            key("ctrl-p", PickerPrevious, Some(PICKER)),
+        ],
+    );
 }
 
 /// What a row leads to.

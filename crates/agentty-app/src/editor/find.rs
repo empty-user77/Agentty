@@ -31,22 +31,25 @@ pub type Match = (Pos, Pos);
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     // ⇧⌘G opens Git everywhere else: only the bar takes it over.
-    cx.bind_keys([
-        key("cmd-g", FindNext, Some(CONTEXT)),
-        key("cmd-shift-g", FindPrevious, Some(CONTEXT)),
-        key("cmd-g", FindNext, Some(super::CONTEXT)),
-        // F3 and ⇧F3 as well: off the Mac ⌘G and ⇧⌘G become Ctrl+Shift+G and Ctrl+Alt+Shift+G
-        // in the bar, which nobody guesses.
-        key("f3", FindNext, Some(CONTEXT)),
-        key("shift-f3", FindPrevious, Some(CONTEXT)),
-        // VS Code's keys for replace and the two options.
-        key("cmd-alt-f", FindReplace, Some(super::CONTEXT)),
-        key("cmd-alt-f", FindReplace, Some(CONTEXT)),
-        key("cmd-alt-c", ToggleCase, Some(CONTEXT)),
-        key("cmd-alt-w", ToggleWord, Some(CONTEXT)),
-        key("cmd-alt-r", ToggleRegex, Some(CONTEXT)),
-        key("cmd-enter", ReplaceAll, Some(CONTEXT)),
-    ]);
+    crate::bind(
+        cx,
+        [
+            key("cmd-g", FindNext, Some(CONTEXT)),
+            key("cmd-shift-g", FindPrevious, Some(CONTEXT)),
+            key("cmd-g", FindNext, Some(super::CONTEXT)),
+            // F3 and ⇧F3 as well: off the Mac ⌘G and ⇧⌘G become Ctrl+Shift+G and Ctrl+Alt+Shift+G
+            // in the bar, which nobody guesses.
+            key("f3", FindNext, Some(CONTEXT)),
+            key("shift-f3", FindPrevious, Some(CONTEXT)),
+            // VS Code's keys for replace and the two options.
+            key("cmd-alt-f", FindReplace, Some(super::CONTEXT)),
+            key("cmd-alt-f", FindReplace, Some(CONTEXT)),
+            key("cmd-alt-c", ToggleCase, Some(CONTEXT)),
+            key("cmd-alt-w", ToggleWord, Some(CONTEXT)),
+            key("cmd-alt-r", ToggleRegex, Some(CONTEXT)),
+            key("cmd-enter", ReplaceAll, Some(CONTEXT)),
+        ],
+    );
 }
 
 pub struct FindBar {

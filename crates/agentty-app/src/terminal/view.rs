@@ -2202,7 +2202,11 @@ impl TerminalView {
         if keys::is_altgr_text(keystroke) {
             return;
         }
-        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
+        // Option is Meta only where it types nothing the keyboard layout's user needs: `[` from ⌥8
+        // on Portuguese, `@` from ⌥L on German, `ą` from ⌥A on Polish Pro go in as text.
+        let option_as_meta =
+            settings(cx).option_as_meta && !(cfg!(target_os = "macos") && crate::keyboard_layout::option_types_text(keystroke));
+        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
             // program echoes back.

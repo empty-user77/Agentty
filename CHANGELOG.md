@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- On keyboard layouts that type characters with Option (macOS), the terminal no longer turns those keys into Meta
+  while **Use Option as Meta key** is on: ⌥8 / ⌥9 type `[` / `]` on Portuguese, ⌥L types `@` on German, and the
+  same goes for `{ } | \ ~` on French, Spanish, Italian, the Nordic and Swiss layouts and others, and for a layout's
+  own letters (`ą ę ł` on Polish Pro, `ş ğ ı` on Turkish Q). Option stays Meta on every other key, and on a US
+  layout nothing changes (#272).
+- ⌘ shortcuts on keys a layout types only with Option (⌘[ / ⌘], ⇧⌘[ / ⇧⌘], ⌘= on German, French and others) move
+  where macOS's own menus move them (⌘Ö / ⌘Ä on German), so they can be pressed; the menus and Settings → Keyboard
+  shortcuts show them that way, and they follow a switch of layout.
+- Windows: a Ctrl+Alt shortcut no longer takes a character typed with AltGr on a layout Windows reports AltGr on as
+  Ctrl+Alt (AltGr+B is `{` on Croatian, which toggled the files panel).
+
 ## [0.4.3] - 2026-11-12
 
 ### Fixed

@@ -20,7 +20,7 @@ pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     let c = Some(super::CONTEXT);
     // VS Code's keys for the next and previous change.
-    cx.bind_keys([key("alt-f5", NextChange, c), key("shift-alt-f5", PreviousChange, c)]);
+    crate::bind(cx, [key("alt-f5", NextChange, c), key("shift-alt-f5", PreviousChange, c)]);
 }
 
 /// Lines of a change shown at most in its before/after view.

@@ -40,27 +40,30 @@ actions!(
 const CONTEXT: &str = "TextInput";
 
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        crate::key("backspace", Backspace, Some(CONTEXT)),
-        crate::key("delete", Delete, Some(CONTEXT)),
-        crate::key("left", Left, Some(CONTEXT)),
-        crate::key("right", Right, Some(CONTEXT)),
-        crate::key("shift-left", SelectLeft, Some(CONTEXT)),
-        crate::key("shift-right", SelectRight, Some(CONTEXT)),
-        crate::key("cmd-a", SelectAll, Some(CONTEXT)),
-        crate::key("cmd-v", Paste, Some(CONTEXT)),
-        crate::key("cmd-c", Copy, Some(CONTEXT)),
-        crate::key("cmd-x", Cut, Some(CONTEXT)),
-        crate::key("home", Home, Some(CONTEXT)),
-        crate::key("end", End, Some(CONTEXT)),
-        crate::key("enter", Confirm, Some(CONTEXT)),
-        crate::key("shift-enter", NewLine, Some(CONTEXT)),
-        crate::key("escape", Cancel, Some(CONTEXT)),
-        crate::key("tab", NextField, Some(CONTEXT)),
-        crate::key("shift-tab", PreviousField, Some(CONTEXT)),
-        crate::key("up", MoveUp, Some(CONTEXT)),
-        crate::key("down", MoveDown, Some(CONTEXT)),
-    ]);
+    crate::bind(
+        cx,
+        [
+            crate::key("backspace", Backspace, Some(CONTEXT)),
+            crate::key("delete", Delete, Some(CONTEXT)),
+            crate::key("left", Left, Some(CONTEXT)),
+            crate::key("right", Right, Some(CONTEXT)),
+            crate::key("shift-left", SelectLeft, Some(CONTEXT)),
+            crate::key("shift-right", SelectRight, Some(CONTEXT)),
+            crate::key("cmd-a", SelectAll, Some(CONTEXT)),
+            crate::key("cmd-v", Paste, Some(CONTEXT)),
+            crate::key("cmd-c", Copy, Some(CONTEXT)),
+            crate::key("cmd-x", Cut, Some(CONTEXT)),
+            crate::key("home", Home, Some(CONTEXT)),
+            crate::key("end", End, Some(CONTEXT)),
+            crate::key("enter", Confirm, Some(CONTEXT)),
+            crate::key("shift-enter", NewLine, Some(CONTEXT)),
+            crate::key("escape", Cancel, Some(CONTEXT)),
+            crate::key("tab", NextField, Some(CONTEXT)),
+            crate::key("shift-tab", PreviousField, Some(CONTEXT)),
+            crate::key("up", MoveUp, Some(CONTEXT)),
+            crate::key("down", MoveDown, Some(CONTEXT)),
+        ],
+    );
 }
 
 pub enum TextInputEvent {

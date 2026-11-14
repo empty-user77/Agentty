@@ -95,7 +95,7 @@ const ASKED_LIMIT: Duration = Duration::from_secs(180);
 gpui::actions!(code_editor, [AskOnly]);
 
 pub fn bind_keys(cx: &mut gpui::App) {
-    cx.bind_keys([crate::key("alt-enter", AskOnly, Some(ASK))]);
+    crate::bind(cx, [crate::key("alt-enter", AskOnly, Some(ASK))]);
 }
 
 /// The instruction box's key context.
