@@ -11,6 +11,13 @@ pub type Id = *mut Object;
 
 pub use crate::platform::frame::Frame;
 
+/// The Objective-C type encoding of a method that takes an object and returns a `BOOL`
+/// (`makeFirstResponder:`, `performDragOperation:`), for methods added to a class at runtime.
+/// `BOOL` is a C `bool` (`B`) on Apple silicon and a `signed char` (`c`) on Intel; gpui's
+/// Objective-C bindings check a method's encoding in debug builds, and a method added with the
+/// wrong one stops the app at the next call (opening a second window).
+pub const BOOL_OF_OBJECT: &std::ffi::CStr = if cfg!(target_arch = "aarch64") { c"B@:@" } else { c"c@:@" };
+
 /// GPUI's own NSView (a subview of the window's content view).
 pub fn ns_view(window: &gpui::Window) -> Option<Id> {
     let handle = HasWindowHandle::window_handle(window).ok()?;

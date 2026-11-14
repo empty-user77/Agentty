@@ -555,7 +555,7 @@ impl Workbench {
                 };
                 list.push(json!({ "host": host, "signedIn": signed_in, "expiresAt": expires }));
             }
-            let _ = cx.update(|cx| call.reply(Ok(Value::Array(list)), cx));
+            cx.update(|cx| call.reply(Ok(Value::Array(list)), cx));
         })
         .detach();
     }
@@ -602,12 +602,12 @@ impl Workbench {
                 futures::future::Either::Right(_) => None,
             };
             if received.is_none() {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     crate::plugins::log(&plugin, format!("browser/eval did not answer within {:?}", timeout + HOST_TIMEOUT_GRACE), cx)
                 });
             }
             let answer = eval_answer(received);
-            let _ = cx.update(|cx| call.reply(answer, cx));
+            cx.update(|cx| call.reply(answer, cx));
         })
         .detach();
     }
@@ -634,7 +634,7 @@ impl Workbench {
                     Some(_) => None,
                 };
                 if let Some(answer) = answer {
-                    let _ = cx.update(|cx| call.reply(answer, cx));
+                    cx.update(|cx| call.reply(answer, cx));
                     return;
                 }
                 cx.background_executor().timer(Duration::from_millis(100)).await;
@@ -679,7 +679,7 @@ impl Workbench {
             cx.background_executor().timer(Duration::from_secs(2)).await;
             let (sender, receiver) = futures::channel::oneshot::channel();
             let checked = site.clone();
-            let _ = cx.update(|_| {
+            cx.update(|_| {
                 site_status_in(profile, &checked, move |status| {
                     let _ = sender.send(status);
                 })

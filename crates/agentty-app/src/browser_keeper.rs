@@ -127,7 +127,7 @@ pub fn restore(cx: &mut App) {
     });
     cx.spawn(async move |cx| {
         let cookies = load.await;
-        let _ = cx.update(|_| crate::webview::set_cookies(&cookies));
+        cx.update(|_| crate::webview::set_cookies(&cookies));
     })
     .detach();
 }
@@ -217,11 +217,9 @@ pub fn start(cx: &mut App) {
         // would be written into an empty store and then replaced by the file).
         loop {
             cx.background_executor().timer(Duration::from_millis(500)).await;
-            let started = cx
-                .update(|cx| {
-                    crate::with_active_workbench(cx, |workbench, window, cx| workbench.with_cookies_loaded(window, cx, |_, cx| restore(cx)))
-                })
-                .unwrap_or(true);
+            let started = cx.update(|cx| {
+                crate::with_active_workbench(cx, |workbench, window, cx| workbench.with_cookies_loaded(window, cx, |_, cx| restore(cx)))
+            });
             if started {
                 break;
             }
@@ -232,7 +230,7 @@ pub fn start(cx: &mut App) {
         // First look a minute in: nothing should compete with the app starting up.
         cx.background_executor().timer(Duration::from_secs(60)).await;
         loop {
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 remember(cx);
                 if private_mode(cx) {
                     return;

@@ -458,9 +458,9 @@ impl CodeEditor {
         let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.can_grid()) else { return };
         doc.grid.on = !doc.grid.on;
         if doc.grid.on {
-            window.focus(&self.grid_focus);
+            window.focus(&self.grid_focus, cx);
         } else {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         }
         cx.notify();
     }
@@ -487,7 +487,7 @@ impl CodeEditor {
                 }
                 cx.notify();
             }
-            TextInputEvent::Confirmed | TextInputEvent::Cancelled | TextInputEvent::Down => window.focus(&this.grid_focus),
+            TextInputEvent::Confirmed | TextInputEvent::Cancelled | TextInputEvent::Down => window.focus(&this.grid_focus, cx),
             _ => {}
         });
         self.grid_filter = Some((input.clone(), events));
@@ -549,7 +549,7 @@ impl CodeEditor {
             }
         });
         input.update(cx, |input, cx| {
-            window.focus(&input.focus_handle(cx));
+            window.focus(&input.focus_handle(cx), cx);
             input.select_from(value.len(), cx);
         });
         let events = cx.subscribe_in(&input, window, |this, _, event: &TextInputEvent, window, cx| match event {
@@ -559,7 +559,7 @@ impl CodeEditor {
             TextInputEvent::Previous => this.finish_cell((0, -1), window, cx),
             TextInputEvent::Cancelled => {
                 this.cell_edit = None;
-                window.focus(&this.grid_focus);
+                window.focus(&this.grid_focus, cx);
                 cx.notify();
             }
             // Not when the window only went to the background: the cell stays open for its return.
@@ -573,7 +573,7 @@ impl CodeEditor {
 
     fn finish_cell(&mut self, step: (isize, isize), window: &mut Window, cx: &mut Context<Self>) {
         self.commit_cell(cx);
-        window.focus(&self.grid_focus);
+        window.focus(&self.grid_focus, cx);
         self.grid_move(step.0, step.1, false, cx);
     }
 
@@ -757,7 +757,7 @@ impl CodeEditor {
         cx.stop_propagation();
         self.commit_cell(cx);
         self.grid_menu = None;
-        window.focus(&self.grid_focus);
+        window.focus(&self.grid_focus, cx);
         let Some(doc) = self.grid_doc_mut() else { return };
         if event.button == MouseButton::Right {
             if !doc.grid.selected(at) {
@@ -870,7 +870,7 @@ impl CodeEditor {
         // The editor itself was given the keyboard (its tab chosen), or nothing has it (the field
         // that had it went with another file): the grid takes it.
         if self.focus_handle.is_focused(window) || window.focused(cx).is_none() {
-            window.focus(&self.grid_focus);
+            window.focus(&self.grid_focus, cx);
         }
         let Some(doc) = self.grid_doc() else { return div().into_any_element() };
         let table = doc.grid_table();
@@ -922,7 +922,7 @@ impl CodeEditor {
             count,
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| this.render_grid_rows(range, cx)),
         )
-        .track_scroll(scroll)
+        .track_scroll(&scroll)
         .flex_1()
         .min_h_0();
         let grid = div()
@@ -1084,7 +1084,7 @@ impl CodeEditor {
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             this.commit_cell(cx);
                             this.grid_menu = None;
-                            window.focus(&this.grid_focus);
+                            window.focus(&this.grid_focus, cx);
                             this.grid_select_line(None, Some(col), event.modifiers.shift, cx);
                         }),
                     )
@@ -1093,7 +1093,7 @@ impl CodeEditor {
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
                             this.commit_cell(cx);
-                            window.focus(&this.grid_focus);
+                            window.focus(&this.grid_focus, cx);
                             if let Some(doc) = this.grid_doc_mut() {
                                 if !(doc.grid.range().0 .1..=doc.grid.range().1 .1).contains(&col) {
                                     doc.grid.cursor = (doc.grid.cursor.0, col);
@@ -1236,7 +1236,7 @@ impl CodeEditor {
                                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                     this.commit_cell(cx);
                                     this.grid_menu = None;
-                                    window.focus(&this.grid_focus);
+                                    window.focus(&this.grid_focus, cx);
                                     this.grid_select_line(Some(view_row), None, event.modifiers.shift, cx);
                                 }),
                             )
@@ -1523,7 +1523,7 @@ impl CodeEditor {
             );
         }
         Some(
-            gpui::deferred(gpui::anchored().position(at).anchor(gpui::Corner::BottomLeft).snap_to_window_with_margin(px(8.)).child(list))
+            gpui::deferred(gpui::anchored().position(at).anchor(gpui::Anchor::BottomLeft).snap_to_window_with_margin(px(8.)).child(list))
                 .with_priority(2),
         )
     }

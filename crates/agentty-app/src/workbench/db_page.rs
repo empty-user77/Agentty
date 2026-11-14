@@ -645,7 +645,7 @@ impl Workbench {
     fn ask_db_password(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| TextInput::localized("", "db.password", window, cx).masked());
         input.update(cx, |_, cx| cx.notify());
-        window.focus(&input.read(cx).focus_handle(cx));
+        window.focus(&input.read(cx).focus_handle(cx), cx);
         self.db.password = Some((id, input));
         cx.notify();
     }
@@ -681,7 +681,7 @@ impl Workbench {
             password: cx.new(|cx| TextInput::localized("", "db.form.password", window, cx).masked()),
             tls_off: false,
         };
-        window.focus(&form.name.read(cx).focus_handle(cx));
+        window.focus(&form.name.read(cx).focus_handle(cx), cx);
         self.db.form = Some(form);
         cx.notify();
     }

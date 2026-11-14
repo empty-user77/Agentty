@@ -702,11 +702,11 @@ impl Workbench {
         cx.spawn(async move |_, cx| {
             for _ in 0..120 {
                 cx.background_executor().timer(Duration::from_millis(500)).await;
-                let ready = pane.read_with(cx, |view, _| view.live_agent.is_some() && !view.status.in_turn()).unwrap_or(false);
+                let ready = pane.read_with(cx, |view, _| view.live_agent.is_some() && !view.status.in_turn());
                 if ready {
                     // The CLI draws its prompt a moment after it is seen.
                     cx.background_executor().timer(Duration::from_millis(1_500)).await;
-                    let _ = pane.update(cx, |view, cx| view.submit_prompt(text, cx));
+                    pane.update(cx, |view, cx| view.submit_prompt(text, cx));
                     return;
                 }
             }

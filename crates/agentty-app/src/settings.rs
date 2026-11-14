@@ -1632,7 +1632,7 @@ pub fn set_agents_working(working: bool, cx: &App) {
 /// was closed — and keeps the time left on screen fresh. Checked every 30 seconds.
 pub fn start_prevent_sleep_timer(cx: &mut App) {
     cx.spawn(async move |cx| loop {
-        let running = cx.update(|cx| {
+        cx.update(|cx| {
             let now = unix_now();
             match settings(cx).prevent_sleep_left(now) {
                 Some(0) => update_settings(cx, move |s| s.set_prevent_sleep(false, now)),
@@ -1640,9 +1640,6 @@ pub fn start_prevent_sleep_timer(cx: &mut App) {
                 None => {}
             }
         });
-        if running.is_err() {
-            break;
-        }
         cx.background_executor().timer(std::time::Duration::from_secs(30)).await;
     })
     .detach();

@@ -868,7 +868,7 @@ impl Element for EditorElement {
                 window.paint_quad(quad);
             }
             for (origin, number) in &prepainted.numbers {
-                let _ = number.paint(*origin, prepainted.line_height, window, cx);
+                let _ = number.paint(*origin, prepainted.line_height, gpui::TextAlign::Left, None, window, cx);
             }
             // A chevron: pointing right on a folded region, down on one that can fold.
             for &(center, folded) in &prepainted.arrows {
@@ -888,7 +888,7 @@ impl Element for EditorElement {
                     window.paint_quad(quad);
                 }
                 for (origin, line) in &prepainted.lines {
-                    let _ = line.paint(*origin, prepainted.line_height, window, cx);
+                    let _ = line.paint(*origin, prepainted.line_height, gpui::TextAlign::Left, None, window, cx);
                 }
                 if focus.is_focused(window) {
                     if let Some(cursor) = prepainted.cursor.take() {

@@ -112,7 +112,7 @@ impl Workbench {
         // in front takes it back itself: the editor behind it can't be typed in.)
         if self.file_diff.is_none() {
             if let Some(editor) = self.editor.clone() {
-                editor.read(cx).focus(window);
+                editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         }
         cx.notify();

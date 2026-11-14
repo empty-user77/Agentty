@@ -631,8 +631,7 @@ impl Workbench {
                 let target = main.canonicalize().unwrap_or(main);
                 let mut arrived = false;
                 for _ in 0..20 {
-                    arrived =
-                        view.read_with(cx, |view, _| view.current_dir().canonicalize().is_ok_and(|dir| dir == target)).unwrap_or(true);
+                    arrived = view.read_with(cx, |view, _| view.current_dir().canonicalize().is_ok_and(|dir| dir == target));
                     if arrived {
                         break;
                     }

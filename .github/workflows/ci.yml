@@ -44,6 +44,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format
         run: cargo fmt --all -- --check
+      # Settings → About → Open source lists every crate the app links on macOS, Windows and Linux.
+      - name: Open source list is current
+        run: python3 scripts/third-party-licenses.py --list --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The app without on-device voice (no whisper.cpp, no cmake needed): reuses the dependencies the
@@ -54,14 +57,16 @@ jobs:
         run: cargo test --workspace
       # The release build, as a DMG (dev mode: ad-hoc signature, not notarized, so macOS asks
       # before opening it the first time — right-click → Open). No credential is involved.
+      # Packaging runs on main only: it is most of a run's time, and a pull request is checked by
+      # the clippy and test steps above (and `cargo build --release` before pushing, see CLAUDE.md).
       - name: Build (release) and DMG
+        if: github.event_name == 'push'
         run: ./scripts/build-dmg.sh dev
       # Every job's package is uploaded as a workflow artifact: download it from the run's Summary
-      # page. From pushes to main and from pull requests of this repository — not from a fork's,
-      # whose unreviewed code must not be handed out under Agentty's name. A failed upload must not
-      # turn a green build red: the checks above are what CI is for, the package is a convenience.
+      # page. From pushes to main only. A failed upload must not turn a green build red: the checks
+      # above are what CI is for, the package is a convenience.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push'
         continue-on-error: true
         with:
           name: agentty-macos-arm64
@@ -86,13 +91,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
       - name: Package
+        if: github.event_name == 'push'
         run: |
           ./scripts/package-windows.ps1
           $info = (Get-Item "target\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
       # The zip holds agentty.exe and its install scripts (see the macOS job for when it is uploaded).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push'
         continue-on-error: true
         with:
           name: agentty-windows-x86_64
@@ -121,10 +127,11 @@ jobs:
       - name: Test
         run: cargo test --workspace
       - name: Package
+        if: github.event_name == 'push'
         run: scripts/package-linux.sh
       # The tarball holds the `agentty` executable (see the macOS job for when it is uploaded).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push'
         continue-on-error: true
         with:
           name: agentty-linux-x86_64

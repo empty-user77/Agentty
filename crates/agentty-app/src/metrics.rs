@@ -119,7 +119,7 @@ pub fn start_uploads(cx: &mut App) {
             cx.background_executor().timer(Duration::from_secs(60)).await;
             let mut events = QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
             // Consent can be withdrawn between two uploads: whatever was queued before is dropped.
-            let Some(device) = cx.update(|cx| allowed(cx).then(|| device(cx))).ok().flatten() else {
+            let Some(device) = cx.update(|cx| allowed(cx).then(|| device(cx))) else {
                 // Time without consent is never reported later.
                 last_running = Instant::now();
                 continue;

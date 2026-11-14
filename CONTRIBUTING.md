@@ -16,6 +16,16 @@ command line tools; GPUI compiles its Metal shaders at runtime (`runtime_shaders
 toolchain is not required. For Windows (Visual Studio Build Tools with the Windows SDK) and Linux (the system
 libraries to install), see [docs/platforms.md](docs/platforms.md).
 
+GPUI comes from [agentty-gpui](https://github.com/empty-user77/agentty-gpui): Zed's crates, kept in step with Zed
+releases, with Agentty's changes. To build against a local checkout of it, put this in `.cargo/config.toml` (not
+committed):
+
+```toml
+[patch.crates-io]
+agentty-gpui = { path = "../agentty-gpui/crates/gpui" }
+agentty-gpui-platform = { path = "../agentty-gpui/crates/gpui_platform" }
+```
+
 ## Project layout
 
 ```

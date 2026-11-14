@@ -81,7 +81,7 @@ fn open(cx: &mut App) {
         return;
     }
     let Some(anchor) = status_item::anchor() else { return };
-    let display = cx.displays().into_iter().find(|d| u32::from(d.id()) == anchor.display);
+    let display = cx.displays().into_iter().find(|d| u64::from(d.id()) == u64::from(anchor.display));
     // Bounds are relative to the display's top-left corner.
     let origin = gpui::point(px(anchor.popover_x(WIDTH as f64, MARGIN) as f32), px((anchor.bottom + GAP) as f32));
     let options = WindowOptions {
@@ -156,7 +156,7 @@ pub struct TrayPopover {
 impl TrayPopover {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         let activation = cx.observe_window_activation(window, |_, window, _| {
             if !window.is_window_active() {
                 push_action(TrayAction::ClosePopover);

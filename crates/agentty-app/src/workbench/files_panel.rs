@@ -1791,7 +1791,7 @@ impl Workbench {
                             .collect::<Vec<_>>()
                     }),
                 )
-                .track_scroll(handle)
+                .track_scroll(&handle)
                 .size_full(),
             )
             .group(crate::ui::SCROLL_GROUP)

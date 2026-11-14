@@ -130,7 +130,7 @@ impl Workbench {
         let Some(state) = self.chats.get_mut(&id) else { return };
         state.quote = Some(text);
         if let Some((input, _)) = state.input.as_ref() {
-            window.focus(&gpui::Focusable::focus_handle(input, cx));
+            window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
         }
         cx.notify();
     }
@@ -144,7 +144,7 @@ impl Workbench {
                 this.send_side_question(id, window, cx);
             }
         });
-        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+        window.focus(&gpui::Focusable::focus_handle(&input, cx), cx);
         let text = quote.clone();
         self.chat_select = Some(SelectUi { chat: id, at, text, terminal, kind: SelectUiKind::Ask { quote, input, _confirm: confirm } });
         cx.notify();
@@ -228,7 +228,7 @@ impl Workbench {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
         };
-        let (corner, body): (gpui::Corner, AnyElement) = match &ui.kind {
+        let (corner, body): (gpui::Anchor, AnyElement) = match &ui.kind {
             SelectUiKind::Bar => {
                 let button = |key: &'static str, label: String| {
                     div()
@@ -258,7 +258,7 @@ impl Workbench {
                         button("chat-sel-reply", t(cx, "chat.reply").to_string())
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.reply_to_selection(id, window, cx))),
                     );
-                (gpui::Corner::BottomLeft, bar.into_any_element())
+                (gpui::Anchor::BottomLeft, bar.into_any_element())
             }
             SelectUiKind::Menu => {
                 let menu = panel()
@@ -293,7 +293,7 @@ impl Workbench {
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.ask_in_side_chat(id, at, window, cx))),
                         )
                     });
-                (gpui::Corner::TopLeft, menu.into_any_element())
+                (gpui::Anchor::TopLeft, menu.into_any_element())
             }
             SelectUiKind::Ask { quote, input, .. } => {
                 let first = quote.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().to_string();
@@ -334,10 +334,10 @@ impl Workbench {
                                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.send_side_question(id, window, cx))),
                             ),
                     );
-                (gpui::Corner::BottomLeft, ask.into_any_element())
+                (gpui::Anchor::BottomLeft, ask.into_any_element())
             }
         };
-        let gap = if corner == gpui::Corner::BottomLeft { div().mb_2() } else { div().mt_1() };
+        let gap = if corner == gpui::Anchor::BottomLeft { div().mb_2() } else { div().mt_1() };
         Some(
             gpui::deferred(gpui::anchored().position(at).anchor(corner).snap_to_window_with_margin(px(8.)).child(gap.child(body)))
                 .with_priority(4)

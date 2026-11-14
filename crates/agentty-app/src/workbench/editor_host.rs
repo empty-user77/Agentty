@@ -239,7 +239,7 @@ impl Workbench {
             self.page = None;
             self.session_viewer = None;
             self.editor_shown = true;
-            editor.read(cx).focus(window);
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
             cx.notify();
         }
         asking

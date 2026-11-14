@@ -673,6 +673,8 @@ impl Workbench {
         panel = panel.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER))).child(
             div()
                 .id("account-manage")
+                .relative()
+                .when(self.tour_target() == Some("account-manage"), |d| d.child(crate::ui::pulse_ring("account-manage-ring", false)))
                 .px_2()
                 .py_1()
                 .rounded_md()
@@ -723,7 +725,7 @@ fn remove_everywhere(agent: AuthAgent, id: String, cx: &mut gpui::App) {
     });
     cx.spawn(async move |cx| {
         let result = task.await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             crate::with_active_workbench(cx, |wb, _, cx| {
                 if let Err(err) = result {
                     wb.show_toast(format!("{err:#}"), cx);

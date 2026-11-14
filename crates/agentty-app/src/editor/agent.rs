@@ -584,7 +584,7 @@ impl CodeEditor {
                     }
                     cx.notify();
                 }));
-            let (corner, at) = if above { (gpui::Corner::TopRight, top) } else { (gpui::Corner::BottomRight, bottom) };
+            let (corner, at) = if above { (gpui::Anchor::TopRight, top) } else { (gpui::Anchor::BottomRight, bottom) };
             labels.push(gpui::deferred(gpui::anchored().anchor(corner).position(at).child(tag)).with_priority(1).into_any_element());
         }
         labels.extend(
@@ -646,7 +646,7 @@ impl CodeEditor {
 
     pub fn close_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ask.take().is_some() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }
