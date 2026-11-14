@@ -179,7 +179,7 @@ await plugin.injectPrompt({
 - `ask`（默认）会弹出**发送到…**，由用户选择目的地。
 - `active` 输入到聚焦窗格，`pane` 输入到 `paneId`，`workspace` 输入到 `workspaceId`，`newWorkspace` / `newTab` 则用该提示词开启新会话。
 - 终端永远只会被输入文本 —— `injectPrompt` 不会按回车。
-- 超过 60,000 字节的提示词会保存到 `~/.agentty/prompts/`，并让智能体去读取该文件。
+- 超过 60,000 字节的提示词会保存到 `~/.agentty/prompts/`，并让智能体去读取该文件。在 Windows 上，长到放不进智能体命令行的提示词（约 30,000 个字符）也会这样处理。
 
 凡是由其他应用或链接发起的，请使用 `ask`。
 

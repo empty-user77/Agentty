@@ -20,6 +20,14 @@ Bindings are written once for macOS and translated, so Ctrl+letter always reache
 
 Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, Ctrl+Y, Ctrl+←/→ by word, Ctrl+Home / End).
 
+## Keyboard layouts other than US
+
+Shortcuts follow the keyboard layout in use, and change when you switch layouts:
+
+- **macOS shortcuts** on a key your layout types only with Option move where macOS's own menus move them: on German, ⌘[ / ⌘] become ⌘Ö / ⌘Ä and ⇧⌘[ / ⇧⌘] become ⇧⌘Ö / ⇧⌘Ä. The menus and **Settings → Keyboard shortcuts** show the keys for your layout.
+- **Option in the terminal** (macOS): with **Use Option as Meta key** on (Settings → Terminal), Option is Meta except on keys where your layout types a character you need with it: code characters such as `[ ] { } @ | \ ~` (⌥8 types `[` on Portuguese, ⌥L types `@` on German) and your language's letters (⌥A types `ą` on Polish Pro, ⌥S types `ş` on Turkish Q). On a US layout every Option key stays Meta.
+- **AltGr on Windows**: a Ctrl+Alt shortcut is left out on a layout where AltGr types a character with that key (AltGr+B types `{` on Croatian), so the character is typed.
+
 ## Tabs and panes
 
 | Action | Shortcut |

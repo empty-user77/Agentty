@@ -19,7 +19,7 @@ pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
     let c = Some(super::CONTEXT);
     // VS Code's keys.
-    cx.bind_keys([key("cmd-.", QuickFix, c), key("shift-alt-o", OrganizeImports, c)]);
+    crate::bind(cx, [key("cmd-.", QuickFix, c), key("shift-alt-o", OrganizeImports, c)]);
 }
 
 /// Actions a list shows at most.

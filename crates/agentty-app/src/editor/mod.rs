@@ -136,69 +136,72 @@ const PREVIEW_TICK: Duration = Duration::from_millis(150);
 pub fn bind_keys(cx: &mut App) {
     use crate::key;
     let c = Some(CONTEXT);
-    cx.bind_keys([
-        key("left", MoveLeft, c),
-        key("right", MoveRight, c),
-        key("up", MoveUp, c),
-        key("down", MoveDown, c),
-        key("shift-left", SelectLeft, c),
-        key("shift-right", SelectRight, c),
-        key("shift-up", SelectUp, c),
-        key("shift-down", SelectDown, c),
-        key("home", LineStart, c),
-        key("end", LineEnd, c),
-        key("shift-home", SelectLineStart, c),
-        key("shift-end", SelectLineEnd, c),
-        key("pageup", PageUp, c),
-        key("pagedown", PageDown, c),
-        key("shift-pageup", SelectPageUp, c),
-        key("shift-pagedown", SelectPageDown, c),
-        key("backspace", Backspace, c),
-        key("shift-backspace", Backspace, c),
-        key("delete", Delete, c),
-        key("enter", Newline, c),
-        key("shift-enter", Newline, c),
-        key("tab", Indent, c),
-        key("shift-tab", Outdent, c),
-        key("cmd-a", SelectAll, c),
-        key("cmd-c", Copy, c),
-        key("cmd-x", Cut, c),
-        key("cmd-v", Paste, c),
-        key("cmd-z", Undo, c),
-        key("cmd-shift-z", Redo, c),
-        key("cmd-s", Save, c),
-        key("cmd-w", CloseFile, c),
-        key("shift-alt-f", Format, c),
-        // VS Code's "Open Preview".
-        key("cmd-shift-v", TogglePreview, c),
-        // VS Code's "Open Preview to the Side" is ⌘K V, and ⌘K is the agent's here.
-        key("cmd-alt-v", TogglePreviewBeside, c),
-        // Cursor's and Kiro's "edit with AI".
-        key("cmd-k", AskAgent, c),
-        // VS Code's line keys.
-        key("cmd-/", ToggleComment, c),
-        key("alt-up", MoveLinesUp, c),
-        key("alt-down", MoveLinesDown, c),
-        key("shift-alt-up", DuplicateLinesUp, c),
-        key("shift-alt-down", DuplicateLinesDown, c),
-        key("cmd-shift-k", DeleteLines, c),
-        key("cmd-l", SelectLine, c),
-        key("cmd-enter", InsertLineBelow, c),
-        // As in VS Code: in the editor these win over the app's split, pane and zoom keys.
-        key("cmd-shift-enter", InsertLineAbove, c),
-        key("cmd-]", IndentLines, c),
-        key("cmd-[", OutdentLines, c),
-        key("cmd-d", SelectNextOccurrence, c),
-        key("cmd-shift-l", SelectAllOccurrences, c),
-        key("cmd-alt-up", AddCursorAbove, c),
-        key("cmd-alt-down", AddCursorBelow, c),
-        key("cmd-shift-\\", GoToBracket, c),
-        key("cmd-alt-[", Fold, c),
-        key("cmd-alt-]", Unfold, c),
-        // VS Code's are ⌘K ⌘0 and ⌘K ⌘J, and ⌘K is the agent's here: ⇧ with the keys above.
-        key("cmd-alt-shift-[", FoldAll, c),
-        key("cmd-alt-shift-]", UnfoldAll, c),
-    ]);
+    crate::bind(
+        cx,
+        [
+            key("left", MoveLeft, c),
+            key("right", MoveRight, c),
+            key("up", MoveUp, c),
+            key("down", MoveDown, c),
+            key("shift-left", SelectLeft, c),
+            key("shift-right", SelectRight, c),
+            key("shift-up", SelectUp, c),
+            key("shift-down", SelectDown, c),
+            key("home", LineStart, c),
+            key("end", LineEnd, c),
+            key("shift-home", SelectLineStart, c),
+            key("shift-end", SelectLineEnd, c),
+            key("pageup", PageUp, c),
+            key("pagedown", PageDown, c),
+            key("shift-pageup", SelectPageUp, c),
+            key("shift-pagedown", SelectPageDown, c),
+            key("backspace", Backspace, c),
+            key("shift-backspace", Backspace, c),
+            key("delete", Delete, c),
+            key("enter", Newline, c),
+            key("shift-enter", Newline, c),
+            key("tab", Indent, c),
+            key("shift-tab", Outdent, c),
+            key("cmd-a", SelectAll, c),
+            key("cmd-c", Copy, c),
+            key("cmd-x", Cut, c),
+            key("cmd-v", Paste, c),
+            key("cmd-z", Undo, c),
+            key("cmd-shift-z", Redo, c),
+            key("cmd-s", Save, c),
+            key("cmd-w", CloseFile, c),
+            key("shift-alt-f", Format, c),
+            // VS Code's "Open Preview".
+            key("cmd-shift-v", TogglePreview, c),
+            // VS Code's "Open Preview to the Side" is ⌘K V, and ⌘K is the agent's here.
+            key("cmd-alt-v", TogglePreviewBeside, c),
+            // Cursor's and Kiro's "edit with AI".
+            key("cmd-k", AskAgent, c),
+            // VS Code's line keys.
+            key("cmd-/", ToggleComment, c),
+            key("alt-up", MoveLinesUp, c),
+            key("alt-down", MoveLinesDown, c),
+            key("shift-alt-up", DuplicateLinesUp, c),
+            key("shift-alt-down", DuplicateLinesDown, c),
+            key("cmd-shift-k", DeleteLines, c),
+            key("cmd-l", SelectLine, c),
+            key("cmd-enter", InsertLineBelow, c),
+            // As in VS Code: in the editor these win over the app's split, pane and zoom keys.
+            key("cmd-shift-enter", InsertLineAbove, c),
+            key("cmd-]", IndentLines, c),
+            key("cmd-[", OutdentLines, c),
+            key("cmd-d", SelectNextOccurrence, c),
+            key("cmd-shift-l", SelectAllOccurrences, c),
+            key("cmd-alt-up", AddCursorAbove, c),
+            key("cmd-alt-down", AddCursorBelow, c),
+            key("cmd-shift-\\", GoToBracket, c),
+            key("cmd-alt-[", Fold, c),
+            key("cmd-alt-]", Unfold, c),
+            // VS Code's are ⌘K ⌘0 and ⌘K ⌘J, and ⌘K is the agent's here: ⇧ with the keys above.
+            key("cmd-alt-shift-[", FoldAll, c),
+            key("cmd-alt-shift-]", UnfoldAll, c),
+        ],
+    );
     find::bind_keys(cx);
     navigate::bind_keys(cx);
     agent::bind_keys(cx);
@@ -210,39 +213,45 @@ pub fn bind_keys(cx: &mut App) {
     table_view::bind_keys(cx);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
-        cx.bind_keys([
-            key("alt-left", WordLeft, c),
-            key("alt-right", WordRight, c),
-            key("alt-shift-left", SelectWordLeft, c),
-            key("alt-shift-right", SelectWordRight, c),
-            key("cmd-left", LineStart, c),
-            key("cmd-right", LineEnd, c),
-            key("cmd-shift-left", SelectLineStart, c),
-            key("cmd-shift-right", SelectLineEnd, c),
-            key("cmd-up", DocStart, c),
-            key("cmd-down", DocEnd, c),
-            key("cmd-shift-up", SelectDocStart, c),
-            key("cmd-shift-down", SelectDocEnd, c),
-            key("alt-backspace", DeleteWordBack, c),
-            key("alt-delete", DeleteWordForward, c),
-            key("cmd-backspace", DeleteToLineStart, c),
-            key("ctrl-a", LineStart, c),
-            key("ctrl-e", LineEnd, c),
-        ]);
+        crate::bind(
+            cx,
+            [
+                key("alt-left", WordLeft, c),
+                key("alt-right", WordRight, c),
+                key("alt-shift-left", SelectWordLeft, c),
+                key("alt-shift-right", SelectWordRight, c),
+                key("cmd-left", LineStart, c),
+                key("cmd-right", LineEnd, c),
+                key("cmd-shift-left", SelectLineStart, c),
+                key("cmd-shift-right", SelectLineEnd, c),
+                key("cmd-up", DocStart, c),
+                key("cmd-down", DocEnd, c),
+                key("cmd-shift-up", SelectDocStart, c),
+                key("cmd-shift-down", SelectDocEnd, c),
+                key("alt-backspace", DeleteWordBack, c),
+                key("alt-delete", DeleteWordForward, c),
+                key("cmd-backspace", DeleteToLineStart, c),
+                key("ctrl-a", LineStart, c),
+                key("ctrl-e", LineEnd, c),
+            ],
+        );
     } else {
-        cx.bind_keys([
-            gpui::KeyBinding::new("ctrl-left", WordLeft, c),
-            gpui::KeyBinding::new("ctrl-right", WordRight, c),
-            gpui::KeyBinding::new("ctrl-shift-left", SelectWordLeft, c),
-            gpui::KeyBinding::new("ctrl-shift-right", SelectWordRight, c),
-            gpui::KeyBinding::new("ctrl-home", DocStart, c),
-            gpui::KeyBinding::new("ctrl-end", DocEnd, c),
-            gpui::KeyBinding::new("ctrl-shift-home", SelectDocStart, c),
-            gpui::KeyBinding::new("ctrl-shift-end", SelectDocEnd, c),
-            gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, c),
-            gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, c),
-            gpui::KeyBinding::new("ctrl-y", Redo, c),
-        ]);
+        crate::bind(
+            cx,
+            [
+                gpui::KeyBinding::new("ctrl-left", WordLeft, c),
+                gpui::KeyBinding::new("ctrl-right", WordRight, c),
+                gpui::KeyBinding::new("ctrl-shift-left", SelectWordLeft, c),
+                gpui::KeyBinding::new("ctrl-shift-right", SelectWordRight, c),
+                gpui::KeyBinding::new("ctrl-home", DocStart, c),
+                gpui::KeyBinding::new("ctrl-end", DocEnd, c),
+                gpui::KeyBinding::new("ctrl-shift-home", SelectDocStart, c),
+                gpui::KeyBinding::new("ctrl-shift-end", SelectDocEnd, c),
+                gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, c),
+                gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, c),
+                gpui::KeyBinding::new("ctrl-y", Redo, c),
+            ],
+        );
     }
 }
 

@@ -179,7 +179,7 @@ await plugin.injectPrompt({
 - `ask`(기본값)는 **보낼 곳…**을 띄워 이용자가 목적지를 고르게 합니다.
 - `active`는 포커스된 페인에, `pane`은 `paneId`에, `workspace`는 `workspaceId`에 입력하고, `newWorkspace`·`newTab`은 그 프롬프트로 새 세션을 시작합니다.
 - 터미널에는 언제나 입력만 됩니다. `injectPrompt`는 Enter를 누르지 않습니다.
-- 60,000바이트가 넘는 프롬프트는 `~/.agentty/prompts/`에 파일로 저장되고, 에이전트에게는 그 파일을 읽으라고 요청합니다.
+- 60,000바이트가 넘는 프롬프트는 `~/.agentty/prompts/`에 파일로 저장되고, 에이전트에게는 그 파일을 읽으라고 요청합니다. Windows에서는 에이전트의 명령줄에 들어가지 않을 만큼 긴 프롬프트(약 30,000자)도 마찬가지입니다.
 
 다른 앱이나 링크에서 시작된 것이라면 `ask`를 쓰세요.
 

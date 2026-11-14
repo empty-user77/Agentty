@@ -18,7 +18,7 @@ actions!(code_editor, [Rename]);
 
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
-    cx.bind_keys([key("f2", Rename, Some(super::CONTEXT))]);
+    crate::bind(cx, [key("f2", Rename, Some(super::CONTEXT))]);
 }
 
 /// Occurrences renamed in one file at most without a server.
