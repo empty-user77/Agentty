@@ -2134,6 +2134,7 @@ impl Workbench {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, _: &gpui::MouseDownEvent, window, cx| {
                     this.mark_active(&target, cx);
+                    target.update(cx, |view, cx| view.acknowledge(cx));
                     this.chat_select = None;
                     if selectable::take_press() {
                         if let Some(state) = this.chats.get(&target.entity_id()) {
@@ -2279,6 +2280,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .children(self.render_quote(state, cx))
                     .children(self.render_slash_list(state, cx))
                     .child(row),
             )
@@ -2716,30 +2718,8 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
         // Files sent with it (their paths lead the message) show as what they are, over the words.
         ChatItem::User(text) if rows.plain => {
             let (files, words) = chat_view::sent_attachments(text);
-            // A reply's quote (its `> ` lines up front) is drawn as a quote, over what was asked.
-            let quote: Vec<&str> =
-                words.lines().map_while(|line| line.strip_prefix("> ").or_else(|| (line == ">").then_some(""))).collect();
-            let words = if quote.is_empty() {
-                words
-            } else {
-                words.splitn(quote.len() + 1, '\n').nth(quote.len()).unwrap_or_default().trim_start()
-            };
-            let quote = (!quote.is_empty()).then(|| {
-                div().w_full().flex().justify_end().child(
-                    div()
-                        .max_w(gpui::relative(0.8))
-                        .pl_2()
-                        .border_l_2()
-                        .border_color(hex(Chrome::BORDER))
-                        .t_small()
-                        .text_color(hex(Chrome::MUTED))
-                        .flex()
-                        .flex_col()
-                        .children(quote.iter().map(|line| {
-                            selectable::selectable(if line.is_empty() { " ".to_string() } else { line.to_string() }, Vec::new())
-                        })),
-                )
-            });
+            let (quote, words) = split_quote(words);
+            let quote = quote_block(&quote);
             let bubble = (!words.is_empty()).then(|| {
                 div().w_full().flex().justify_end().child(
                     div()
@@ -2767,20 +2747,24 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
                 .children(bubble)
                 .into_any_element()
         }
-        ChatItem::User(text) => row
-            .justify_end()
-            .child(
-                div()
-                    .max_w(gpui::relative(0.8))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(hex_alpha(Chrome::ACCENT, 0.18))
-                    .border_1()
-                    .border_color(hex_alpha(Chrome::ACCENT, 0.35))
-                    .child(text_block(text, Chrome::BRIGHT)),
-            )
-            .into_any_element(),
+        // A team chat: the same, in the team's colour (a reply's quote over it, too).
+        ChatItem::User(text) => {
+            let (quote, words) = split_quote(text);
+            let bubble = (!words.is_empty()).then(|| {
+                div().w_full().flex().justify_end().child(
+                    div()
+                        .max_w(gpui::relative(0.8))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(hex_alpha(Chrome::ACCENT, 0.18))
+                        .border_1()
+                        .border_color(hex_alpha(Chrome::ACCENT, 0.35))
+                        .child(text_block(words, Chrome::BRIGHT)),
+                )
+            });
+            row.flex_col().gap_1p5().children(quote_block(&quote)).children(bubble).into_any_element()
+        }
         ChatItem::Lead(text) => row
             .gap_2()
             .child(crate::brand::avatar(lead, 20.))
@@ -2879,20 +2863,62 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
                     .flex_col()
                     .gap_0p5()
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .child(icon("bot", 12., hex(Chrome::SUCCESS)))
-                            .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(first)),
+                        div().flex().items_center().gap_1p5().child(icon("bot", 12., hex(Chrome::SUCCESS))).child(
+                            div()
+                                .t_small()
+                                .font_weight(crate::theme::EMPHASIS)
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(selectable::selectable(first, Vec::new())),
+                        ),
                     )
-                    .children(
-                        rest.into_iter().map(|line| div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(line.to_string())),
-                    ),
+                    .children(rest.into_iter().map(|line| {
+                        div()
+                            .t_caption()
+                            .truncate()
+                            .text_color(hex(Chrome::MUTED))
+                            .child(selectable::selectable(line.to_string(), Vec::new()))
+                    })),
             )
             .into_any_element()
         }
     }
+}
+
+/// A reply's quote (its `> ` lines up front) and what was asked under it.
+fn split_quote(words: &str) -> (Vec<&str>, &str) {
+    let quote: Vec<&str> = words.lines().map_while(|line| line.strip_prefix("> ").or_else(|| (line == ">").then_some(""))).collect();
+    if quote.is_empty() {
+        return (quote, words);
+    }
+    let rest = words.splitn(quote.len() + 1, '\n').nth(quote.len()).unwrap_or_default().trim_start();
+    (quote, rest)
+}
+
+/// A reply's quote, drawn as a quote over what was asked.
+fn quote_block(quote: &[&str]) -> Option<gpui::Div> {
+    (!quote.is_empty()).then(|| {
+        div().w_full().flex().justify_end().child(
+            div()
+                .max_w(gpui::relative(0.8))
+                .pl_2()
+                .border_l_2()
+                .border_color(hex(Chrome::BORDER))
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .flex()
+                .flex_col()
+                .children(
+                    quote
+                        .iter()
+                        .map(|line| selectable::selectable(if line.is_empty() { " ".to_string() } else { line.to_string() }, Vec::new())),
+                ),
+        )
+    })
+}
+
+/// A lead's reply as Markdown: its text, without the tool steps between.
+fn lead_text(text: &str) -> String {
+    text.lines().filter(|line| !line.starts_with("[tool: ")).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
 /// The lead's reply: its text, with tool steps as short muted lines (a long run of them folded).
@@ -3330,5 +3356,17 @@ mod tests {
         // A briefing queued after the users still goes first.
         let mut late = vec![Pending::Report("[Agentty] A".into()), Pending::Brief(brief.clone())];
         assert_eq!(next_batch(&mut late, &mut Vec::new()), Some(brief));
+    }
+
+    #[test]
+    fn a_replys_quote_comes_apart_from_what_was_asked() {
+        assert_eq!(split_quote("> first\n>\n> third\n\nwhy?"), (vec!["first", "", "third"], "why?"));
+        assert_eq!(split_quote("> only"), (vec!["only"], ""));
+        assert_eq!(split_quote("no quote\n> here"), (Vec::new(), "no quote\n> here"));
+    }
+
+    #[test]
+    fn a_leads_reply_copies_without_its_tool_steps() {
+        assert_eq!(lead_text("Looking.\n[tool: Read src/main.rs]\n[tool: Bash ls]\nDone.\n"), "Looking.\nDone.");
     }
 }

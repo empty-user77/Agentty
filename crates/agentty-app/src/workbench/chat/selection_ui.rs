@@ -137,9 +137,10 @@ impl Workbench {
         let text = if markdown {
             self.chats.get(&id).and_then(|state| state.shown.get(item)).map(|item| match item {
                 ChatItem::User(text) => text.clone(),
+                ChatItem::Lead(text) => lead_text(text),
+                ChatItem::Report(text) => text.clone(),
                 ChatItem::Reply(blocks) => reply_text(blocks),
                 ChatItem::Peer { text, .. } | ChatItem::Summary(text) => text.clone(),
-                _ => String::new(),
             })
         } else {
             Some(selectable::item_text(id.as_u64(), item))
@@ -155,10 +156,13 @@ impl Workbench {
     pub(in crate::workbench) fn render_select_ui(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let ui = self.chat_select.as_ref()?;
         let id = ui.chat;
-        // A side chat copies a Claude Code session (Codex has no such copy).
-        let side_chat = self.pane_for_entity(id).is_some_and(|pane| {
-            pane.read(cx).agent_kind().and_then(crate::launch::PaneKind::agent) == Some(agentty_bridge::model::Agent::Claude)
-        });
+        // A side chat copies a Claude Code session (Codex has no such copy); not a team's lead's,
+        // whose session is the team's orchestration.
+        let team_lead = self.chats.get(&id).is_some_and(|state| !state.plain);
+        let side_chat = !team_lead
+            && self.pane_for_entity(id).is_some_and(|pane| {
+                pane.read(cx).agent_kind().and_then(crate::launch::PaneKind::agent) == Some(agentty_bridge::model::Agent::Claude)
+            });
         let at = ui.at;
         let row = |key: &'static str, label: String, keys: Option<&'static str>| {
             div()
