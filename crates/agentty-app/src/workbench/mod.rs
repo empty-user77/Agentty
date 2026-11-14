@@ -3523,6 +3523,7 @@ impl Render for Workbench {
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
         self.prepare_chats(window, cx);
+        self.drop_hidden_select_ui(cx);
         if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
             self.focus_active(window, cx);
         }

@@ -40,6 +40,23 @@ thread_local! {
     static PRESSED_TEXT: Cell<bool> = const { Cell::new(false) };
     /// A drag (or a double click) just left something selected: the chat shows its bar.
     static JUST_SELECTED: Cell<bool> = const { Cell::new(false) };
+    /// The top of the line each end of the selection is on (where it started, where it reaches):
+    /// the bar goes over the higher one.
+    static LINE_TOPS: Cell<Option<(gpui::Pixels, gpui::Pixels)>> = const { Cell::new(None) };
+}
+
+/// Where the selection's bar goes when a drag ends at `at`: over the selection's topmost line, so
+/// it never covers what was selected (a drag down ends below where the bar goes).
+pub(in crate::workbench) fn bar_point(at: gpui::Point<gpui::Pixels>) -> gpui::Point<gpui::Pixels> {
+    match LINE_TOPS.with(Cell::get) {
+        Some((anchor, head)) => gpui::point(at.x, anchor.min(head)),
+        None => at,
+    }
+}
+
+/// The top of the line byte `at` of a block is on, in the window, else a line up from `y`.
+fn line_top(layout: &gpui::TextLayout, at: usize, y: gpui::Pixels) -> gpui::Pixels {
+    layout.position_for_index(at).map(|place| place.y).unwrap_or(y - layout.line_height() / 2.)
 }
 
 /// Whether a selection was just made (once).
@@ -207,6 +224,8 @@ pub(in crate::workbench) fn selectable_with_links(
                 })
             });
             PRESSED_TEXT.with(|p| p.set(true));
+            let top = line_top(&press_layout, anchor, event.position.y);
+            LINE_TOPS.with(|tops| tops.set(Some((top, top))));
             window.refresh();
         })
         // Over any block while the button is down: the selection reaches here.
@@ -221,6 +240,8 @@ pub(in crate::workbench) fn selectable_with_links(
                 let head = Point { place, at: index_at(&move_layout, &move_text, event.position) };
                 let changed = s.head != head;
                 s.head = head;
+                let top = line_top(&move_layout, head.at, event.position.y);
+                LINE_TOPS.with(|tops| tops.set(tops.get().map(|(anchor, _)| (anchor, top))));
                 changed
             });
             if moved {
