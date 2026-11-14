@@ -298,22 +298,51 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                 let () = msg_send![ns_window, makeKeyWindow];
                 let Some(code) = argument.split_whitespace().next().and_then(|c| c.parse::<u16>().ok()) else { return };
                 let modifiers = flags(argument);
-                // Carbon modifier bits for UCKeyTranslate: ⌘ 1, ⇧ 2, ⌥ 8, ⌃ 16.
-                let carbon = |with_command: bool| -> u32 {
-                    let mut m = 0;
-                    if with_command && modifiers & (1 << 20) != 0 {
-                        m |= 1;
-                    }
-                    if modifiers & (1 << 17) != 0 {
-                        m |= 2;
-                    }
-                    if modifiers & (1 << 19) != 0 {
-                        m |= 8;
-                    }
-                    m
+                // Carbon modifier bits for UCKeyTranslate (⌘ 1, ⇧ 2, ⌥ 8, ⌃ 16) from AppKit's.
+                let carbon = [(20, 1), (17, 2), (19, 8), (18, 16)]
+                    .iter()
+                    .filter(|(appkit, _)| modifiers & (1 << appkit) != 0)
+                    .fold(0, |bits, (_, carbon)| bits | carbon);
+                // Keys that type nothing carry AppKit's function-key characters, as a real press does.
+                let named = match code {
+                    126 => Some('\u{F700}'),
+                    125 => Some('\u{F701}'),
+                    123 => Some('\u{F702}'),
+                    124 => Some('\u{F703}'),
+                    122 => Some('\u{F704}'),
+                    120 => Some('\u{F705}'),
+                    99 => Some('\u{F706}'),
+                    118 => Some('\u{F707}'),
+                    96 => Some('\u{F708}'),
+                    97 => Some('\u{F709}'),
+                    98 => Some('\u{F70A}'),
+                    100 => Some('\u{F70B}'),
+                    101 => Some('\u{F70C}'),
+                    109 => Some('\u{F70D}'),
+                    103 => Some('\u{F70E}'),
+                    111 => Some('\u{F70F}'),
+                    117 => Some('\u{F728}'),
+                    115 => Some('\u{F729}'),
+                    119 => Some('\u{F72B}'),
+                    116 => Some('\u{F72C}'),
+                    121 => Some('\u{F72D}'),
+                    _ => None,
                 };
-                let chars = layout_chars(code, carbon(true));
-                let ignoring = layout_chars(code, 0);
+                // NSEventModifierFlagFunction, which AppKit sets on these keys.
+                let modifiers = if named.is_some() { modifiers | (1 << 23) } else { modifiers };
+                // Keys whose character AppKit fixes, whatever the layout says (⌫ is DEL, not BS).
+                let fixed = match code {
+                    51 => Some('\u{7f}'),
+                    36 => Some('\r'),
+                    48 => Some('\t'),
+                    53 => Some('\u{1b}'),
+                    _ => named,
+                };
+                let (chars, ignoring) = match fixed {
+                    Some(key) => (key.to_string(), key.to_string()),
+                    // `charactersIgnoringModifiers` keeps Shift, as AppKit's does.
+                    None => (crate::keyboard_layout::key_chars(code, carbon), crate::keyboard_layout::key_chars(code, carbon & 2)),
+                };
                 let (chars, ignoring) = (NSString::alloc(nil).init_str(&chars), NSString::alloc(nil).init_str(&ignoring));
                 for kind in [10u64, 11u64] {
                     let event: id = msg_send![class!(NSEvent), keyEventWithType: kind location: NSPoint::new(0., 0.) modifierFlags: modifiers timestamp: 0.0f64 windowNumber: number context: nil characters: chars charactersIgnoringModifiers: ignoring isARepeat: false keyCode: code];
@@ -321,51 +350,11 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                     let app: id = msg_send![class!(NSApplication), sharedApplication];
                     let () = msg_send![app, sendEvent: event];
                 }
+                let () = msg_send![chars, release];
+                let () = msg_send![ignoring, release];
             }
             _ => {}
         }
-    }
-}
-
-/// What the key with `code` types on the keyboard layout in use, with Carbon `modifiers`.
-#[cfg(target_os = "macos")]
-fn layout_chars(code: u16, modifiers: u32) -> String {
-    use std::ffi::c_void;
-    #[link(name = "Carbon", kind = "framework")]
-    extern "C" {
-        fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
-        fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *mut c_void;
-        fn LMGetKbdType() -> u8;
-        fn UCKeyTranslate(
-            layout: *const c_void,
-            code: u16,
-            action: u16,
-            modifiers: u32,
-            keyboard_type: u32,
-            options: u32,
-            dead_key_state: *mut u32,
-            max_length: usize,
-            length: *mut usize,
-            text: *mut u16,
-        ) -> i32;
-        static kTISPropertyUnicodeKeyLayoutData: *const c_void;
-    }
-    // SAFETY: the layout data belongs to the input source, released after use.
-    unsafe {
-        let source = TISCopyCurrentKeyboardLayoutInputSource();
-        if source.is_null() {
-            return String::new();
-        }
-        let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) as core_foundation::data::CFDataRef;
-        let mut text = [0u16; 8];
-        let mut length = 0usize;
-        if !data.is_null() {
-            let layout = core_foundation::data::CFDataGetBytePtr(data) as *const c_void;
-            let mut dead = 0u32;
-            UCKeyTranslate(layout, code, 0, modifiers, LMGetKbdType() as u32, 1, &mut dead, text.len(), &mut length, text.as_mut_ptr());
-        }
-        core_foundation::base::CFRelease(source as _);
-        String::from_utf16_lossy(&text[..length])
     }
 }
 

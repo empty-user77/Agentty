@@ -125,6 +125,21 @@ pub fn takes_typed_character(binding: &gpui::KeyBinding) -> bool {
     })
 }
 
+/// macOS: the same shortcut in the form gpui reports it, for a binding written with Shift and a
+/// symbol (`alt-cmd-shift-[`): gpui reports the character Shift types, unshifted (`alt-cmd-{`),
+/// so the written form alone only works where a menu item catches the key first.
+pub fn typed_twin(binding: &gpui::KeyBinding) -> Option<gpui::KeyBinding> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let [keystroke] = binding.keystrokes() else { return None };
+    let keystroke = keystroke.inner();
+    let typed = us_shifted(&keystroke.key).filter(|_| keystroke.modifiers.shift)?;
+    let m = keystroke.modifiers;
+    let keys = format(Chord { ctrl: m.control, alt: m.alt, shift: false, cmd: m.platform }, typed);
+    gpui::KeyBinding::load(&keys, binding.action().boxed_clone(), binding.predicate(), false, None, &gpui::DummyKeyboardMapper).ok()
+}
+
 fn translate_binding<'a>(keys: &'a str, context: Option<&str>) -> Cow<'a, str> {
     let (chord, key) = parse(keys);
     if !chord.cmd {
@@ -187,7 +202,7 @@ pub fn link_modifier(modifiers: &gpui::Modifiers) -> bool {
 /// platform (`Ctrl+Alt+Shift+]  /  …`, `Ctrl+Click`).
 pub fn display(text: &str) -> Cow<'_, str> {
     if cfg!(target_os = "macos") {
-        return moved_display(text, crate::keyboard_layout::cmd_key);
+        return mac_display(text);
     }
     if !text.contains(['⌘', '⌥', '⌃', '⇧']) {
         return Cow::Borrowed(text);
@@ -198,7 +213,7 @@ pub fn display(text: &str) -> Cow<'_, str> {
 /// Like [`display`], for a shortcut of a text editing context (⌘S → Ctrl+S, not Ctrl+Shift+S).
 pub fn display_in_text(text: &str) -> Cow<'_, str> {
     if cfg!(target_os = "macos") {
-        return moved_display(text, crate::keyboard_layout::cmd_key);
+        return mac_display(text);
     }
     if !text.contains(['⌘', '⌥', '⌃', '⇧']) {
         return Cow::Borrowed(text);
@@ -206,31 +221,59 @@ pub fn display_in_text(text: &str) -> Cow<'_, str> {
     Cow::Owned(translate_display(text, true))
 }
 
+fn mac_display(text: &str) -> Cow<'_, str> {
+    if !crate::keyboard_layout::moves_cmd_keys() {
+        return Cow::Borrowed(text);
+    }
+    moved_display(text, crate::keyboard_layout::cmd_key)
+}
+
 /// macOS: a ⌘ shortcut's label with the key it moved to on the active layout (`⇧⌘]` → `⇧⌘Ä`
-/// on German), as [`binding`] binds it.
+/// on German): each `⌘` chord of the label goes through [`moved_for_layout`], as its binding does.
 fn moved_display(text: &str, cmd_key: impl Fn(char) -> Option<char>) -> Cow<'_, str> {
     if !text.contains('⌘') {
         return Cow::Borrowed(text);
     }
+    let glyph = |ch: char| match ch {
+        '⌃' => Some("ctrl"),
+        '⌥' => Some("alt"),
+        '⇧' => Some("shift"),
+        '⌘' => Some("cmd"),
+        _ => None,
+    };
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut changed = false;
-    let mut after_cmd = false;
-    for ch in text.chars() {
-        if after_cmd && !matches!(ch, '⌘' | '⌥' | '⌃' | '⇧') {
-            // `⌘T` is one key; `⌘ Click` and `⌘↩` are left as they are.
-            if let Some(moved) = ch.to_lowercase().next().and_then(&cmd_key).filter(|moved| *moved != ch.to_ascii_lowercase()) {
-                out.extend(moved.to_uppercase());
+    let mut i = 0;
+    while i < chars.len() {
+        let start = i;
+        while i < chars.len() && glyph(chars[i]).is_some() {
+            i += 1;
+        }
+        // A chord: its modifier glyphs, then one key (`⌘T`, `⇧⌘[`); `⌘ Click` and `⌘↩` stay.
+        if let (true, Some(&key)) = (i > start, chars.get(i)) {
+            let mods: Vec<&str> = chars[start..i].iter().filter_map(|&ch| glyph(ch)).collect();
+            let keys = format!("{}-{}", mods.join("-"), key.to_lowercase());
+            if let Cow::Owned(moved) = moved_for_layout(&keys, &cmd_key) {
+                let (chord, moved_key) = parse(&moved);
+                // A capital (`Ö`) is typed with Shift, which the label shows.
+                let shift = chord.shift || moved_key.chars().any(char::is_uppercase);
+                for (on, ch) in [(chord.ctrl, '⌃'), (chord.alt, '⌥'), (shift, '⇧'), (chord.cmd, '⌘')] {
+                    if on {
+                        out.push(ch);
+                    }
+                }
+                out.push_str(&moved_key.to_uppercase());
                 changed = true;
-                after_cmd = false;
+                i += 1;
                 continue;
             }
         }
-        after_cmd = match ch {
-            '⌘' => true,
-            '⌥' | '⌃' | '⇧' => after_cmd,
-            _ => false,
-        };
-        out.push(ch);
+        out.extend(&chars[start..i.min(chars.len())]);
+        if i < chars.len() {
+            out.push(chars[i]);
+            i += 1;
+        }
     }
     if changed {
         Cow::Owned(out)
@@ -346,6 +389,35 @@ mod tests {
         assert_eq!(moved_display("⇧⌘]  /  ⇧⌘[", german), "⇧⌘Ä  /  ⇧⌘Ö");
         assert_eq!(moved_display("⌘= ⌘T ⌘ Click", german), "⌘* ⌘T ⌘ Click");
         assert_eq!(moved_display("[⌥] Alt", german), "[⌥] Alt");
+        // A label follows its binding where `[` and `{` move to different keys.
+        let apart = |key: char| match key {
+            '[' => Some('ü'),
+            '{' => Some('Ö'),
+            _ => None,
+        };
+        assert_eq!(moved_for_layout("cmd-shift-[", apart), "cmd-Ö");
+        assert_eq!(moved_display("⇧⌘[ ⌘[", apart), "⇧⌘Ö ⌘Ü");
+    }
+
+    /// gpui reports ⇧ with a symbol as the symbol Shift types (`⌥⇧⌘[` arrives as `alt-cmd-{`), so
+    /// such a binding gets a twin in that form; the written one stays first, for the menus.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn shifted_symbols_get_the_form_gpui_reports() {
+        let twin = |keys: &str| {
+            let binding = gpui::KeyBinding::new(keys, crate::workbench::PreviousTab, Some("CodeEditor"));
+            typed_twin(&binding).map(|twin| {
+                assert_eq!(twin.action().name(), "workbench::PreviousTab");
+                assert_eq!(twin.predicate().map(|p| p.to_string()).as_deref(), Some("CodeEditor"));
+                twin.keystrokes()[0].inner().unparse()
+            })
+        };
+        assert_eq!(twin("alt-cmd-shift-[").as_deref(), Some("alt-cmd-{"));
+        assert_eq!(twin("cmd-shift-\\").as_deref(), Some("cmd-|"));
+        assert_eq!(twin("ctrl-shift--").as_deref(), Some("ctrl-_"));
+        // Letters keep their Shift in gpui's report, and a key without Shift needs nothing.
+        assert_eq!(twin("cmd-shift-g"), None);
+        assert_eq!(twin("cmd-["), None);
     }
 
     #[test]

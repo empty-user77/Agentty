@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format follows
 - ⌘ shortcuts on keys a layout types only with Option (⌘[ / ⌘], ⇧⌘[ / ⇧⌘], ⌘= on German, French and others) move
   where macOS's own menus move them (⌘Ö / ⌘Ä on German), so they can be pressed; the menus and Settings → Keyboard
   shortcuts show them that way, and they follow a switch of layout.
+- Shortcuts written with Shift and a symbol work again in the file editor on macOS: ⌥⇧⌘[ / ⌥⇧⌘] (fold / unfold
+  every region), ⇧⌘\ (matching bracket) and ⌃⇧- (navigate forward).
 - Windows: a Ctrl+Alt shortcut no longer takes a character typed with AltGr on a layout Windows reports AltGr on as
   Ctrl+Alt (AltGr+B is `{` on Croatian, which toggled the files panel).
 

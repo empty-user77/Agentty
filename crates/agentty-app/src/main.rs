@@ -432,11 +432,34 @@ pub fn key<A: gpui::Action>(keys: &str, action: A, context: Option<&str>) -> Key
     KeyBinding::new(&keymap::binding(keys, context), action, context)
 }
 
-/// Binds shortcuts made with [`key`], leaving out those that would take a character the active
-/// keyboard layout types (see [`keymap::takes_typed_character`]). Every binding goes through here,
-/// and they are all bound again when the layout changes.
+/// Shortcuts follow the keyboard layout (keys macOS moves ⌘ shortcuts to, AltGr keys left free on
+/// Windows), and so do the menus that show them: everything is bound again for a new layout.
+fn follow_keyboard_layout(cx: &mut App) {
+    if !keyboard_layout::refresh(cx) {
+        return;
+    }
+    cx.clear_key_bindings();
+    bind_keys(cx);
+    set_app_menus(cx);
+    cx.refresh_windows();
+}
+
+/// Binds shortcuts made with [`key`] as the active keyboard layout needs them: without those that
+/// would take a character it types ([`keymap::takes_typed_character`]), and with the form gpui
+/// reports a shifted symbol in ([`keymap::typed_twin`]). Every binding goes through here, and they
+/// are all bound again when the layout changes.
 pub fn bind(cx: &mut App, bindings: impl IntoIterator<Item = KeyBinding>) {
-    cx.bind_keys(bindings.into_iter().filter(|binding| !keymap::takes_typed_character(binding)));
+    let mut bound = Vec::new();
+    for binding in bindings {
+        if keymap::takes_typed_character(&binding) {
+            continue;
+        }
+        let twin = keymap::typed_twin(&binding);
+        // The written form first: the menus show the first binding of an action (⇧⌘[, not ⌘{).
+        bound.push(binding);
+        bound.extend(twin);
+    }
+    cx.bind_keys(bound);
 }
 
 fn bind_keys(cx: &mut App) {
@@ -773,14 +796,17 @@ fn main() {
         bind_keys(cx);
         register_app_actions(cx);
         set_app_menus(cx);
-        // Shortcuts follow the keyboard layout (keys macOS moves ⌘ shortcuts to, AltGr keys left
-        // free on Windows), and so do the menus that show them.
         cx.on_keyboard_layout_change(|cx| {
-            keyboard_layout::refresh(cx);
-            cx.clear_key_bindings();
-            bind_keys(cx);
-            set_app_menus(cx);
-            cx.refresh_windows();
+            follow_keyboard_layout(cx);
+            // gpui can read the layout before the system has finished switching, and then not
+            // again: look once more shortly after, and have it read the layout again if so.
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                if cx.update(|cx| keyboard_layout::read_too_early(cx)).unwrap_or(false) {
+                    keyboard_layout::read_again();
+                }
+            })
+            .detach();
         })
         .detach();
 
