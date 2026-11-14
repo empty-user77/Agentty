@@ -304,13 +304,19 @@ mod tests {
         let escapes = regex::Regex::new(r"\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-9A-B])").unwrap();
         let printed = |seen: &str| escapes.replace_all(seen, "").into_owned();
         let started = Instant::now();
-        let (mut seen, mut sent) = (String::new(), false);
+        // AltGr+2 on a Swiss German keyboard: the 2 key, scan code 3, `@`.
+        let key = win32_key_press(0x32, 3, '@' as u16, false);
+        let (mut seen, mut written) = (String::new(), 0);
         while started.elapsed() < Duration::from_secs(60) && !printed(&seen).contains("|end") {
-            if !sent && started.elapsed() > Duration::from_secs(3) {
-                // AltGr+2 on a Swiss German keyboard: the 2 key, scan code 3, `@`.
-                pty.writer().write_all(&win32_key_press(0x32, 3, '@' as u16, false)).unwrap();
-                pty.writer().flush().unwrap();
-                sent = true;
+            // ConPTY's input pipe may take nothing yet (a write of 0 bytes, or "would block"
+            // while the console starts): what is left goes in on a later turn of the loop.
+            if written < key.len() && started.elapsed() > Duration::from_secs(3) {
+                match pty.writer().write(&key[written..]) {
+                    Ok(n) => written += n,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("writing the key press: {error}"),
+                }
+                let _ = pty.writer().flush();
             }
             let mut buf = [0u8; 4096];
             let n = pty.reader().read(&mut buf).unwrap_or(0);
@@ -318,6 +324,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         let text = printed(&seen);
+        assert_eq!(written, key.len(), "the key press never went in; the program printed {text:?}");
         assert!(text.contains("key=64|mods=Alt,Control|end"), "what the program read: {text:?}");
     }
 

@@ -511,18 +511,26 @@ fn pending_message(pending: Vec<Pending>, echo: &mut Vec<String>) -> String {
 /// Unicode form: macOS names files decomposed and the transcript holds a dropped file's path composed.
 fn clear_echo(echo: &mut Vec<String>, items: &[ChatItem]) {
     use unicode_normalization::UnicodeNormalization as _;
-    let newest: Vec<String> = items
-        .iter()
-        .rev()
-        .take(8)
-        .filter_map(|item| match item {
-            ChatItem::User(text) => Some(text.nfc().collect()),
-            _ => None,
-        })
-        .collect();
+    let newest = |report: bool| -> Vec<String> {
+        items
+            .iter()
+            .rev()
+            .take(8)
+            .filter_map(|item| match item {
+                ChatItem::User(text) if !report => Some(text.nfc().collect()),
+                ChatItem::Report(text) if report => Some(text.nfc().collect()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (users, reports) = (newest(false), newest(true));
     echo.retain(|sent| {
         let sent: String = sent.nfc().collect();
-        !newest.iter().any(|text| text.contains(&sent))
+        // What the user wrote that starts like a worker's report reads as one.
+        match sent.strip_prefix(REPORT_MARK).map(str::trim) {
+            Some(report) => !reports.iter().any(|text| text.contains(report)),
+            None => !users.iter().any(|text| text.contains(&sent)),
+        }
     });
 }
 
@@ -3268,6 +3276,14 @@ mod tests {
         let mut echo = vec!["one".to_string(), "two".into(), "three".into()];
         clear_echo(&mut echo, &[ChatItem::Lead("x".into()), ChatItem::User("one\ntwo".into())]);
         assert_eq!(echo, vec!["three".to_string()]);
+        // Written like a worker's report, it shows as one: its echo goes too.
+        let mut echo = vec!["[Agentty] Worker \"T\" finished its turn.".to_string()];
+        clear_echo(&mut echo, &[ChatItem::Report("Worker \"T\" finished its turn.".into())]);
+        assert!(echo.is_empty());
+        // Words that only a report holds do not clear what the user wrote.
+        let mut echo = vec!["ok".to_string()];
+        clear_echo(&mut echo, &[ChatItem::Report("Worker \"T\": ok".into())]);
+        assert_eq!(echo, vec!["ok".to_string()]);
     }
 
     #[test]
