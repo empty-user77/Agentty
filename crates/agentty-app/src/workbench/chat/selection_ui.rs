@@ -44,6 +44,7 @@ impl Workbench {
     pub(super) fn selection_ended(&mut self, id: EntityId, at: Point<Pixels>, cx: &mut Context<Self>) {
         if selectable::take_just_selected() {
             let Some(text) = selectable::selected_text() else { return };
+            let at = selectable::bar_point(at);
             self.chat_select = Some(SelectUi { chat: id, at, text, terminal: false, kind: SelectUiKind::Bar });
             cx.notify();
         }
@@ -65,6 +66,37 @@ impl Workbench {
         if let Some(text) = selectable::selected_text() {
             self.chat_select = Some(SelectUi { chat: id, at, text, terminal: false, kind: SelectUiKind::Menu });
             cx.notify();
+        }
+    }
+
+    /// Whatever took the selection's pane off screen (another tab or workspace, a page, another
+    /// pane zoomed, its chat switched to its terminal or back): its bar, menu or question box goes
+    /// with it, and so does a chat's selection, rather than staying over what is in front now.
+    pub(in crate::workbench) fn drop_hidden_select_ui(&mut self, cx: &mut Context<Self>) {
+        let Some(ui) = self.chat_select.as_ref() else { return };
+        if self.select_ui_on_screen(ui.chat, ui.terminal, cx) {
+            return;
+        }
+        if !ui.terminal {
+            selectable::clear();
+        }
+        self.chat_select = None;
+    }
+
+    /// Whether pane `id` shows what was selected in it: it is in the tab in front (the zoomed pane,
+    /// when one is), no page is over it, and it shows its chat (or, for `terminal`, its terminal).
+    fn select_ui_on_screen(&self, id: EntityId, terminal: bool, cx: &App) -> bool {
+        if self.page.is_some() {
+            return false;
+        }
+        let Some(tab) = self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)) else { return false };
+        let Some(pane) = tab.root.leaves().into_iter().find(|pane| pane.entity_id() == id) else { return false };
+        if self.zoomed.as_ref().filter(|zoomed| tab.root.contains(zoomed)).is_some_and(|zoomed| *zoomed != pane) {
+            return false;
+        }
+        match self.chats.get(&id) {
+            Some(state) => self.chat_in_front(state, cx) != terminal,
+            None => terminal,
         }
     }
 
