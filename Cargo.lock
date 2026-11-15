@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-app"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "agentty-bridge",
  "agentty-db",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-bridge"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "aes",
  "anyhow",
@@ -189,11 +189,11 @@ dependencies = [
 
 [[package]]
 name = "agentty-console"
-version = "0.4.3"
+version = "0.4.5"
 
 [[package]]
 name = "agentty-db"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "agentty-bridge",
  "anyhow",
