@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-15
+
+### Changed
+- The run panel lists only the servers you can open: processes of the project that answer on a port over HTTP (or
+  HTTPS). Agent CLIs, which keep a local port of their own, and other sockets such as databases and debuggers are
+  left out, also from the status bar's running count and the workspace list's ports.
+- Running servers are listed at the top of the run panel, above the run configurations.
+
+### Fixed
+- The in-app browser no longer covers the run menu, the run panel or its add dialog.
+
 ## [0.4.5] - 2026-11-15
 
 ### Added
