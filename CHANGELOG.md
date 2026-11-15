@@ -5,7 +5,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-15
+
+### Added
+- Settings → About → Open source lists what Agentty is built with: the fonts, icons and scripts it bundles and every
+  library it links on macOS, Windows and Linux, with versions, licenses and links, plus the full license texts.
+- The account icon carries a warning sign while a login is signed out or ends within two days; logins are read again
+  every hour, so the sign appears while the app stays open.
+- Question dialogs (new worktree or the same one, resume, ...) take the keyboard: Enter picks the blue answer and Esc
+  closes the dialog. A red answer is never picked by Enter.
+- Esc closes an open right-click menu (workspace, tab, file tab, pane, plugin tab).
+- A team workspace's chat messages can be selected and copied like a plain chat's, with the selection bar and menu:
+  Reply quotes over the team composer, and Copy as Markdown copies a lead's reply or a worker's report.
+
+### Changed
+- The feature tour now shows team orchestration, with an example orchestration to look at, and switching between AIs
+  and accounts, in place of Session Flow and the in-app browser.
+- The orchestration list has headings with counts, dashed boxes for empty groups, the interface font, and an empty
+  page with buttons to start an orchestration or a Claude Code session.
+- Agentty is built on agentty-gpui, Zed's UI framework kept in step with Zed releases.
+
 ### Fixed
+- Windows: agent panes whose command is longer than Windows accepts (orchestration leads, tasks with long briefs) start
+  instead of failing with "The filename or extension is too long".
+- After a page (Monitoring, Git, Settings, ...) is opened with its shortcut, other shortcuts and menu items work again
+  without a click first.
+- A chat's selection bar, menu and side-chat box go away when their pane leaves the screen, and the bar sits above the
+  selection's top line instead of covering it.
+- A team-chat message that starts like a worker's report shows as a report instead of staying as a bubble.
 - On keyboard layouts that type characters with Option (macOS), the terminal no longer turns those keys into Meta
   while **Use Option as Meta key** is on: ⌥8 / ⌥9 type `[` / `]` on Portuguese, ⌥L types `@` on German, and the
   same goes for `{ } | \ ~` on French, Spanish, Italian, the Nordic and Swiss layouts and others, and for a layout's

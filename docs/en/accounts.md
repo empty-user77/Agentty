@@ -38,7 +38,7 @@ With the status bar off, a pane shown in [chat view](/docs/chat-view) has the sa
 
 ## Plans and sign-in state
 
-Plans show as Pro, Max or Ultra in the account menu, Settings, the Usage page and the menu bar. An account that is signed out, or whose login ends within two days, says so, with **Sign in again** next to it.
+Plans show as Pro, Max or Ultra in the account menu, Settings, the Usage page and the menu bar. An account that is signed out, or whose login ends within two days, says so, with **Sign in again** next to it. The account icon above Settings carries a warning sign while any login is signed out or ends within two days.
 
 ## Moving a workspace to another window
 

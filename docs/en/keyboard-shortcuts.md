@@ -76,6 +76,8 @@ Shortcuts follow the keyboard layout in use, and change when you switch layouts:
 
 While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / ⌥⌘↓ work on the text as in VS Code; click a terminal to split, switch or zoom panes or switch workspaces with them.
 
+In a question dialog (a new worktree or the same one, resume, …) **↩** takes the blue answer and **Esc** closes it; a red answer is never taken by ↩. **Esc** also closes an open right-click menu.
+
 ## Terminal and editor
 
 | Action | Shortcut |
