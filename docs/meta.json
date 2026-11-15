@@ -364,6 +364,15 @@
           }
         },
         {
+          "slug": "agentty-gpui",
+          "title": {
+            "en": "agentty-gpui (GPUI)",
+            "ko": "agentty-gpui (GPUI)",
+            "ja": "agentty-gpui (GPUI)",
+            "zh": "agentty-gpui (GPUI)"
+          }
+        },
+        {
           "slug": "telemetry",
           "title": {
             "en": "Usage statistics",
