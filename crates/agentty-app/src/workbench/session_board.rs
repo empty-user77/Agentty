@@ -2348,29 +2348,47 @@ impl Workbench {
                         .map(|(session, since, traces)| {
                             let files = agentty_bridge::claude::subagent_files(&session);
                             let mut map = traces.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut changed = false;
                             for file in &files {
                                 let reader = map.entry(file.id.clone()).or_insert_with(|| TraceReader::new(&file.path));
-                                reader.poll().ok();
+                                changed |= reader.poll().unwrap_or(false);
+                                let stopped = reader.trace.stopped;
                                 reader.mark_stopped_before(since);
+                                changed |= reader.trace.stopped != stopped;
                             }
-                            (session, files)
+                            (session, files, changed)
                         })
                         .collect::<Vec<_>>()
                 })
                 .await;
             let alive = this.update(cx, |this, cx| {
-                for (session, files) in read {
+                let mut changed = false;
+                for (session, files, traces_changed) in read {
                     if let Some(followed) = this.session_board.watched.get_mut(&session) {
+                        changed |= traces_changed || followed.files != files;
                         followed.files = files;
                     }
                 }
                 this.sync_orchestrations(cx);
-                cx.notify();
+                // Nothing new in any transcript: no reason to draw the window again.
+                if changed {
+                    cx.notify();
+                }
             });
             if alive.is_err() {
                 break;
             }
             // Between reads (about 1.2 s), frames for the running lines, only while one is on screen.
+            // Otherwise one wait, not 36 wake-ups of the main thread.
+            let moving = this.update(cx, |this, _| this.session_board.animating.get() && this.page == Some(super::Page::Flow));
+            match moving {
+                Err(_) => return,
+                Ok(false) => {
+                    cx.background_executor().timer(FRAME * 36).await;
+                    continue;
+                }
+                Ok(true) => {}
+            }
             for _ in 0..36 {
                 cx.background_executor().timer(FRAME).await;
                 let moving = this.update(cx, |this, cx| {

@@ -135,6 +135,20 @@ pub fn app_is_active() -> bool {
     }
 }
 
+/// Whether a menu (the menu bar's, the Dock's, a context menu) is open: the main run loop is in
+/// event tracking then. Replacing the main menu meanwhile closes the open one under the pointer.
+pub fn menu_tracking() -> bool {
+    unsafe {
+        let run_loop: Id = msg_send![objc::class!(NSRunLoop), currentRunLoop];
+        let mode: Id = msg_send![run_loop, currentMode];
+        if mode.is_null() {
+            return false;
+        }
+        let utf8: *const std::os::raw::c_char = msg_send![mode, UTF8String];
+        !utf8.is_null() && std::ffi::CStr::from_ptr(utf8).to_bytes() == b"NSEventTrackingRunLoopMode"
+    }
+}
+
 /// Shows the window above others without activating Agentty (keyboard focus stays where it is).
 /// Whether AppKit moves the window when its title bar area is dragged. Off while Agentty's tabs
 /// sit there, so dragging a tab moves the tab; `perform_window_drag` moves it from the bar's empty

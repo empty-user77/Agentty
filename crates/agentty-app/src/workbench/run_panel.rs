@@ -228,7 +228,9 @@ impl Workbench {
                     if roots.len() > 256 {
                         roots.clear();
                     } else {
-                        roots.retain(|_, found| found.as_ref() == Some(&root));
+                        // Only folders that were no project are asked again; the others'
+                        // projects stay known (dropping them made every render walk the disk).
+                        roots.retain(|_, found| found.is_some());
                     }
                 }
                 let changed = this.runs.configs.get(&root).is_none_or(|l| l.list != list);

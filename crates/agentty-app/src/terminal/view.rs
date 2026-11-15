@@ -525,6 +525,11 @@ pub struct TerminalView {
     transcript_file: Option<(String, std::path::PathBuf)>,
     /// Whether the pane had keyboard focus in the last painted frame.
     focused: bool,
+    /// Whether its window was the active one in that frame, and when that frame was: a pane in a
+    /// tab or workspace out of sight, or a window behind another app, does not blink (each blink
+    /// draws the whole window again).
+    window_active: bool,
+    painted_at: Option<std::time::Instant>,
     _events: Option<Task<()>>,
     /// Failed starts so far; a few are retried before the pane shows the error.
     spawn_attempts: usize,
@@ -555,7 +560,8 @@ impl TerminalView {
             let alive = this.update(cx, |view, cx| {
                 // Only the focused pane draws a blinking cursor; any other pane draws it solid, so a
                 // toggle there would redraw it for nothing.
-                if settings(cx).cursor_blink && view.focused {
+                let shown = view.painted_at.is_some_and(|at| at.elapsed() < CURSOR_BLINK_INTERVAL * 3);
+                if settings(cx).cursor_blink && view.focused && view.window_active && shown {
                     view.cursor_visible = !view.cursor_visible;
                     cx.notify();
                 } else if !view.cursor_visible {
@@ -666,6 +672,8 @@ impl TerminalView {
             transcript_file: None,
             banner_model: None,
             focused: false,
+            window_active: false,
+            painted_at: None,
             _events: None,
             spawn_attempts: 0,
             last_repaint: Instant::now(),
@@ -3203,6 +3211,8 @@ impl Element for TerminalElement {
                 view.marked_text = None;
             }
             view.focused = focused;
+            view.window_active = window.is_window_active();
+            view.painted_at = Some(std::time::Instant::now());
         });
         frame
     }

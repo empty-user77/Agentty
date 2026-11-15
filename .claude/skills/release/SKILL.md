@@ -103,7 +103,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --release -p agentty-app
 python3 scripts/check-secrets.py --all
+cargo build -p agentty-app && scripts/perf-check.sh   # idle renders, CPU and memory (CLAUDE.md → Performance)
 ```
+Also open a menu of the menu bar in the dev build with a Korean or Japanese input source on and check it stays open.
 
 ### 4. Commit and tag the source
 ```sh

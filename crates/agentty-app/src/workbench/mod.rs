@@ -2504,7 +2504,11 @@ impl Workbench {
                 if this.accounts != accounts {
                     return this.refresh_sessions(cx);
                 }
-                crate::set_recent_sessions(&sessions, cx);
+                // One History menu for the app: windows on other logins would replace each
+                // other's list (and the whole menu bar) on every refresh.
+                if this.slot == 0 {
+                    crate::set_recent_sessions(&sessions, cx);
+                }
                 this.sessions = sessions;
                 if let Some(picker) = this.picker.as_mut() {
                     picker.add_session_dirs(&this.sessions);
@@ -3540,8 +3544,13 @@ impl Workbench {
     }
 }
 
+/// Workbench renders since start, all windows: `scripts/perf-check.sh` reads it (debug `perf`) to
+/// tell an idle window from one that draws itself again and again.
+pub static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.keep_orchestrations(cx);
         let screen = self.screen_name();
         if self.screen_seen != Some(screen) {
@@ -5400,6 +5409,18 @@ impl Workbench {
                     window.focused(cx).is_some(),
                     self.chat_notify_focus(window, cx)
                 );
+            }
+            // `perf`: renders so far and the window's state, for `scripts/perf-check.sh`.
+            "perf" => eprintln!(
+                "perf: renders={} active={} menus_tracking={}",
+                RENDERS.load(std::sync::atomic::Ordering::Relaxed),
+                window.is_window_active(),
+                crate::native::menu_tracking()
+            ),
+            // `app-menus`: builds the menu bar again (it waits while a menu is open).
+            "app-menus" => {
+                eprintln!("app-menus: tracking={}", crate::native::menu_tracking());
+                crate::set_app_menus(cx);
             }
             "frame" => eprintln!(
                 "frame: {:?} screen: {:?}",

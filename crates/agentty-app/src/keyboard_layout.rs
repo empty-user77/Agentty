@@ -56,8 +56,14 @@ pub fn refresh(cx: &App) -> bool {
     let letters = LETTERS
         .with(|cache| cache.borrow_mut().entry(language.clone()).or_insert_with(|| Rc::new(platform::language_letters(&language))).clone());
     let plain = platform::plain_chars();
-    LAYOUT.with(|layout| *layout.borrow_mut() = Layout { id: id.to_string(), letters, plain, cmd_keys });
-    true
+    LAYOUT.with(|layout| {
+        let mut layout = layout.borrow_mut();
+        // Another layout that types the same (ABC and the Korean input method's own layout, or
+        // the switch macOS makes while a menu is open): nothing to bind again.
+        let same = *layout.letters == *letters && layout.plain == plain && layout.cmd_keys == cmd_keys && !layout.id.is_empty();
+        *layout = Layout { id: id.to_string(), letters, plain, cmd_keys };
+        !same
+    })
 }
 
 /// macOS: whether gpui read the layout before the system finished switching to it. gpui reads
