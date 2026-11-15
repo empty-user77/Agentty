@@ -74,6 +74,11 @@ pub(super) struct RunState {
 }
 
 impl RunState {
+    /// The run menu, the run panel or its add dialog is open: drawn over where the browser sits.
+    pub(super) fn popup_open(&self) -> bool {
+        self.menu.is_some() || self.panel.is_some() || self.adding.is_some()
+    }
+
     /// For the debug driver's `probe`.
     pub(super) fn debug_state(&self) -> serde_json::Value {
         serde_json::json!({
@@ -492,7 +497,11 @@ impl Workbench {
                     self.reload_run_configs(&root, cx);
                 }
             }
-            None => self.toggle_run_panel(gpui::point(px(1200.), px(760.)), cx),
+            // Where a click on the status bar's chip opens it (the chip sits near the right end).
+            None => {
+                let viewport = window.viewport_size();
+                self.toggle_run_panel(gpui::point(viewport.width - px(90.), viewport.height - px(30.)), cx);
+            }
             Some(("start", id)) => {
                 if let Some(root) = root.clone() {
                     self.start_run(root, id, window, cx);
@@ -786,6 +795,23 @@ impl Workbench {
             })));
 
         let mut body = div().id("run-panel-body").flex().flex_col().max_h(px(460.)).overflow_y_scroll();
+        // Servers running now first: a long list of configurations would push them out of sight.
+        body = body.child(section(t(cx, "run.ports").to_string()));
+        match &self.runs.processes {
+            _ if cfg!(windows) => {
+                body = body.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "run.ports_unsupported")));
+            }
+            None => body = body.child(crate::ui::loading_row(t(cx, "run.loading"))),
+            Some(list) if list.is_empty() => {
+                body = body.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "run.no_ports")));
+            }
+            Some(list) => {
+                for (index, process) in list.iter().enumerate() {
+                    body = body.child(self.render_process_row(index, process, cx));
+                }
+            }
+        }
+
         // Configurations.
         body = body.child(section(t(cx, "run.configs").to_string()));
         let configs = self.run_configs(&root);
@@ -807,23 +833,6 @@ impl Workbench {
                 this.open_add_run(add_root.clone(), cwd.clone(), window, cx);
             }),
         )));
-
-        // Processes serving ports.
-        body = body.child(section(t(cx, "run.ports").to_string()));
-        match &self.runs.processes {
-            _ if cfg!(windows) => {
-                body = body.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "run.ports_unsupported")));
-            }
-            None => body = body.child(crate::ui::loading_row(t(cx, "run.loading"))),
-            Some(list) if list.is_empty() => {
-                body = body.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "run.no_ports")));
-            }
-            Some(list) => {
-                for (index, process) in list.iter().enumerate() {
-                    body = body.child(self.render_process_row(index, process, cx));
-                }
-            }
-        }
 
         let panel = popover()
             .w(px(420.))
