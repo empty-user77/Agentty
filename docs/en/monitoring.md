@@ -84,6 +84,6 @@ Dependencies such as `node_modules` or `~/.m2`, and anything a project needs to 
 
 Each entry shows when it was deleted, when it goes for good, its workspace path and its session paths. Tick some or all of them to restore them or delete them now; deleting asks first and can't be undone. A restored workspace comes back asleep and wakes when you open it, with its sessions resumed. Its orchestrations and board tickets come back with it.
 
-Entries go by themselves after 7 days. Change that with **Delete automatically after** on this page or in Settings → General: a longer period also applies to what is already in the trash, a shorter one only to what you delete from then on.
+Entries go by themselves after 7 days. Change that with **Delete automatically after** on this page, or **Delete trash automatically after** in Settings → General: a longer period also applies to what is already in the trash, a shorter one only to what you delete from then on.
 
 A worktree or sync data you chose to delete with the workspace stays until the workspace is deleted for good. Session files are never deleted: they stay where the agent keeps them.

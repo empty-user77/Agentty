@@ -35,7 +35,7 @@ Agentty 会从模板创建插件——SDK、类型定义、开发者指南，以
 然后让它检查代码（`node --check main.mjs`，或 `cargo build --release --target wasm32-unknown-unknown`），再到 Agentty 的插件卡片上按**重启**加载。出错的话看同一张卡片上的**日志**。
 
 > [!TIP]
-> 如果这段提示词是写给模板文件夹之外的智能体，请把[清单参考](/docs/plugin-manifest)、[UI 树](/docs/plugin-protocol#ui)和[协议](/docs/plugin-protocol)指给它。这三页就是全部。
+> 如果这段提示词是写给模板文件夹之外的智能体，请把[清单参考](/docs/plugin-manifest)、[UI 树](/docs/plugin-protocol#ui-树)和[协议](/docs/plugin-protocol)指给它。这三页就是全部。
 
 ## 手写 —— Rust
 

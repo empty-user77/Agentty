@@ -32,6 +32,21 @@ Beside that figure the panel carries a **compact** button. It runs the agent's o
 | Finished | The turn ended |
 | Idle | Nothing running |
 
+## Subagents
+
+While an agent has subagents, its pane's header shows how many are running out of how many (`1/3`). Click that to open the **Subagents** window. A ⌘-click on a subagent listed on a workspace card in the sidebar opens it too, and so does a subagent's card in the Orchestration page's **Workflow**, which opens it at that subagent. The window moves by its title bar and resizes by its corner; **Open in its own window** takes it out of the Agentty window.
+
+The window has two views of the same subagents:
+
+- **Office** — each running subagent sits at a desk and says what it is doing in a speech bubble; the session's own agent works at the console at the bottom. Finished ones stand in the **Break room** with the first line of their report. **Send home** takes one out of the view, **Send everyone home** all of them; their transcripts stay. More subagents than a floor holds go on more floors.
+- **Timeline** — a bar for each subagent on one time axis, coloured by the kind of tool running, beside a list with each one's current step.
+
+Click a subagent to read its log: each tool call as a short sentence ("Reading app.ts"), and its task, remarks and report formatted from their Markdown. **Stop this subagent** ends one running subagent at its next tool call; the session and its other subagents go on.
+
+### Scheduled work
+
+While a Claude Code session has something scheduled, its pane's header shows a clock with a count: the session's cron jobs (what `/loop 5m` makes) and the next turn of a self-paced `/loop`. Click it for the list — each job's prompt, whether it **Repeats**, runs **Once** or is a **Loop**, and when it runs next (a job only runs while the session is idle, so one past its time says "when idle"). The bin icon cancels one: Agentty asks the session to delete it, which it does on its next turn, so answer a waiting question first. Codex panes have no clock; Codex's scheduled tasks belong to its desktop app.
+
 ## How it works
 
 Agentty passes the agent a status hook on the command line when the pane starts. The agent reports to a private local socket that only your user account can reach. Nothing is written into your projects or into the agent's own configuration files.

@@ -11,16 +11,14 @@ Agentty の画面を GPU で描くのに必要なものをすべて備えてい�
 - クレート:[crates.io/crates/agentty-gpui](https://crates.io/crates/agentty-gpui)
 - API ドキュメント:[docs.rs/agentty-gpui](https://docs.rs/agentty-gpui)
 - ライセンス:Apache License 2.0
-- Rust:2024 エディション、ツールチェーン 1.98(Agentty と同じ)
 
 ## はじめに
 
-`Cargo.toml` に 2 つのクレートを追加します。フレームワーク本体の `agentty-gpui` と、動作中の OS のバックエンドを起動する `agentty-gpui-platform` です。ライブラリ名は `gpui` と `gpui_platform` なので、コードでは `use gpui::...` と書きます。
+2 つのクレートを追加します。フレームワーク本体の `agentty-gpui` と、動作中の OS のバックエンドを起動する `agentty-gpui-platform` です。ライブラリ名は `gpui` と `gpui_platform` なので、コードでは `use gpui::...` と書きます。
 
-```toml
-[dependencies]
-gpui = { package = "agentty-gpui", version = "0.1" }
-gpui_platform = { package = "agentty-gpui-platform", version = "0.1" }
+```sh
+cargo add agentty-gpui --rename gpui
+cargo add agentty-gpui-platform --rename gpui_platform
 ```
 
 ```rust
@@ -104,25 +102,15 @@ iOS と Web のバックエンドは含めていません。Agentty は macOS、
 
 crates.io のクレートは crates.io のクレートにしか依存できません。元のコードが Git やフォークから取る依存関係は、crates.io のリリースに置き換えています。
 
-| クレート | ここで使うバージョン | 元の側にだけあるもの |
-|---|---|---|
-| `async-task` | 4.7.1 | タスクの waker vtable の同一性の修正 |
-| `calloop`(Linux) | 0.14.5 | ループごとの idle コールバックを約 10ms に制限 |
-| `khronos-egl`(Linux) | 6.0.0 | 失敗した EGL 呼び出しが成功を返したときにパニックしない |
-| `wgpu`、`naga`(Linux) | 30.0.2 | より新しい API(`QueueDescriptor`、`has_srgb_suffix`) |
-| `zed-font-kit`、`zed-scap`、`zed-xim` | crates.io のリリース | その後の小さな修正 |
-| `oo7`(Linux) | 0.6 | プロンプトストリームが終わったときのエラー |
-| `windows-capture`(Windows、`screen-capture`) | 1.4.4、`Cargo.lock` で固定 | なし。1.5 は `zed-scap` とビルドできないため、`screen-capture` を有効にする側も 1.4.4 に固定する必要があります |
-
-## 元のコードから変更したファイル
-
-変更したファイルには、クレートのマニフェストも含め、すべて先頭に `Modified for Agentty` コメントがあります。
-
-- `crates/gpui/src/style.rs`:テストが `#[perf]` の代わりに `#[test]` を使います。
-- `crates/gpui_apple/build.rs`:`../gpui` がないとき(公開されたクレート)、同梱の `gpui-src/` のコピーを読みます。スクリプトがこのコピーを `crates/gpui/src` と同じに保ちます。
-- `crates/gpui_wgpu/src/{wgpu_context,wgpu_renderer,wgpu_atlas}.rs`:wgpu 30.0.2 の API に合わせています。
-
-クレートのマニフェストは `scripts/apply_agentty.py` が書きます。パッケージ名を `agentty-gpui-*` にし、ワークスペースのバージョンを入れ、iOS と Web を外し、Git の依存関係を crates.io に置き換えます。このスクリプトの結果がコミットされていないと CI は失敗します。
+| クレート | 元の側にだけあるもの |
+|---|---|
+| `async-task` | タスクの waker vtable の同一性の修正 |
+| `calloop`(Linux) | ループごとの idle コールバックを約 10ms に制限 |
+| `khronos-egl`(Linux) | 失敗した EGL 呼び出しが成功を返したときにパニックしない |
+| `wgpu`、`naga`(Linux) | より新しい API(`QueueDescriptor`、`has_srgb_suffix`) |
+| `zed-font-kit`、`zed-scap`、`zed-xim` | その後の小さな修正 |
+| `oo7`(Linux) | プロンプトストリームが終わったときのエラー |
+| `windows-capture`(Windows、`screen-capture`) | なし。`zed-scap` とビルドできる最後のリリースで `Cargo.lock` に固定しており、`screen-capture` を有効にする側も同じく固定する必要があります |
 
 ## 更新の仕方
 
@@ -134,7 +122,7 @@ crates.io のクレートは crates.io のクレートにしか依存できま�
 新しい元のリリースを取り込む手順です。
 
 ```sh
-scripts/sync-upstream.sh v1.29.0   # upstream に新しいスナップショット
+scripts/sync-upstream.sh <タグ>   # upstream に新しいスナップショット
 git merge upstream                 # main にマージ。競合はここで変えたファイルだけ
 python3 -I scripts/apply_agentty.py
 ```
@@ -157,7 +145,7 @@ cargo test --workspace --doc --features agentty-gpui-apple/runtime_shaders
 1. `scripts/apply_agentty.py` の `VERSION` を上げ、スクリプトを実行し直してプッシュします。`cargo publish --workspace --dry-run` を含め、CI が通る必要があります。
 2. GitHub Actions の **Agentty** ワークフローを実行します。このチェックアウトで Agentty を macOS、Windows、Linux でビルドしてテストします。
 3. `cargo publish --workspace` で依存順に公開します。
-4. リリースのタグを付けます(`git tag v0.1.0 && git push origin v0.1.0`)。
+4. リリースのタグを付けます(`git tag v<バージョン> && git push origin v<バージョン>`)。
 
 ## 問題の報告
 

@@ -11,16 +11,14 @@ agentty-gpui 是 Agentty 专用的 UI 框架，基于 Zed 的 gpui 打造。
 - Crate：[crates.io/crates/agentty-gpui](https://crates.io/crates/agentty-gpui)
 - API 文档：[docs.rs/agentty-gpui](https://docs.rs/agentty-gpui)
 - 许可证：Apache License 2.0
-- Rust：2024 版次，工具链 1.98（与 Agentty 相同）
 
 ## 快速开始
 
-在 `Cargo.toml` 中加入两个 crate：框架本体 `agentty-gpui`，以及为当前操作系统启动后端的 `agentty-gpui-platform`。它们的库名是 `gpui` 和 `gpui_platform`，所以代码里写 `use gpui::...`。
+加入两个 crate：框架本体 `agentty-gpui`，以及为当前操作系统启动后端的 `agentty-gpui-platform`。它们的库名是 `gpui` 和 `gpui_platform`，所以代码里写 `use gpui::...`。
 
-```toml
-[dependencies]
-gpui = { package = "agentty-gpui", version = "0.1" }
-gpui_platform = { package = "agentty-gpui-platform", version = "0.1" }
+```sh
+cargo add agentty-gpui --rename gpui
+cargo add agentty-gpui-platform --rename gpui_platform
 ```
 
 ```rust
@@ -104,25 +102,15 @@ fn main() {
 
 crates.io 上的 crate 只能依赖 crates.io 上的 crate。原始代码从 Git 或分叉获取的依赖，这里换成了 crates.io 的发布版本：
 
-| Crate | 这里使用的版本 | 原始版本多出的内容 |
-|---|---|---|
-| `async-task` | 4.7.1 | 任务 waker vtable 标识的修复 |
-| `calloop`（Linux） | 0.14.5 | 每轮循环的 idle 回调限制在约 10ms |
-| `khronos-egl`（Linux） | 6.0.0 | 失败的 EGL 调用报告成功时不再 panic |
-| `wgpu`、`naga`（Linux） | 30.0.2 | 更新的 API（`QueueDescriptor`、`has_srgb_suffix`） |
-| `zed-font-kit`、`zed-scap`、`zed-xim` | crates.io 发布版本 | 之后的小修复 |
-| `oo7`（Linux） | 0.6 | 提示流结束时的错误处理 |
-| `windows-capture`（Windows，`screen-capture`） | 1.4.4，在 `Cargo.lock` 中固定 | 无；1.5 无法与 `zed-scap` 一起构建，所以开启 `screen-capture` 的一方也必须固定在 1.4.4 |
-
-## 相对原始代码改动的文件
-
-所有改动过的文件（包括 crate 清单）开头都有一行 `Modified for Agentty` 注释。
-
-- `crates/gpui/src/style.rs`：测试使用 `#[test]` 而不是 `#[perf]`。
-- `crates/gpui_apple/build.rs`：没有 `../gpui` 时（已发布的 crate）读取随附的 `gpui-src/` 副本；脚本让这个副本与 `crates/gpui/src` 保持一致。
-- `crates/gpui_wgpu/src/{wgpu_context,wgpu_renderer,wgpu_atlas}.rs`：适配 wgpu 30.0.2 的 API。
-
-crate 清单由 `scripts/apply_agentty.py` 生成：包名改为 `agentty-gpui-*`，写入工作区版本，去掉 iOS 和 Web，并把 Git 依赖换成 crates.io。脚本的输出没有提交时，CI 会失败。
+| Crate | 原始版本多出的内容 |
+|---|---|
+| `async-task` | 任务 waker vtable 标识的修复 |
+| `calloop`（Linux） | 每轮循环的 idle 回调限制在约 10ms |
+| `khronos-egl`（Linux） | 失败的 EGL 调用报告成功时不再 panic |
+| `wgpu`、`naga`（Linux） | 更新的 API（`QueueDescriptor`、`has_srgb_suffix`） |
+| `zed-font-kit`、`zed-scap`、`zed-xim` | 之后的小修复 |
+| `oo7`（Linux） | 提示流结束时的错误处理 |
+| `windows-capture`（Windows，`screen-capture`） | 无；在 `Cargo.lock` 中固定为能与 `zed-scap` 一起构建的最后一个版本，开启 `screen-capture` 的一方也必须同样固定 |
 
 ## 更新方式
 
@@ -134,7 +122,7 @@ crate 清单由 `scripts/apply_agentty.py` 生成：包名改为 `agentty-gpui-*
 引入新的原始版本：
 
 ```sh
-scripts/sync-upstream.sh v1.29.0   # 在 upstream 上生成新快照
+scripts/sync-upstream.sh <标签>   # 在 upstream 上生成新快照
 git merge upstream                 # 合并到 main，只有这里改过的文件可能冲突
 python3 -I scripts/apply_agentty.py
 ```
@@ -157,7 +145,7 @@ cargo test --workspace --doc --features agentty-gpui-apple/runtime_shaders
 1. 提高 `scripts/apply_agentty.py` 中的 `VERSION`，重新运行脚本并推送。CI 必须通过，包括 `cargo publish --workspace --dry-run`。
 2. 在 GitHub Actions 中运行 **Agentty** 工作流，用这个检出在 macOS、Windows 和 Linux 上构建并测试 Agentty。
 3. 用 `cargo publish --workspace` 按依赖顺序发布。
-4. 打上发布标签（`git tag v0.1.0 && git push origin v0.1.0`）。
+4. 打上发布标签（`git tag v<版本> && git push origin v<版本>`）。
 
 ## 反馈问题
 
