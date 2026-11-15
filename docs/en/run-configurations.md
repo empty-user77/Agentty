@@ -19,8 +19,8 @@ Detection only reads files, never runs a build tool. It looks in the project fol
 
 - The **⌄** beside the button lists the project's configurations, the ones you ran lately first. Picking one only selects it: the button then shows it, and **Run** starts it.
 - **Run** starts the configuration. While it runs, the button turns into **Stop** and **Restart**.
-- The status bar shows **Run** (or how many are running). Its popover lists the configurations with their state and ports, and every process of the project that listens on a port, each with a button to stop it or open it in the browser. Ports are not shown on Windows.
-- If a run fails because its port is taken, the log names the process holding it and offers **Stop it and run again**, but only when that process belongs to the project. Anything else you stop yourself from the open ports, if you are sure.
+- The status bar shows **Run** (or how many are running). Its popover lists the servers of the project running now (processes that answer on a port over HTTP, whether you started them, a configuration did or an agent did), each with a button to stop it or open it in the browser, and below them the configurations with their state and ports. Agent CLIs and ports that are not web servers (databases, debuggers) are left out. Ports are not shown on Windows.
+- If a run fails because its port is taken, the log names the process holding it and offers **Stop it and run again**, but only when that process belongs to the project. Anything else you stop yourself from the running servers, if you are sure.
 
 ## The run log
 

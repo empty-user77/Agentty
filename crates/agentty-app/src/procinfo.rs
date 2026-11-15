@@ -484,6 +484,40 @@ mod agent_tests {
     use super::*;
     use std::path::Path;
 
+    /// A local server that reads a request and answers `reply` (or nothing, and holds on).
+    fn local_server(reply: Option<&'static [u8]>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 512];
+            let _ = stream.read(&mut buffer);
+            match reply {
+                Some(reply) => {
+                    let _ = stream.write_all(reply);
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(2000)),
+            }
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn only_ports_answering_http_count_as_servers() {
+        for (reply, expected) in [
+            (Some(&b"HTTP/1.1 404 Not Found\r\n\r\n"[..]), Some(true)),
+            (Some(&[0x15, 0x03, 0x01, 0x00, 0x02][..]), Some(true)), // a TLS alert: an https server
+            (Some(&b"\x00\x00\x00\x08SFATAL"[..]), Some(false)),     // a database's own protocol
+            (Some(&b""[..]), Some(false)),                           // closes without a word
+            (None, None),                                            // still building
+        ] {
+            let (port, server) = local_server(reply);
+            assert_eq!(speaks_http(port), expected, "{reply:?}");
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     fn recognizes_agent_binaries() {
         assert_eq!(tool_for_process(Path::new("/Users/me/.local/share/claude/versions/2.1.273"), &[]), Some("claude"));
@@ -564,16 +598,14 @@ pub fn listeners(roots: &[u32]) -> std::collections::HashMap<u32, Vec<Listener>>
         return result; // no ps / lsof; ports are not shown on Windows
     }
     let parents = process_parents();
+    let mut found: Vec<(u32, u32, Vec<u16>)> = Vec::new();
     for (pid, ports) in tcp_listeners() {
         // Walk up to a pane's shell.
         let mut current = pid;
         for _ in 0..64 {
             if roots.contains(&current) {
-                let entry = result.entry(current).or_default();
-                for port in &ports {
-                    if !entry.iter().any(|l| l.port == *port) {
-                        entry.push(Listener { pid, port: *port });
-                    }
+                if !is_agent_cli(pid) {
+                    found.push((current, pid, ports));
                 }
                 break;
             }
@@ -583,6 +615,16 @@ pub fn listeners(roots: &[u32]) -> std::collections::HashMap<u32, Vec<Listener>>
             }
         }
     }
+    let web = web_ports(found.iter().map(|(_, pid, ports)| (*pid, ports.as_slice())));
+    for (root, pid, ports) in found {
+        let entry = result.entry(root).or_default();
+        for port in ports.into_iter().filter(|port| web.contains(&(pid, *port))) {
+            if !entry.iter().any(|l| l.port == port) {
+                entry.push(Listener { pid, port });
+            }
+        }
+    }
+    result.retain(|_, found| !found.is_empty());
     result.values_mut().for_each(|found| found.sort_unstable_by_key(|l| l.port));
     result
 }
@@ -629,6 +671,108 @@ pub fn kill_remaining(stopped: &[Listener]) {
             signal(listener.pid, true);
         }
     }
+}
+
+/// An agent CLI listens for its own use (Claude Code's local port, …): that is no server of the
+/// user's. What it starts itself (`npm run dev` from a tool call) is a child process and still counts.
+fn is_agent_cli(pid: u32) -> bool {
+    executable_path(pid).is_some_and(|path| tool_for_process(&path, &process_args(pid)).is_some())
+}
+
+/// What a port said when it was asked for a page.
+#[derive(Clone, Copy)]
+enum HttpAnswer {
+    Web,
+    Other,
+    /// Nothing yet (a dev server still building): asked again `HTTP_RETRY` later, `HTTP_TRIES`
+    /// times in all — a port that keeps quiet (`nc -l`, a protocol where the client speaks first
+    /// and waits) is no web server, and must not get a request every few seconds.
+    Silent {
+        at: std::time::Instant,
+        tries: u8,
+    },
+}
+
+const HTTP_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+const HTTP_TRIES: u8 = 3;
+/// An answer not needed for this long is dropped (its server is gone, or the pid was reused).
+const HTTP_FORGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Answers by (pid, port), so each port is asked once while its process lives, with when each was
+/// last needed. Shared by the pane ports and the run panel.
+type HttpAnswers = std::collections::HashMap<(u32, u16), (HttpAnswer, std::time::Instant)>;
+static HTTP_ANSWERS: std::sync::Mutex<Option<HttpAnswers>> = std::sync::Mutex::new(None);
+
+/// Which of `found`'s ports serve HTTP (a page, an API, `https`): the ports shown are servers to
+/// open, not every socket a program keeps (a database, a debugger, a language server).
+fn web_ports<'a>(found: impl Iterator<Item = (u32, &'a [u16])>) -> std::collections::HashSet<(u32, u16)> {
+    use std::time::Instant;
+    let pairs: Vec<(u32, u16)> = found.flat_map(|(pid, ports)| ports.iter().map(move |port| (pid, *port))).collect();
+    let ask: Vec<((u32, u16), u8)> = {
+        let mut answers = HTTP_ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
+        let answers = answers.get_or_insert_with(Default::default);
+        let now = Instant::now();
+        answers.retain(|_, (_, seen)| now.duration_since(*seen) < HTTP_FORGET);
+        pairs
+            .iter()
+            .filter_map(|key| match answers.get_mut(key) {
+                None => Some((*key, 0)),
+                Some((answer, seen)) => {
+                    *seen = now;
+                    match *answer {
+                        HttpAnswer::Silent { at, tries } if at.elapsed() >= HTTP_RETRY => Some((*key, tries)),
+                        _ => None,
+                    }
+                }
+            })
+            .collect()
+    };
+    let asked: Vec<((u32, u16), u8, Option<bool>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> =
+            ask.iter().map(|&((pid, port), tries)| scope.spawn(move || ((pid, port), tries, speaks_http(port)))).collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    let mut answers = HTTP_ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
+    let answers = answers.get_or_insert_with(Default::default);
+    let now = Instant::now();
+    for (key, tries, answer) in asked {
+        let answer = match answer {
+            Some(true) => HttpAnswer::Web,
+            Some(false) => HttpAnswer::Other,
+            None if tries + 1 >= HTTP_TRIES => HttpAnswer::Other,
+            None => HttpAnswer::Silent { at: now, tries: tries + 1 },
+        };
+        answers.insert(key, (answer, now));
+    }
+    pairs.into_iter().filter(|key| matches!(answers.get(key), Some((HttpAnswer::Web, _)))).collect()
+}
+
+/// Whether the local `port` answers a plain HTTP request like a web server (or with a TLS alert:
+/// an `https` dev server). `None`: it accepted nothing or said nothing in time.
+fn speaks_http(port: u16) -> Option<bool> {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addresses = [SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))];
+    let mut stream = addresses.iter().find_map(|a| TcpStream::connect_timeout(a, Duration::from_millis(300)).ok())?;
+    stream.set_read_timeout(Some(Duration::from_millis(1500))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_millis(500))).ok()?;
+    stream.write_all(format!("HEAD / HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n").as_bytes()).ok()?;
+    let mut head = [0u8; 5];
+    let mut read = 0;
+    while read < head.len() {
+        match stream.read(&mut head[read..]) {
+            Ok(0) => break,
+            Ok(n) => read += n,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) && read == 0 => return None,
+            Err(_) => break,
+        }
+    }
+    Some(answers_like_http(&head[..read]))
+}
+
+fn answers_like_http(head: &[u8]) -> bool {
+    head.starts_with(b"HTTP/") || (head.len() >= 2 && head[0] == 0x15 && head[1] == 0x03)
 }
 
 /// Which of `candidates` listen on a TCP port now (never this app, never pid 1).
@@ -687,10 +831,17 @@ pub fn serving_in(root: &std::path::Path, shells: &[u32]) -> Vec<ServingProcess>
         }
         false
     };
-    let mut found: Vec<ServingProcess> = tcp_listeners()
+    let candidates: Vec<(u32, Vec<u16>)> = tcp_listeners()
         .into_iter()
         .filter(|(pid, _)| *pid > 1 && *pid != own)
         .filter(|(pid, _)| under_shell(*pid) || cwd_of(*pid).is_some_and(|dir| dir.starts_with(root)))
+        .filter(|(pid, _)| !is_agent_cli(*pid))
+        .collect();
+    let web = web_ports(candidates.iter().map(|(pid, ports)| (*pid, ports.as_slice())));
+    let mut found: Vec<ServingProcess> = candidates
+        .into_iter()
+        .map(|(pid, ports)| (pid, ports.into_iter().filter(|port| web.contains(&(pid, *port))).collect::<Vec<_>>()))
+        .filter(|(_, ports)| !ports.is_empty())
         .map(|(pid, mut ports)| {
             ports.sort_unstable();
             ports.dedup();

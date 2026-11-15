@@ -963,6 +963,7 @@ impl Workbench {
             || self.remote_page.dialog_open()
             || self.todo_menu.is_some()
             || self.pane_menu.is_some()
+            || self.runs.popup_open()
             || self.files_panel.as_ref().is_some_and(|f| f.popup_open())
             || self.onboarding.as_ref().is_some_and(|o| o.is_modal())
             // Native views swallow mouse events; hide it so the resize drags keep reaching GPUI.
