@@ -29,6 +29,8 @@ A repository without any commit has nothing to branch from. There the lead works
 
 The bar above the chat shows the lead's status, the chat's branch and a chip for each worker. Click a chip to jump to that worker's terminal. If a worker waits on you (an approval, a question), the chat says so too.
 
+The chat's messages, yours and the lead's, select and copy like a plain chat's: drag across them and press **⌘C**, or use the bar over a selection to quote it in a reply.
+
 ## Workers and reviewers
 
 Two buttons in the chat's bar choose who does the work:
