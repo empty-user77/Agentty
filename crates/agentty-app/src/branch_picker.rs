@@ -106,7 +106,7 @@ impl BranchPicker {
             TextInputEvent::Cancelled => cx.emit(BranchPickerEvent::Dismiss),
             _ => {}
         });
-        window.focus(&query.focus_handle(cx));
+        window.focus(&query.focus_handle(cx), cx);
         let mut picker = Self {
             repo,
             current,
@@ -354,7 +354,7 @@ impl BranchPicker {
             _ => {}
         })
         .detach();
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         actions.error = None;
         actions.pending = Some(if rename { Pending::Rename(input) } else { Pending::NewFrom(input) });
         cx.notify();
@@ -630,7 +630,7 @@ impl BranchPicker {
             _ => {}
         })
         .detach();
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.new_branch = Some(input);
         cx.notify();
     }
@@ -650,7 +650,7 @@ fn field(input: gpui::Entity<TextInput>, accent: bool) -> gpui::Div {
         .bg(hex(0x1a1a1a))
         .t_body()
         .text_color(hex(Chrome::BRIGHT))
-        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&focus.focus_handle(cx)))
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&focus.focus_handle(cx), cx))
         .child(input)
 }
 
@@ -681,7 +681,7 @@ impl Render for BranchPicker {
                                     .collect::<Vec<_>>()
                             }),
                         )
-                        .track_scroll(self.scroll.clone())
+                        .track_scroll(&self.scroll.clone())
                         .size_full(),
                     )
                     .into_any_element()

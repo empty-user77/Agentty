@@ -260,7 +260,7 @@ impl Render for UsageView {
             )
             .child(
                 action_button("usage-refresh", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx)))
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w_0()
                     .truncate(),
             )

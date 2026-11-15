@@ -77,7 +77,7 @@ impl IdeaView {
                 }
             }),
         ];
-        window.focus(&input.read(cx).focus_handle(cx));
+        window.focus(&input.read(cx).focus_handle(cx), cx);
         Self {
             input,
             name,
@@ -113,7 +113,7 @@ impl IdeaView {
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.input.read(cx).focus_handle(cx));
+        window.focus(&self.input.read(cx).focus_handle(cx), cx);
     }
 
     fn push_message(&mut self, text: String, pasted: bool, cx: &mut Context<Self>) {

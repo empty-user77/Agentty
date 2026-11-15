@@ -508,7 +508,7 @@ unsafe fn guard_window_keyboard(window: Id) {
         class as *const Class as *mut Class,
         sel!(makeFirstResponder:),
         std::mem::transmute::<extern "C" fn(&Object, Sel, Id) -> BOOL, objc::runtime::Imp>(imp),
-        c"c@:@".as_ptr(),
+        crate::native::BOOL_OF_OBJECT.as_ptr(),
     );
     if added == YES {
         guarded.push(key);

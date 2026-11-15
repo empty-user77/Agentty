@@ -635,7 +635,7 @@ impl gpui::Element for Ticking {
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(every).await;
                 TICKING_VIEWS.with(|views| views.borrow_mut().remove(&view));
-                let _ = cx.update(|cx| cx.notify(view));
+                cx.update(|cx| cx.notify(view));
             })
             .detach();
         }
@@ -769,7 +769,7 @@ impl Scrolled {
             Scrolled::Handle(handle) => handle.max_offset(),
             Scrolled::List(state) => state.max_offset_for_scrollbar(),
         };
-        f32::from(if vertical { max.height } else { max.width })
+        f32::from(if vertical { max.y } else { max.x })
     }
 
     /// How far it is scrolled now (positive).

@@ -554,7 +554,7 @@ impl Workbench {
             let focus = input.clone();
             div()
                 .w(gpui::px(340.))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx)))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx))
                 .flex()
                 .px_2()
                 .py_1()

@@ -52,12 +52,10 @@ pub(super) fn type_when_ready(pane: Pane, text: String, after: Duration, submit:
         // `from`: since when the program has been past its questions.
         let (mut screen, mut since, mut from) = (None, Instant::now(), started);
         loop {
-            let Ok((paste, now, asking)) = pane.read_with(cx, |view, _| {
+            let (paste, now, asking) = pane.read_with(cx, |view, _| {
                 let (paste, now) = view.input_state();
                 (paste, now, super::chat::is_setup_screen(&view.screen_lines(super::chat::WHOLE_SCREEN)))
-            }) else {
-                return;
-            };
+            });
             if asking {
                 if started.elapsed() >= ANSWER_WAIT {
                     return;
@@ -72,7 +70,7 @@ pub(super) fn type_when_ready(pane: Pane, text: String, after: Duration, submit:
             }
             cx.background_executor().timer(POLL).await;
         }
-        let _ = pane.update(cx, |view, cx| if submit { view.submit_prompt(text, cx) } else { view.insert_text(&text) });
+        pane.update(cx, |view, cx| if submit { view.submit_prompt(text, cx) } else { view.insert_text(&text) });
     })
     .detach();
 }

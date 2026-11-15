@@ -1140,7 +1140,7 @@ impl Workbench {
                     .id(SharedString::from(format!("browser-tab-{index}")))
                     .h(px(20.))
                     .flex()
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w(px(58.))
                     .max_w(px(170.))
                     .items_center()

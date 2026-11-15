@@ -139,7 +139,7 @@ impl Workbench {
     pub(super) fn onboarding_key(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         let shown = self.onboarding.as_ref().is_some_and(|o| o.step != Step::Tour);
         let keys = &event.keystroke;
-        if shown && keys.key == "enter" && keys.modifiers.secondary() && !keys.modifiers.shift {
+        if shown && keys.key == "enter" && keys.modifiers.secondary(cx) && !keys.modifiers.shift {
             self.setup_next(cx);
             return true;
         }

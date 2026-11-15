@@ -120,15 +120,6 @@ fn grid_slot(existing: &[Point<Pixels>], preferred_index: usize, columns: usize)
     cell(index)
 }
 
-/// Example cards of the onboarding tour: no session behind them, ids no pane ever gets. They exist
-/// only while the tour teaches Session Flow, so there is always something to drag there.
-pub(super) const DEMO_SOURCE: u64 = u64::MAX - 1;
-pub(super) const DEMO_TARGET: u64 = u64::MAX - 2;
-
-fn is_demo(id: u64) -> bool {
-    id == DEMO_SOURCE || id == DEMO_TARGET
-}
-
 #[derive(Clone, PartialEq)]
 pub enum EdgeStatus {
     Sharing,
@@ -399,14 +390,6 @@ impl Workbench {
         let drag = self.flow.drag.take();
         if let Some(FlowDrag::Connect { from }) = drag {
             if let Some(to) = self.flow.node_at(self.flow.pointer).filter(|to| *to != from) {
-                // The tour's example cards: a line between them, nothing sent anywhere. An example
-                // card and a real session are never linked.
-                if is_demo(from) || is_demo(to) {
-                    if is_demo(from) && is_demo(to) {
-                        self.flow_demo_link(from, to, cx);
-                    }
-                    return cx.notify();
-                }
                 // The same link as the pane's link button makes: two Claude Code sessions are
                 // introduced and message each other; anything else gets the conversation as a
                 // document. (A drag used to make only the document, so a session linked here
@@ -419,15 +402,6 @@ impl Workbench {
                 }
             }
         }
-        cx.notify();
-    }
-
-    /// Links the tour's two example cards (what a drag between them does, or "Do this step for me").
-    pub(super) fn flow_demo_link(&mut self, from: u64, to: u64, cx: &mut Context<Self>) {
-        if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
-            self.flow.edges.push(FlowEdge { status: EdgeStatus::Shared(0), ..FlowEdge::new(from, to) });
-        }
-        self.onboarding_event(super::onboarding::TourEvent::DemoLinked, cx);
         cx.notify();
     }
 
@@ -808,12 +782,7 @@ impl Workbench {
         // Set again by the workflow chart when it draws a running line; nothing else on the page moves.
         self.session_board_stop_animating();
         let panes = self.agent_panes(cx);
-        let mut alive: Vec<u64> = panes.iter().map(|p| p.read(cx).pane_id).collect();
-        // The onboarding tour brings two example cards; they go when it moves on.
-        let demo = self.tour_shows_flow_demo();
-        if demo {
-            alive.extend([DEMO_SOURCE, DEMO_TARGET]);
-        }
+        let alive: Vec<u64> = panes.iter().map(|p| p.read(cx).pane_id).collect();
         self.flow.positions.retain(|id, _| alive.contains(id));
         self.flow.edges.retain(|e| alive.contains(&e.from) && alive.contains(&e.to));
 
@@ -823,18 +792,7 @@ impl Workbench {
             let position = self.flow.position(id, index);
             nodes.push((pane.clone(), id, position));
         }
-        let demo_nodes: Vec<(u64, Point<Pixels>)> = if demo {
-            [DEMO_SOURCE, DEMO_TARGET].iter().enumerate().map(|(k, id)| (*id, self.flow.position(*id, panes.len() + k))).collect()
-        } else {
-            Vec::new()
-        };
-        let position_of = |id: u64| {
-            nodes
-                .iter()
-                .find(|(_, n, _)| *n == id)
-                .map(|(_, _, p)| *p)
-                .or_else(|| demo_nodes.iter().find(|(n, _)| *n == id).map(|(_, p)| *p))
-        };
+        let position_of = |id: u64| nodes.iter().find(|(_, n, _)| *n == id).map(|(_, _, p)| *p);
 
         // Edge geometry relative to the canvas: from the source's right handle to the target's left side.
         let mut curves: Vec<(Point<Pixels>, Point<Pixels>, u32)> = Vec::new();
@@ -890,7 +848,7 @@ impl Workbench {
                     move |bounds, _, window, _| {
                         // The wheel moves the view; with ⌘ or Ctrl it zooms around the pointer.
                         let entity = entity.clone();
-                        window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                        window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, _, cx| {
                             if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&event.position) {
                                 return;
                             }
@@ -944,37 +902,10 @@ impl Workbench {
         for (pane, id, position) in nodes {
             area = area.child(self.render_flow_node(&pane, id, position, cx));
         }
-        for (id, position) in demo_nodes {
-            area = area.child(self.render_flow_demo_node(id, position, cx));
-        }
         for (edge, mid) in labels {
-            area = area.child(if is_demo(edge.from) {
-                // No controls on an example link: there is nothing to keep live, resend or stop.
-                div()
-                    .absolute()
-                    .left(mid.x - px(90.))
-                    .top(mid.y - px(34.))
-                    .w(px(180.))
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(hex(Chrome::OVERLAY))
-                            .border_1()
-                            .border_color(hex(Chrome::ATTENTION))
-                            .t_caption()
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(t(cx, "flow.demo_linked")),
-                    )
-                    .into_any_element()
-            } else {
-                self.render_edge_label(edge, mid, cx).into_any_element()
-            });
+            area = area.child(self.render_edge_label(edge, mid, cx));
         }
-        if panes.is_empty() && !demo {
+        if panes.is_empty() {
             area = area.child(div().absolute().top(px(40.)).left(px(40.)).right(px(40.)).child(hint(t(cx, "flow.empty"))));
         } else {
             area = area.child(self.render_flow_zoom(cx));
@@ -1228,126 +1159,6 @@ impl Workbench {
                     ),
             )
             // Input side marker.
-            .child(div().absolute().left(s(-5.)).top(s(NODE_HEIGHT / 2. - 5.)).size(s(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)))
-    }
-
-    /// An example card of the onboarding tour: looks like a session, can be moved and linked to the
-    /// other example card, and has nothing behind it.
-    fn render_flow_demo_node(&self, id: u64, position: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
-        let (kind, title) =
-            if id == DEMO_SOURCE { (crate::launch::PaneKind::Claude, "Claude Code") } else { (crate::launch::PaneKind::Codex, "Codex") };
-        let accent = kind_color(kind);
-        let connecting = matches!(self.flow.drag, Some(FlowDrag::Connect { from }) if from != id);
-        let hovered_target = connecting && self.flow.node_at(self.flow.pointer) == Some(id);
-        // The tour points at the handle of the first card until the two are linked.
-        let ring = id == DEMO_SOURCE && self.tour_target() == Some("flow-demo-handle");
-        let (at, z) = (self.flow.to_canvas(position), self.flow.view.zoom);
-        let s = |v: f32| px(v * z);
-        div()
-            .id(("flow-demo-node", (u64::MAX - id) as usize))
-            .absolute()
-            .left(at.x)
-            .top(at.y)
-            .w(s(NODE_WIDTH))
-            .h(s(NODE_HEIGHT))
-            .rounded_lg()
-            .bg(hex(Chrome::OVERLAY))
-            .border_2()
-            .border_dashed()
-            .border_color(if hovered_target { hex(Chrome::BLUE) } else { hex_alpha(Chrome::WARNING, 0.7) })
-            .shadow_md()
-            .child(
-                div()
-                    .id(("flow-demo-header", (u64::MAX - id) as usize))
-                    .flex()
-                    .items_center()
-                    .gap(s(8.))
-                    .px(s(12.))
-                    .py(s(8.))
-                    .rounded_t_lg()
-                    .bg(hex_alpha(accent, 0.18))
-                    .cursor_grab()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let current = this.flow.positions.get(&id).copied().unwrap_or(position);
-                            let at = this.flow.to_chart(event.position);
-                            let grab = point(at.x - current.x, at.y - current.y);
-                            this.flow.drag = Some(FlowDrag::Move { pane: id, grab });
-                            this.flow.pointer = event.position;
-                        }),
-                    )
-                    .child(crate::brand::avatar(crate::brand::kind_id(kind), 18. * z))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(s(Type::BODY))
-                            .font_weight(crate::theme::EMPHASIS)
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .px_1p5()
-                            .rounded_sm()
-                            .bg(hex_alpha(Chrome::WARNING, 0.25))
-                            .text_size(s(Type::CAPTION))
-                            .text_color(hex(Chrome::WARNING))
-                            .child(t(cx, "flow.demo_tag")),
-                    ),
-            )
-            .child(
-                div()
-                    .px(s(12.))
-                    .pt(s(4.))
-                    .flex()
-                    .flex_col()
-                    .gap(s(2.))
-                    .text_size(s(Type::SMALL))
-                    .child(
-                        div()
-                            .text_color(hex(Chrome::FOREGROUND))
-                            .child(t(cx, if id == DEMO_SOURCE { "flow.demo_source" } else { "flow.demo_target" })),
-                    )
-                    .child(div().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.demo_note"))),
-            )
-            .child(
-                div()
-                    .id(("flow-demo-handle", (u64::MAX - id) as usize))
-                    .absolute()
-                    .right(s(-8.))
-                    .top(s(NODE_HEIGHT / 2. - 8.))
-                    .size(s(16.))
-                    .rounded_full()
-                    .bg(hex(accent))
-                    .border_2()
-                    .border_color(hex(Chrome::EDITOR))
-                    .cursor_crosshair()
-                    .hover(|s| s.bg(hex(Chrome::BLUE)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            this.flow.drag = Some(FlowDrag::Connect { from: id });
-                            this.flow.pointer = event.position;
-                            cx.notify();
-                        }),
-                    ),
-            )
-            .when(ring, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .right(s(-16.))
-                        .top(s(NODE_HEIGHT / 2. - 16.))
-                        .size(px(32.))
-                        .child(crate::ui::pulse_ring("flow-demo-handle", true)),
-                )
-            })
             .child(div().absolute().left(s(-5.)).top(s(NODE_HEIGHT / 2. - 5.)).size(s(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)))
     }
 

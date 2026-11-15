@@ -325,7 +325,7 @@ impl Workbench {
                     .child(label),
             );
         }
-        let corner = if right { gpui::Corner::TopRight } else { gpui::Corner::TopLeft };
+        let corner = if right { gpui::Anchor::TopRight } else { gpui::Anchor::TopLeft };
         let anchored = gpui::anchored().anchor(corner).snap_to_window_with_margin(px(8.)).child(menu);
         let place = div().absolute().top(px(CONTROL_HEIGHT + 4.));
         Some(if right { place.right_0() } else { place.left_0() }.child(self.overlay(anchored)).into_any_element())
@@ -687,7 +687,7 @@ impl Workbench {
                                     let input = this.plugin_inputs.get(&key).map(|f| f.input.clone());
                                     this.apply_plugin_completion(&key, row, cx);
                                     if let Some(input) = input {
-                                        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+                                        window.focus(&gpui::Focusable::focus_handle(&input, cx), cx);
                                     }
                                     cx.stop_propagation();
                                 }),
@@ -714,7 +714,7 @@ impl Workbench {
                             ),
                     );
                 }
-                let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
+                let anchored = gpui::anchored().anchor(gpui::Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
                 div()
                     .w_full()
                     .relative()
@@ -1079,7 +1079,7 @@ impl Workbench {
                 // had it wrap a character a line.
                 let cell = |column: usize| match widths[column] {
                     GridWidth::Px(px_width) => div().w(px(px_width)).flex_shrink_0().min_w_0(),
-                    GridWidth::Share(share) => div().flex_basis(relative(share as f32 / shares as f32)).flex_shrink().min_w_0(),
+                    GridWidth::Share(share) => div().flex_basis(relative(share as f32 / shares as f32)).flex_shrink_1().min_w_0(),
                 };
                 // Heights flow down by flex (a percentage of a flexed height is not settled, and
                 // the columns grew with their content instead of scrolling).
@@ -1164,12 +1164,12 @@ impl Workbench {
                     .min_w_0()
                     .overflow_x_scroll()
                     .track_scroll(&scroll)
-                    .on_scroll_wheel(move |event, window, _| {
+                    .on_scroll(move |event, window, _| {
                         // A mouse wheel only turns up and down: that moves the strip sideways.
                         let delta = event.delta.pixel_delta(window.line_height());
                         if delta.y.abs() > delta.x.abs() {
                             let offset = wheel.offset();
-                            let max = wheel.max_offset().width;
+                            let max = wheel.max_offset().x;
                             wheel.set_offset(gpui::point((offset.x + delta.y).clamp(-max, px(0.)), offset.y));
                             window.refresh();
                         }
@@ -1186,7 +1186,7 @@ impl Workbench {
                         let x = f32::from(event.event.position.x);
                         if let Some(last) = drag.last_x.replace(Some(x)) {
                             let offset = dragged.offset();
-                            let max = dragged.max_offset().width;
+                            let max = dragged.max_offset().x;
                             dragged.set_offset(gpui::point((offset.x + px(x - last)).clamp(-max, px(0.)), offset.y));
                             window.refresh();
                         }
@@ -1627,7 +1627,7 @@ impl Workbench {
                         }))
                         .child(menu);
                     let anchored =
-                        gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(div().mt_1().child(card));
+                        gpui::anchored().anchor(gpui::Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(div().mt_1().child(card));
                     div().absolute().top(px(CONTROL_HEIGHT)).left_0().child(self.overlay(anchored))
                 });
                 // A column, so the trigger is stretched: as a block its width was not settled when
@@ -1764,7 +1764,7 @@ impl Workbench {
                                         let x = f32::from(event.event.position.x);
                                         if let Some(last) = drag.last_x.replace(Some(x)) {
                                             let offset = dragged.offset();
-                                            let max = dragged.max_offset().width;
+                                            let max = dragged.max_offset().x;
                                             dragged.set_offset(gpui::point((offset.x + px(x - last)).clamp(-max, px(0.)), offset.y));
                                             window.refresh();
                                         }

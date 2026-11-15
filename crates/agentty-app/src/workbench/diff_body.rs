@@ -332,7 +332,7 @@ impl DiffBody {
     }
 
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         self.ask = None;
         let bounds = self.bounds.get();
         if f32::from(event.position.x) >= f32::from(bounds.origin.x + bounds.size.width) - SCROLLBAR {
@@ -403,7 +403,7 @@ impl DiffBody {
         }
         let base = self.base();
         let offset = base.offset();
-        let y = (f32::from(offset.y) - self.scroll_by * ROW).clamp(-f32::from(base.max_offset().height), 0.);
+        let y = (f32::from(offset.y) - self.scroll_by * ROW).clamp(-f32::from(base.max_offset().y), 0.);
         base.set_offset(gpui::point(offset.x, px(y)));
         self.move_head(window, cx);
         cx.notify();
@@ -479,7 +479,7 @@ impl DiffBody {
 
     fn close_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ask.take().is_some() {
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
             cx.notify();
         }
     }
@@ -680,7 +680,7 @@ impl Render for DiffBody {
                         })
                         .collect::<Vec<_>>()
                 })
-                .track_scroll(handle)
+                .track_scroll(&handle)
                 .size_full(),
             )
             .child(

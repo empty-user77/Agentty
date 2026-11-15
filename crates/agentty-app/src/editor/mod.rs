@@ -801,7 +801,7 @@ impl CodeEditor {
                 self.docs[index].preview = true;
             }
             if !quiet {
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
             }
             self.tabs_changed(cx);
             self.apply_pending_goto(cx);
@@ -829,7 +829,7 @@ impl CodeEditor {
                         this.docs[this.active].preview = true;
                     }
                     if this.quiet_open.take().as_deref() != Some(path.as_path()) {
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                     }
                     this.resolve_presence(&path);
                     this.tabs_changed(cx);
@@ -911,14 +911,14 @@ impl CodeEditor {
             self.active = index;
             // The instruction box belongs to lines of the file it was opened on.
             self.ask = None;
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             self.tabs_changed(cx);
             cx.notify();
         }
     }
 
-    pub fn focus(&self, window: &mut Window) {
-        window.focus(&self.focus_handle);
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus_handle, cx);
     }
 
     /// Closes file `index`, asking first when it has unsaved changes.
@@ -1528,7 +1528,7 @@ impl CodeEditor {
         if self.docs.get(self.active).is_some_and(Document::previewing_beside) {
             crate::webview::focus_gpui_view(window);
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         let Some(layout) = self.layout.as_ref() else { return };
         if layout.on_scrollbar(event.position) {
             let scroll = self.docs.get(self.active).map_or(0., |d| d.scroll.y);
@@ -1560,14 +1560,14 @@ impl CodeEditor {
         };
         // ⌘-click: to the definition of what was clicked (or the file an import names).
         // ⌥-click: one more cursor there.
-        if event.modifiers.alt && !event.modifiers.shift && !event.modifiers.secondary() && !in_gutter && event.click_count == 1 {
+        if event.modifiers.alt && !event.modifiers.shift && !event.modifiers.secondary(cx) && !in_gutter && event.click_count == 1 {
             doc.buffer.unmark();
             doc.buffer.toggle_cursor(pos);
             self.link = None;
             self.drag = None;
             return cx.notify();
         }
-        if event.modifiers.secondary() && !event.modifiers.shift && !in_gutter && event.click_count == 1 {
+        if event.modifiers.secondary(cx) && !event.modifiers.shift && !in_gutter && event.click_count == 1 {
             doc.buffer.move_to(pos, false);
             self.link = None;
             self.ask = None;
@@ -1600,8 +1600,8 @@ impl CodeEditor {
                 cx.notify();
             }
             let over = self.text_position(event.position);
-            let hovered = over.filter(|_| event.modifiers.secondary());
-            let plain = over.filter(|_| !event.modifiers.secondary() && !event.modifiers.alt && !event.modifiers.shift);
+            let hovered = over.filter(|_| event.modifiers.secondary(cx));
+            let plain = over.filter(|_| !event.modifiers.secondary(cx) && !event.modifiers.alt && !event.modifiers.shift);
             self.hover_problem(plain, cx);
             self.hover_type(plain, cx);
             return self.hover_link(hovered, cx);
@@ -1645,7 +1645,7 @@ impl CodeEditor {
         Some(layout.position_for(position, &doc.buffer))
     }
 
-    fn scroll_wheel(&mut self, event: &gpui::ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn scroll_wheel(&mut self, event: &gpui::ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(layout) = self.layout.as_ref() else { return };
         let delta = event.delta.pixel_delta(px(layout.line_height));
         let (max_x, max_y) = (layout.max_scroll_x, layout.max_scroll_y);
@@ -1671,7 +1671,7 @@ impl CodeEditor {
             self.preview.hide();
             // The page may have had the keyboard: the text takes it back.
             crate::webview::focus_gpui_view(window);
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         }
         cx.notify();
     }
@@ -1691,7 +1691,7 @@ impl CodeEditor {
         self.preview.synced = None;
         // The page may have had the keyboard: the text takes it back.
         crate::webview::focus_gpui_view(window);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -1891,7 +1891,7 @@ impl CodeEditor {
                     .overflow_hidden()
                     .tooltip(Tooltip::text(crate::ui::tilde(&doc.path), None))
                     .when_some(folder, |d, folder| {
-                        d.child(div().flex_shrink().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(format!("{folder}/")))
+                        d.child(div().flex_shrink_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(format!("{folder}/")))
                     })
                     .child(div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).font_weight(FontWeight::MEDIUM).child(doc.name()))
                     .children(self.render_breadcrumb(doc, cx))
@@ -2417,7 +2417,7 @@ impl CodeEditor {
             (Confirm::Discard(_), _) => cx.emit(EditorEvent::StayOpen),
             _ => {}
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -2978,7 +2978,7 @@ impl Render for CodeEditor {
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
-                .on_scroll_wheel(cx.listener(Self::scroll_wheel))
+                .on_scroll(cx.listener(Self::scroll_wheel))
                 .child(element::EditorElement::new(cx.entity()));
             if beside {
                 // Half and half, as VS Code opens it.
@@ -3133,7 +3133,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &Undo, window, cx| {
                 // Typing in a cell: undo leaves the cell as it was.
                 if this.cell_edit.take().is_some() {
-                    window.focus(&this.grid_focus);
+                    window.focus(&this.grid_focus, cx);
                     cx.notify();
                     return;
                 }
@@ -3209,7 +3209,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &review::NextChange, _, cx| this.review_step(true, cx)))
             .on_action(cx.listener(|this, _: &review::PreviousChange, _, cx| this.review_step(false, cx)))
             .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
-                let hovered = event.modifiers.secondary().then(|| this.pointer.and_then(|p| this.text_position(p))).flatten();
+                let hovered = event.modifiers.secondary(cx).then(|| this.pointer.and_then(|p| this.text_position(p))).flatten();
                 this.hover_link(hovered, cx);
             }))
             .child(self.render_toolbar(doc, cx))

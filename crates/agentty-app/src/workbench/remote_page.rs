@@ -610,7 +610,7 @@ impl Workbench {
             TextInputEvent::Next | TextInputEvent::Previous => {
                 let other = if which == 0 { this.remote_page.confirm.clone() } else { this.remote_page.password.clone() };
                 if let Some(other) = other {
-                    window.focus(&gpui::Focusable::focus_handle(other.read(cx), cx));
+                    window.focus(&gpui::Focusable::focus_handle(other.read(cx), cx), cx);
                     cx.notify();
                 }
             }
@@ -632,7 +632,7 @@ impl Workbench {
         for input in [&first, &second] {
             input.update(cx, |input, cx| input.set_text("", cx));
         }
-        window.focus(&gpui::Focusable::focus_handle(first.read(cx), cx));
+        window.focus(&gpui::Focusable::focus_handle(first.read(cx), cx), cx);
         self.remote_page.dialog_open = true;
         self.remote_page.dialog_error = None;
         cx.notify();
@@ -727,7 +727,7 @@ impl Workbench {
                 .items_center()
                 .gap_2()
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                    window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+                    window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx);
                     window.prevent_default();
                     cx.stop_propagation();
                 })
@@ -1193,6 +1193,7 @@ impl Workbench {
         };
         let lamp = div().size(gpui::px(12.)).rounded_full().bg(hex(color)).when(online, |d| {
             d.shadow(vec![gpui::BoxShadow {
+                inset: false,
                 color: hex_alpha(NEON_GREEN, 0.75),
                 offset: gpui::point(gpui::px(0.), gpui::px(0.)),
                 blur_radius: gpui::px(12.),

@@ -76,10 +76,7 @@ mod webview;
 mod workbench;
 
 use futures::StreamExt;
-use gpui::{
-    actions, point, px, size, App, AppContext, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions,
-};
+use gpui::{actions, point, px, size, App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions};
 use i18n::t;
 use std::borrow::Cow;
 use workbench::Workbench;
@@ -261,10 +258,11 @@ pub fn set_app_menus(cx: &mut App) {
     history.extend(recent_session_items(cx));
     if !closed_windows.is_empty() {
         history.push(MenuItem::separator());
-        history.push(MenuItem::submenu(Menu { name: t(cx, "menu.closed_windows").into(), items: closed_items() }));
+        history.push(MenuItem::submenu(Menu { disabled: false, name: t(cx, "menu.closed_windows").into(), items: closed_items() }));
     }
     cx.set_menus(vec![
         Menu {
+            disabled: false,
             name: "Agentty".into(),
             items: vec![
                 MenuItem::action(t(cx, "about.menu"), workbench::ShowAbout),
@@ -274,6 +272,7 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "menu.settings"), workbench::OpenSettings),
                 MenuItem::separator(),
                 MenuItem::submenu(Menu {
+                    disabled: false,
                     name: t(cx, "menu.legal").into(),
                     items: vec![
                         MenuItem::action(t(cx, "legal.privacy"), workbench::OpenPrivacyPolicy),
@@ -290,6 +289,7 @@ pub fn set_app_menus(cx: &mut App) {
             ],
         },
         Menu {
+            disabled: false,
             name: t(cx, "menu.file").into(),
             items: vec![
                 MenuItem::action(t(cx, "new.terminal"), workbench::NewTerminalTab),
@@ -307,6 +307,7 @@ pub fn set_app_menus(cx: &mut App) {
             ],
         },
         Menu {
+            disabled: false,
             name: t(cx, "menu.edit").into(),
             items: vec![
                 MenuItem::os_action(t(cx, "menu.cut"), terminal::Copy, gpui::OsAction::Cut),
@@ -324,6 +325,7 @@ pub fn set_app_menus(cx: &mut App) {
             .collect(),
         },
         Menu {
+            disabled: false,
             name: t(cx, "menu.view").into(),
             items: vec![
                 MenuItem::action(t(cx, "menu.toggle_sidebar"), workbench::ToggleSidebar),
@@ -345,8 +347,9 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "menu.font_reset"), workbench::ZoomReset),
             ],
         },
-        Menu { name: t(cx, "menu.history").into(), items: history },
+        Menu { disabled: false, name: t(cx, "menu.history").into(), items: history },
         Menu {
+            disabled: false,
             name: t(cx, "menu.window").into(),
             items: vec![
                 MenuItem::action(t(cx, "menu.minimize"), MinimizeWindow),
@@ -362,12 +365,14 @@ pub fn set_app_menus(cx: &mut App) {
             ],
         },
         Menu {
+            disabled: false,
             name: t(cx, "menu.help").into(),
             items: vec![
                 MenuItem::action(t(cx, "help.guide"), OpenGuide { page: "" }),
                 MenuItem::action(t(cx, "help.quick_start"), OpenGuide { page: "quick-start" }),
                 MenuItem::separator(),
                 MenuItem::submenu(Menu {
+                    disabled: false,
                     name: t(cx, "help.features").into(),
                     items: vec![
                         MenuItem::action(t(cx, "help.agent_status"), OpenGuide { page: "agent-status" }),
@@ -422,14 +427,14 @@ fn register_app_actions(cx: &mut App) {
     let task = cx.background_executor().spawn(async { agentty_bridge::list(None, RECENT_MENU_LIMIT) });
     cx.spawn(async move |cx| {
         let sessions = task.await;
-        let _ = cx.update(|cx| set_recent_sessions(&sessions, cx));
+        cx.update(|cx| set_recent_sessions(&sessions, cx));
     })
     .detach();
 }
 
 /// A binding written for macOS, translated for this platform (see `keymap`).
-pub fn key<A: gpui::Action>(keys: &str, action: A, context: Option<&str>) -> KeyBinding {
-    KeyBinding::new(&keymap::binding(keys, context), action, context)
+pub fn key<A: gpui::Action>(keys: &'static str, action: A, context: Option<&str>) -> KeyBinding {
+    KeyBinding::new(keymap::static_binding(keys, context), action, context)
 }
 
 /// Shortcuts follow the keyboard layout (keys macOS moves ⌘ shortcuts to, AltGr keys left free on
@@ -454,7 +459,7 @@ pub fn bind(cx: &mut App, bindings: impl IntoIterator<Item = KeyBinding>) {
         if keymap::takes_typed_character(&binding) {
             continue;
         }
-        let twin = keymap::typed_twin(&binding);
+        let twin = keymap::typed_twin(&binding, cx);
         // The written form first: the menus show the first binding of an action (⇧⌘[, not ⌘{).
         bound.push(binding);
         bound.extend(twin);
@@ -716,7 +721,7 @@ fn main() {
     // An older Agentty killed while it had the machine captured: put its proxy settings back before
     // anything else runs.
     platform::system_proxy::restore_after_crash();
-    let app = Application::new().with_assets(assets::Assets);
+    let app = gpui_platform::application().with_assets(assets::Assets);
     // Clicking the Dock icon brings the window back (after closing to the menu bar or mini mode).
     app.on_open_urls(|urls| {
         let folders = urls.iter().filter_map(|url| file_url_path(url)).filter(|path| path.is_dir());
@@ -786,9 +791,7 @@ fn main() {
         remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {
-                if cx.update(|cx| plugins::handle(envelope, cx)).is_err() {
-                    break;
-                }
+                cx.update(|cx| plugins::handle(envelope, cx));
             }
         })
         .detach();
@@ -802,7 +805,7 @@ fn main() {
             // again: look once more shortly after, and have it read the layout again if so.
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                if cx.update(|cx| keyboard_layout::read_too_early(cx)).unwrap_or(false) {
+                if cx.update(|cx| keyboard_layout::read_too_early(cx)) {
                     keyboard_layout::read_again();
                 }
             })
@@ -830,7 +833,7 @@ fn main() {
         // Files dropped on a window go to the pane under the pointer.
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
-            let alive = cx.update(|cx| {
+            cx.update(|cx| {
                 let opened = OPENED_FOLDERS.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
                 for folder in opened {
                     // The frontmost Agentty window, else the main one.
@@ -863,9 +866,6 @@ fn main() {
                     }
                 }
             });
-            if alive.is_err() {
-                break;
-            }
         })
         .detach();
 
@@ -874,23 +874,18 @@ fn main() {
         let mut tray_wake = status_item::wake_channel();
         cx.spawn(async move |cx| {
             while tray_wake.next().await.is_some() {
-                if cx.update(run_tray_actions).is_err() {
-                    break;
-                }
+                cx.update(run_tray_actions);
             }
         })
         .detach();
         // "Prevent sleep: while agents work": counts working agents across windows every 2 s while
         // that mode is chosen, and holds the sleep lock while any does.
         cx.spawn(async move |cx| loop {
-            let running = cx.update(|cx| {
+            cx.update(|cx| {
                 let working = settings::settings(cx).prevent_sleep_agents
                     && workbenches(cx).into_iter().any(|window| window.read(cx).is_ok_and(|wb| wb.tray_state(cx).working > 0));
                 settings::set_agents_working(working, cx);
             });
-            if running.is_err() {
-                break;
-            }
             cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
         })
         .detach();
@@ -916,7 +911,6 @@ fn main() {
                     tray.update(&state);
                     state.working > 0
                 });
-                let Ok(working) = working else { break };
                 cx.background_executor().timer(std::time::Duration::from_millis(if working { 120 } else { 700 })).await;
             }
         })
@@ -925,7 +919,7 @@ fn main() {
         if let Some(mut rx) = signals {
             cx.spawn(async move |cx| {
                 while let Some(message) = rx.next().await {
-                    let delivered = cx.update(|cx| {
+                    cx.update(|cx| {
                         let windows = workbenches(cx);
                         match message {
                             // Every window applies it; only the one holding the pane has it.
@@ -1048,9 +1042,6 @@ fn main() {
                             }
                         }
                     });
-                    if delivered.is_err() {
-                        break;
-                    }
                 }
             })
             .detach();
@@ -1254,7 +1245,7 @@ pub fn request_quit_asking(cx: &mut App) {
     if let Ok(answer) = answer {
         cx.spawn(async move |cx| {
             if answer.await == Ok(0) {
-                let _ = cx.update(request_quit);
+                cx.update(request_quit);
             }
         })
         .detach();

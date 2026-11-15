@@ -870,7 +870,7 @@ impl Workbench {
                 let view = slot.borrow_mut().take();
                 (handle, view)
             });
-            let Ok((Ok(handle), Some(view))) = opened else {
+            let (Ok(handle), Some(view)) = opened else {
                 native::set_alpha(main, 1.);
                 let _ = this.update(cx, |this, _| {
                     if this.mini_generation == generation {

@@ -263,7 +263,7 @@ impl Workbench {
             delete_sync: false,
             deleting_tree: true,
         });
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -348,7 +348,7 @@ impl Workbench {
             }
             cx.notify();
         });
-        window.focus(&gpui::Focusable::focus_handle(search.read(cx), cx));
+        window.focus(&gpui::Focusable::focus_handle(search.read(cx), cx), cx);
         self.parent_picker = Some(ParentPicker { workspace: id, search, selected: 0, _subscription: subscription });
         cx.notify();
     }

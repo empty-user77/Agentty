@@ -952,7 +952,7 @@ impl Workbench {
                 TextInputEvent::Cancelled => this.close_board_dialogs(cx),
                 TextInputEvent::Next => {
                     if let Some(editor) = &this.board.editor {
-                        editor.body.focus_handle(cx).focus(window);
+                        editor.body.focus_handle(cx).focus(window, cx);
                     }
                 }
                 _ => {}
@@ -961,13 +961,13 @@ impl Workbench {
                 TextInputEvent::Cancelled => this.close_board_dialogs(cx),
                 TextInputEvent::Previous => {
                     if let Some(editor) = &this.board.editor {
-                        editor.title.focus_handle(cx).focus(window);
+                        editor.title.focus_handle(cx).focus(window, cx);
                     }
                 }
                 _ => {}
             }),
         ];
-        title.focus_handle(cx).focus(window);
+        title.focus_handle(cx).focus(window, cx);
         let projects = self.board_projects();
         self.board.editor = Some(TicketEditor { id, title, body, project, agent, projects, _subscriptions: subscriptions });
         cx.notify();
@@ -985,7 +985,7 @@ impl Workbench {
         let Some(editor) = &self.board.editor else { return };
         let title = editor.title.read(cx).text().trim().to_string();
         if title.is_empty() {
-            editor.title.focus_handle(cx).focus(window);
+            editor.title.focus_handle(cx).focus(window, cx);
             return;
         }
         let body = editor.body.read(cx).text().trim_end().to_string();
@@ -1035,7 +1035,7 @@ impl Workbench {
             }
             _ => {}
         });
-        input.focus_handle(cx).focus(window);
+        input.focus_handle(cx).focus(window, cx);
         self.board.editor = None;
         self.board.follow_up = None;
         self.board.jira_add = Some(JiraAdd { input, busy: false, error: None, _subscription: subscription });
@@ -1246,7 +1246,7 @@ impl Workbench {
                 this.send_follow_up(window, cx);
             }
         });
-        input.focus_handle(cx).focus(window);
+        input.focus_handle(cx).focus(window, cx);
         self.board.editor = None;
         self.board.follow_up = Some(FollowUp { id, input, _subscription: subscription });
         cx.notify();

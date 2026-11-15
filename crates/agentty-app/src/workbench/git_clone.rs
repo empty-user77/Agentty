@@ -85,7 +85,7 @@ impl Workbench {
             TextInputEvent::Cancelled => this.close_clone_dialog(cx),
             _ => {}
         });
-        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+        window.focus(&gpui::Focusable::focus_handle(&input, cx), cx);
         self.clone_dialog = Some(CloneDialog {
             dir,
             input,
@@ -224,7 +224,7 @@ impl Workbench {
             .flex_1()
             .min_w_0()
             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+                window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx);
                 // The workbench behind tracks focus too and would take it back on the same click.
                 window.prevent_default();
                 cx.stop_propagation();

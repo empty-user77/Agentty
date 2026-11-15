@@ -228,7 +228,7 @@ impl Workbench {
                     panel.scroll.scroll_to_bottom();
                 } else if panel.selected.as_ref().is_some_and(|s| changed.contains(s)) {
                     // Follow the newest step, unless the reader scrolled up to look at an earlier one.
-                    let (offset, max) = (panel.scroll.offset().y, panel.scroll.max_offset().height);
+                    let (offset, max) = (panel.scroll.offset().y, panel.scroll.max_offset().y);
                     if -offset >= max - px(48.) {
                         panel.scroll.scroll_to_bottom();
                     }
@@ -365,7 +365,7 @@ impl Workbench {
                         }
                         // What it does is said first; the copy is made on "Open".
                         this.side_chat_confirm = Some(target.clone());
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.notify();
                     })),
             );

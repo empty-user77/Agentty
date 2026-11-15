@@ -603,7 +603,7 @@ impl Workbench {
             .key_context("Sidebar")
             .track_focus(&self.sidebar_focus)
             // Clicking the list gives it keyboard focus (⌘N then makes a workspace).
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _| window.focus(&this.sidebar_focus)))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| window.focus(&this.sidebar_focus, cx)))
             .relative()
             .w(px(width))
             .flex_shrink_0()
@@ -972,7 +972,7 @@ impl Workbench {
                     let Some(i) = this.workspaces.iter().position(|w| w.id == id) else { return };
                     if this.page == Some(Page::Git) {
                         this.select_workspace_for_page(i, cx);
-                        window.focus(&this.sidebar_focus);
+                        window.focus(&this.sidebar_focus, cx);
                     } else {
                         this.activate_workspace(i, window, cx);
                     }
@@ -1431,7 +1431,7 @@ impl Workbench {
                     if this.page == Some(Page::Git) {
                         // AgentGit stays open and switches to this workspace's repositories.
                         this.select_workspace_for_page(i, cx);
-                        window.focus(&this.sidebar_focus);
+                        window.focus(&this.sidebar_focus, cx);
                     } else {
                         // The terminal takes the keyboard: switching workspace and then having to
                         // click the pane before typing was the thing people kept tripping over.
@@ -1877,7 +1877,7 @@ impl Workbench {
                             range.filter_map(|i| rows.get(i).copied()).map(|index| this.render_session_row(index, cx)).collect::<Vec<_>>()
                         }),
                     )
-                    .track_scroll(handle)
+                    .track_scroll(&handle)
                     .size_full()
                     .px_2(),
                 )
@@ -2079,7 +2079,7 @@ impl Workbench {
             .id("tabs")
             .flex()
             .items_end()
-            .flex_shrink()
+            .flex_shrink_1()
             .min_w_0()
             .h_full()
             .px_1()
@@ -3259,7 +3259,7 @@ impl Workbench {
         if delta == 0. {
             return false;
         }
-        let max = f32::from(self.sidebar_scroll.max_offset().height);
+        let max = f32::from(self.sidebar_scroll.max_offset().y);
         let offset = self.sidebar_scroll.offset();
         let next = (f32::from(offset.y) + delta).clamp(-max, 0.);
         if next == f32::from(offset.y) {
@@ -3324,7 +3324,7 @@ impl Workbench {
                 let reveal = cwd.clone();
                 div()
                     .id("status-folder")
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w_0()
                     .h_full()
                     .px_1p5()

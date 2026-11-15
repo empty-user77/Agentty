@@ -314,7 +314,7 @@ impl Workbench {
         let pane = pane.clone();
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(Duration::from_millis(900)).await;
-            let _ = pane.update(cx, |view, _| {
+            pane.update(cx, |view, _| {
                 if last.as_deref().is_some_and(|sent| returned_to_input(&view.screen_lines(12), sent)) {
                     // Ctrl+E, Ctrl+U: to the end of the input, and all of it out.
                     view.write(b"\x05\x15".to_vec());
@@ -465,7 +465,7 @@ impl Workbench {
                         this.chat_select = None;
                         if super::selectable::take_press() {
                             if let Some(state) = this.chats.get(&target.entity_id()) {
-                                window.focus(&state.reading);
+                                window.focus(&state.reading, cx);
                             }
                         }
                         cx.notify();
@@ -954,7 +954,7 @@ impl Workbench {
                 .child(
                     gpui::deferred(
                         gpui::anchored()
-                            .anchor(gpui::Corner::BottomRight)
+                            .anchor(gpui::Anchor::BottomRight)
                             .snap_to_window_with_margin(px(8.))
                             .child(div().mb_1().child(menu)),
                     )
@@ -1029,7 +1029,7 @@ impl Workbench {
             .bottom_full()
             .child(
                 gpui::deferred(
-                    gpui::anchored().anchor(gpui::Corner::BottomLeft).snap_to_window_with_margin(px(8.)).child(div().mb_1().child(menu)),
+                    gpui::anchored().anchor(gpui::Anchor::BottomLeft).snap_to_window_with_margin(px(8.)).child(div().mb_1().child(menu)),
                 )
                 .with_priority(3),
             )
@@ -1196,7 +1196,7 @@ impl Workbench {
             }
         }
         if let Some((input, _)) = state.input.as_ref() {
-            window.focus(&gpui::Focusable::focus_handle(input, cx));
+            window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
         }
         cx.notify();
     }

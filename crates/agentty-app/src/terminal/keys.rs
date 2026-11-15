@@ -207,7 +207,7 @@ mod tests {
 
     use super::*;
 
-    fn ks(s: &str) -> Keystroke {
+    fn ks(s: &'static str) -> Keystroke {
         Keystroke::parse(s).unwrap()
     }
 

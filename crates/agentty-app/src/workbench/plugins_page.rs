@@ -597,7 +597,7 @@ impl Workbench {
     fn render_plugins_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // When the row doesn't fit (a narrow window, a long translation) the subtitle and the buttons' labels are
         // cut short instead of running past the page. Nothing changes while it fits.
-        let shrink = |button: gpui::Stateful<gpui::Div>| button.flex_shrink().min_w_0().truncate();
+        let shrink = |button: gpui::Stateful<gpui::Div>| button.flex_shrink_1().min_w_0().truncate();
         div()
             .flex()
             .items_center()

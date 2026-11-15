@@ -786,7 +786,7 @@ impl Workbench {
                     .flex_col()
                     .child(body.flex_shrink_0()),
             );
-        let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(card);
+        let anchored = gpui::anchored().anchor(gpui::Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(card);
         // Not deferred: it is the panel's last child, so it is drawn over the page already, and a
         // drop-down inside it can be deferred (over the card) without nesting deferred drawing.
         div().absolute().top(px(44.)).right_0().child(anchored).into_any_element()
@@ -1065,7 +1065,7 @@ impl Workbench {
             .child(div().px_2().pt_1().pb_1p5().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.group")))
             .children(rows);
         // Right of the bar, level with the item: deferred, so the scrolling bar does not clip it.
-        let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
+        let anchored = gpui::anchored().anchor(gpui::Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
         div()
             .absolute()
             .top_0()

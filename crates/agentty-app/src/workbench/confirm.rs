@@ -91,7 +91,7 @@ impl Workbench {
             deleting_tree: false,
         });
         // The dialog takes the keyboard from the terminal behind it.
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 

@@ -53,7 +53,8 @@ Before every commit and push: stage the change in its own command, run the `secu
 - The Rust toolchain is pinned in `rust-toolchain.toml` (used locally and in CI). Never work with an older local toolchain.
 - Before handing work back or pushing, run exactly what CI runs and make it pass:
   `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
-  `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`.
+  `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`,
+  `python3 scripts/third-party-licenses.py --list --check` (rerun it with `--list` after changing dependencies).
 - After opening or updating a pull request, and after anything lands on main (merges included), check the CI run
   (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).

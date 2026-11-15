@@ -195,7 +195,7 @@ pub fn init(cx: &mut App) {
     }
     cx.spawn(async move |cx| {
         let saved = cx.background_executor().spawn(async { load_password().is_some() }).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             cx.global_mut::<Remote>().password_set = Some(saved);
             if settings(cx).remote.feature && settings(cx).remote.enabled {
                 start(cx);
@@ -204,17 +204,15 @@ pub fn init(cx: &mut App) {
         // A round every TICK, and at once when the page sends input; for a moment after input,
         // rounds come every FAST_TICK so what was typed shows on the page as soon as it echoes.
         let (waker, mut woken) = futures::channel::mpsc::unbounded::<()>();
-        let _ = cx.update(|cx| cx.global_mut::<Remote>().waker = Some(waker));
+        cx.update(|cx| cx.global_mut::<Remote>().waker = Some(waker));
         loop {
-            let busy = cx.update(|cx| cx.global::<Remote>().last_input.is_some_and(|at| at.elapsed() < FAST_FOR)).unwrap_or(false);
+            let busy = cx.update(|cx| cx.global::<Remote>().last_input.is_some_and(|at| at.elapsed() < FAST_FOR));
             let timer = cx.background_executor().timer(if busy { FAST_TICK } else { TICK });
             futures::select_biased! {
                 _ = woken.next() => {}
                 _ = futures::FutureExt::fuse(timer) => {}
             }
-            if cx.update(tick).is_err() {
-                break;
-            }
+            cx.update(tick);
         }
     })
     .detach();
@@ -292,7 +290,7 @@ pub fn refresh_tailscale(cx: &mut App) {
     }
     cx.spawn(async move |cx| {
         let status = cx.background_executor().spawn(async { tailscale::status() }).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let enabled = settings(cx).remote.enabled;
             let remote = cx.global_mut::<Remote>();
             remote.refreshing = false;
@@ -359,7 +357,7 @@ pub fn issue_certificate(cx: &mut App) {
     cx.spawn(async move |cx| {
         let domain = dns.clone();
         let result = cx.background_executor().spawn(async move { tailscale::issue_certificate(&domain) }).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             cx.global_mut::<Remote>().certificate = match result {
                 Ok(()) => {
                     remember_certificate(dns, cx);
@@ -421,7 +419,7 @@ pub fn start(cx: &mut App) {
             .background_executor()
             .spawn(async move { (if dev { tailscale::Status::default() } else { tailscale::status() }, load_password()) })
             .await;
-        let current = |cx: &mut AsyncApp| cx.update(|cx| cx.global::<Remote>().generation == generation).unwrap_or(false);
+        let current = |cx: &mut AsyncApp| cx.update(|cx| cx.global::<Remote>().generation == generation);
         if !current(cx) {
             return;
         }
@@ -446,11 +444,11 @@ pub fn start(cx: &mut App) {
             }
             Ok((Config { owner: Some(login), hosts, https: true, secret: None, folders: folders::root() }, password))
         })();
-        let _ = cx.update(|cx| cx.global_mut::<Remote>().tailscale = Some(status.clone()));
+        cx.update(|cx| cx.global_mut::<Remote>().tailscale = Some(status.clone()));
         let (config, password) = match checked {
             Ok(found) => found,
             Err(problem) => {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     // Saved while this start read the Keychain: start again with it.
                     if problem == Problem::NoPassword && cx.global::<Remote>().password_saves != saves {
                         return start(cx);
@@ -464,13 +462,13 @@ pub fn start(cx: &mut App) {
         // everyone) until that entry is surely gone; see `stop_serving`.
         let park = |hub: Arc<Hub>, cx: &mut AsyncApp| {
             hub.pause();
-            let _ = cx.update(|cx| cx.global_mut::<Remote>().parked.push(hub));
+            cx.update(|cx| cx.global_mut::<Remote>().parked.push(hub));
         };
         let (hub, url, served) = if dev {
             let hub = match listener(true, false).and_then(|l| Hub::start(config.clone(), Some(password), l)) {
                 Ok(hub) => hub,
                 Err(err) => {
-                    let _ = cx.update(|cx| fail(Problem::Other(err.to_string()), generation, cx));
+                    cx.update(|cx| fail(Problem::Other(err.to_string()), generation, cx));
                     return;
                 }
             };
@@ -532,7 +530,7 @@ pub fn start(cx: &mut App) {
                             tailscale::ServeError::PortTaken => Problem::PortTaken(https_port),
                             tailscale::ServeError::Failed(text) => Problem::Other(text),
                         };
-                        let _ = cx.update(|cx| fail(problem, generation, cx));
+                        cx.update(|cx| fail(problem, generation, cx));
                         return;
                     }
                 }
@@ -541,12 +539,12 @@ pub fn start(cx: &mut App) {
                 }
             }
             let Some((hub, served)) = started else {
-                let _ = cx.update(|cx| fail(last_problem, generation, cx));
+                cx.update(|cx| fail(last_problem, generation, cx));
                 return;
             };
             (hub, url, Some(served))
         };
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let remote = cx.global_mut::<Remote>();
             if remote.generation != generation {
                 // Turned off while it was starting: take down this start's serve only, not one a
@@ -656,7 +654,7 @@ pub fn set_password(password: String, cx: &mut App, done: impl FnOnce(Result<(),
                 agentty_bridge::secret_store::store(&keychain_service(), KEYCHAIN_ACCOUNT, &hash).map(|_| hash)
             })
             .await;
-        let _ = cx.update(|cx| match saved {
+        cx.update(|cx| match saved {
             Ok(hash) => {
                 let remote = cx.global_mut::<Remote>();
                 remote.password_set = Some(true);
@@ -773,7 +771,7 @@ fn watch_tailscale(cx: &mut App) {
                 (status, funnel, entry_gone)
             })
             .await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let remote = cx.global_mut::<Remote>();
             remote.checking = false;
             if entry_gone {
@@ -856,7 +854,7 @@ fn watch_health(cx: &mut App) {
                 }
             })
             .await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let remote = cx.global_mut::<Remote>();
             remote.health_checking = false;
             if remote.generation != generation || !matches!(remote.phase, Phase::On { .. }) {
@@ -980,7 +978,7 @@ fn open_dev_server(port: u16, cx: &mut App) {
     cx.spawn(async move |cx| {
         let (host, serve_target) = (dns.clone(), target.clone());
         let result = cx.background_executor().spawn(async move { tailscale::port_on(port, &host, &serve_target) }).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let remote = cx.global_mut::<Remote>();
             let Some(server) = remote.dev_servers.get_mut(&port) else {
                 // Stopped meanwhile: what was just set up goes again.

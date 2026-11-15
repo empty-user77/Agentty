@@ -37,7 +37,7 @@ pub(super) fn field_box(input: &Entity<TextInput>) -> gpui::Div {
         .flex_1()
         .min_w_0()
         .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-            window.focus(&focus.focus_handle(cx));
+            window.focus(&focus.focus_handle(cx), cx);
             // Otherwise the workbench behind, which tracks focus too, takes it back on the same click.
             window.prevent_default();
             cx.stop_propagation();

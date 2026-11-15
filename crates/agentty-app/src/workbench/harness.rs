@@ -120,7 +120,7 @@ impl Workbench {
         self.harness_dialog =
             Some(HarnessDialog { pane, harness, selected, input, agent, submit, error: None, _subscription: subscription });
         self.select_harness_entry(selected, cx);
-        window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+        window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx);
         cx.notify();
     }
 
@@ -186,7 +186,7 @@ impl Workbench {
             // Typed once the agent is ready, for the user to read and send.
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(Duration::from_millis(4000)).await;
-                let _ = cx.update(|cx| started.update(cx, |view, _| view.insert_text(&prompt)));
+                cx.update(|cx| started.update(cx, |view, _| view.insert_text(&prompt)));
             })
             .detach();
         }
@@ -386,7 +386,7 @@ impl Workbench {
                         .child(
                             div()
                                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                                    window.focus(&gpui::Focusable::focus_handle(&focus, cx))
+                                    window.focus(&gpui::Focusable::focus_handle(&focus, cx), cx)
                                 })
                                 .flex()
                                 .px_2()

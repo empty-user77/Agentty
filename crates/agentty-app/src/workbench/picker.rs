@@ -178,7 +178,7 @@ impl Workbench {
             }
             cx.notify();
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         let mut picker = Picker {
             choice,
             target,
@@ -282,13 +282,13 @@ impl Workbench {
             TextInputEvent::Cancelled => {
                 if let Some(picker) = this.picker.as_mut() {
                     picker.new_folder = None;
-                    window.focus(&picker.input.focus_handle(cx));
+                    window.focus(&picker.input.focus_handle(cx), cx);
                 }
                 cx.notify();
             }
             _ => {}
         });
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         if let Some(picker) = self.picker.as_mut() {
             picker.new_folder = Some((input, subscription));
         }

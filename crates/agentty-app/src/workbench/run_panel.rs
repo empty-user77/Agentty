@@ -414,11 +414,11 @@ impl Workbench {
             subscriptions.push(cx.subscribe_in(&input, window, move |this, _, event: &TextInputEvent, window, cx| match event {
                 TextInputEvent::Confirmed => this.finish_add_run(true, window, cx),
                 TextInputEvent::Cancelled => this.finish_add_run(false, window, cx),
-                TextInputEvent::Next | TextInputEvent::Previous => window.focus(&other.focus_handle(cx)),
+                TextInputEvent::Next | TextInputEvent::Previous => window.focus(&other.focus_handle(cx), cx),
                 _ => {}
             }));
         }
-        window.focus(&command.focus_handle(cx));
+        window.focus(&command.focus_handle(cx), cx);
         self.runs.adding = Some(AddRun { root, dir, name, command, _subscriptions: subscriptions });
         cx.notify();
     }
@@ -428,7 +428,7 @@ impl Workbench {
         let command = adding.command.read(cx).text().trim().to_string();
         if save && command.is_empty() {
             // Nothing to run: the dialog stays, with the field to fill.
-            window.focus(&adding.command.focus_handle(cx));
+            window.focus(&adding.command.focus_handle(cx), cx);
             self.runs.adding = Some(adding);
             return;
         }
@@ -841,7 +841,7 @@ impl Workbench {
         let _ = window;
         Some(
             gpui::deferred(
-                gpui::anchored().anchor(gpui::Corner::BottomRight).position(position).snap_to_window_with_margin(px(8.)).child(panel),
+                gpui::anchored().anchor(gpui::Anchor::BottomRight).position(position).snap_to_window_with_margin(px(8.)).child(panel),
             )
             .with_priority(3)
             .into_any_element(),
@@ -1020,7 +1020,18 @@ impl Workbench {
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("PID {pid}"))),
             )
             .child(
-                icon_only_sized(("run-process-kill", index), "x", 22., 13., |_, _, _| {})
+                // Its own button rather than `icon_only_sized`: that one sets a hover fill already,
+                // and gpui takes one hover style per element (a second is a debug assertion).
+                div()
+                    .id(("run-process-kill", index))
+                    .flex_shrink_0()
+                    .size(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .child(icon("x", 13., hex(Chrome::FOREGROUND)))
                     .tooltip(Tooltip::text(tf(cx, "run.kill", &[("port", &first.to_string())]), None))
                     .when(stopping, |d| d.opacity(0.4))
                     .when(!stopping, |d| d.hover(|s| s.bg(hex_alpha(Chrome::ERROR, 0.35))))

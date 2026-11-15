@@ -645,7 +645,7 @@ impl Workbench {
                     }
                 }
                 let (views, key) = (views.clone(), key.clone());
-                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, window, cx| {
                     let zooming = event.modifiers.platform || event.modifiers.control;
                     if phase != gpui::DispatchPhase::Capture || !zooming || !bounds.contains(&event.position) {
                         return;

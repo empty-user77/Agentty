@@ -300,7 +300,7 @@ impl Workbench {
                                 d.child(
                                     div()
                                         .id(("pane-status", pane.entity_id().as_u64() as usize))
-                                        .flex_shrink()
+                                        .flex_shrink_1()
                                         .min_w(px(40.))
                                         .max_w(px(220.))
                                         .truncate()
@@ -592,7 +592,7 @@ impl Workbench {
             div()
                 .id(("worktree-chip", pane.entity_id().as_u64() as usize))
                 .flex()
-                .flex_shrink()
+                .flex_shrink_1()
                 .min_w(px(24.))
                 .items_center()
                 .gap_1()
@@ -1131,7 +1131,7 @@ impl Workbench {
                                 div()
                                     .id(("agent-bar-status", pane.entity_id().as_u64() as usize))
                                     .flex()
-                                    .flex_shrink()
+                                    .flex_shrink_1()
                                     .min_w(px(24.))
                                     .items_center()
                                     .gap_1()
@@ -1182,7 +1182,7 @@ pub(super) fn bars_below(cx: &gpui::App) -> bool {
 pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui::App) -> gpui::Div {
     let below = bars_below(cx);
     let anchored = gpui::anchored()
-        .anchor(if below { gpui::Corner::BottomLeft } else { gpui::Corner::TopLeft })
+        .anchor(if below { gpui::Anchor::BottomLeft } else { gpui::Anchor::TopLeft })
         .snap_to_window_with_margin(px(8.))
         .child(div().map(|d| if below { d.mb_1() } else { d.mt_1() }).child(popover));
     div()
@@ -1194,7 +1194,7 @@ pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui:
 
 /// [`bar_popover`] for a control near the bottom of a pane (a chat's footer): it opens upwards.
 pub(super) fn popover_above(popover: impl IntoElement, priority: usize) -> gpui::Div {
-    let anchored = gpui::anchored().anchor(gpui::Corner::BottomLeft).snap_to_window_with_margin(px(8.)).child(div().mb_1().child(popover));
+    let anchored = gpui::anchored().anchor(gpui::Anchor::BottomLeft).snap_to_window_with_margin(px(8.)).child(div().mb_1().child(popover));
     div().absolute().left_0().bottom_full().child(gpui::deferred(anchored).with_priority(priority))
 }
 

@@ -502,7 +502,7 @@ fn touch(cx: &mut App) {
     host.refresh_queued = true;
     cx.spawn(async move |cx| {
         cx.background_executor().timer(REFRESH_INTERVAL).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let host = host_mut(cx);
             host.refresh_queued = false;
             host.refreshed_at = Some(Instant::now());
@@ -1062,7 +1062,7 @@ fn timer(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
     cx.spawn(async move |cx| {
         let started = Instant::now();
         cx.background_executor().timer(wait).await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
             // The plugin was restarted while it waited: this answer belongs to the one that is
             // gone, and its place in the count went with it — taking one off now would be taking
@@ -1161,7 +1161,7 @@ fn svg_to_png(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mu
     let task = cx.background_executor().spawn(async move { render_svg(&from, &to, width) });
     cx.spawn(async move |cx| {
         let result = task.await.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}")));
-        let _ = cx.update(|cx| respond(&id, &request_id, result, cx));
+        cx.update(|cx| respond(&id, &request_id, result, cx));
     })
     .detach();
 }
@@ -1213,7 +1213,7 @@ fn svgs_to_video(plugin_id: &str, request_id: Option<Value>, params: Value, cx: 
     let task = cx.background_executor().spawn(async move { render_video(&scenes, &to, width, height, fps) });
     cx.spawn(async move |cx| {
         let result = task.await.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}")));
-        let _ = cx.update(|cx| respond(&id, &request_id, result, cx));
+        cx.update(|cx| respond(&id, &request_id, result, cx));
     })
     .detach();
 }
@@ -1368,7 +1368,7 @@ fn pick_files(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mu
             _ => Vec::new(),
         };
         let copied = copy_picked(&picked, &folder, &into);
-        let _ = cx.update(|cx| respond(&id, &request_id, copied.map_err(|err| (codes::INTERNAL, format!("{err:#}"))), cx));
+        cx.update(|cx| respond(&id, &request_id, copied.map_err(|err| (codes::INTERNAL, format!("{err:#}"))), cx));
     })
     .detach();
 }
@@ -1442,7 +1442,7 @@ fn download(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut 
     let task = cx.background_executor().spawn(async move { agentty_bridge::plugins::net::download(&request, &target, max) });
     cx.spawn(async move |cx| {
         let result = task.await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             {
                 let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
                 if runtime.generation != generation {
@@ -1489,7 +1489,7 @@ fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
     let task = cx.background_executor().spawn(async move { agentty_bridge::plugins::net::fetch(&request) });
     cx.spawn(async move |cx| {
         let result = task.await;
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let answer = {
                 let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
                 // The plugin was restarted while this was in the air: the answer belongs to a

@@ -969,7 +969,7 @@ impl Workbench {
             let idle = state.reading.is_focused(window) && !selectable::has_selection();
             if idle || gpui::Focusable::focus_handle(state.lead.read(cx), cx).is_focused(window) {
                 if let Some(input) = self.chat_input_for(&state.lead, cx) {
-                    window.focus(&gpui::Focusable::focus_handle(&input, cx));
+                    window.focus(&gpui::Focusable::focus_handle(&input, cx), cx);
                 }
             }
         }
@@ -981,7 +981,7 @@ impl Workbench {
         let Some(state) = self.chats.get(&id) else { return };
         if state.reading.is_focused(window) {
             if let Some((input, _)) = state.input.as_ref() {
-                window.focus(&gpui::Focusable::focus_handle(input, cx));
+                window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
             }
             selectable::clear();
             self.chat_select = None;
@@ -2126,7 +2126,7 @@ impl Workbench {
                         if let Some(state) = this.chats.get(&id) {
                             if state.reading.is_focused(window) {
                                 if let Some((input, _)) = state.input.as_ref() {
-                                    window.focus(&gpui::Focusable::focus_handle(input, cx));
+                                    window.focus(&gpui::Focusable::focus_handle(input, cx), cx);
                                 }
                             }
                         }
@@ -2146,7 +2146,7 @@ impl Workbench {
                     this.chat_select = None;
                     if selectable::take_press() {
                         if let Some(state) = this.chats.get(&target.entity_id()) {
-                            window.focus(&state.reading);
+                            window.focus(&state.reading, cx);
                         }
                     }
                     cx.notify();
@@ -2424,7 +2424,7 @@ impl Workbench {
 fn column(content: impl IntoElement) -> gpui::Div {
     // A fixed basis that shrinks, not `w_full` under a max width: in a pane narrower than the
     // column (a split), the percentage left the composer at its content's narrowest width.
-    div().w_full().flex().justify_center().child(div().flex_basis(px(CHAT_COLUMN)).flex_shrink().min_w_0().child(content))
+    div().w_full().flex().justify_center().child(div().flex_basis(px(CHAT_COLUMN)).flex_shrink_1().min_w_0().child(content))
 }
 
 /// What a row of the conversation needs to open and close its steps.
@@ -2444,7 +2444,7 @@ impl Rows {
     /// How far down the view starts, in pixels. At the bottom the list only says "the end" (which
     /// would keep the newest row in view as a row grows): the view starts its height above the end.
     fn pixel_top(&self) -> gpui::Pixels {
-        let most = self.list.max_offset_for_scrollbar().height;
+        let most = self.list.max_offset_for_scrollbar().y;
         (-self.list.scroll_px_offset_for_scrollbar().y).min(most)
     }
 

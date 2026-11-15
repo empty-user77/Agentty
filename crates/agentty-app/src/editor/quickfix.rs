@@ -95,7 +95,7 @@ impl CodeEditor {
             _ => problem.as_ref().map_or((cursor, cursor), |p| (p.start, p.end)),
         };
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.problem_hover = None;
         let has_problem = problem.is_some();
         let revision = doc.buffer.revision();
@@ -141,7 +141,7 @@ impl CodeEditor {
 
     pub(super) fn close_quick_fix(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.fixes.take().is_some() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }

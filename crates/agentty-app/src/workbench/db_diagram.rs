@@ -623,7 +623,7 @@ impl Workbench {
             },
             move |bounds, _, window, _| {
                 let (zoom, scroll, viewport) = (zoom.clone(), scroll.clone(), viewport.clone());
-                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, window, cx| {
                     let zooming = event.modifiers.platform || event.modifiers.control;
                     if phase != gpui::DispatchPhase::Capture || !zooming || !bounds.contains(&event.position) {
                         return;
@@ -662,7 +662,7 @@ impl Workbench {
                     .overflow_scroll()
                     .track_scroll(&diagram.scroll)
                     // Scrolling brings other cards into view: build them.
-                    .on_scroll_wheel(cx.listener(|_, _: &gpui::ScrollWheelEvent, _, cx| cx.notify()))
+                    .on_scroll(cx.listener(|_, _: &gpui::ScrollEvent, _, cx| cx.notify()))
                     // Dragging the empty canvas moves the view (a card's heading moves the card).
                     .on_mouse_down(
                         gpui::MouseButton::Left,
@@ -682,7 +682,7 @@ impl Workbench {
                         }
                         let max = diagram.scroll.max_offset();
                         let to = offset + (event.position - from);
-                        diagram.scroll.set_offset(point(to.x.clamp(-max.width, px(0.)), to.y.clamp(-max.height, px(0.))));
+                        diagram.scroll.set_offset(point(to.x.clamp(-max.x, px(0.)), to.y.clamp(-max.y, px(0.))));
                         cx.notify();
                     }))
                     .on_mouse_up(

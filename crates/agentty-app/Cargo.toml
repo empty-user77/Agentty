@@ -34,7 +34,10 @@ agentty-bridge = { path = "../agentty-bridge", default-features = false }
 agentty-db = { path = "../agentty-db" }
 dirs.workspace = true
 futures = "0.3.34"
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+# GPUI: Zed's crates as github.com/empty-user77/agentty-gpui publishes them (kept in step with Zed
+# releases, with Agentty's changes). `gpui_platform` picks the backend for this OS.
+gpui = { package = "agentty-gpui", version = "0.1.0", default-features = false, features = ["font-kit"] }
+gpui_platform = { package = "agentty-gpui-platform", version = "0.1.0", default-features = false, features = ["font-kit", "runtime_shaders"] }
 libc = "0.2.189"
 plist = "1.10.1"
 # Remote access: the web password's PBKDF2 hash, its constant-time check and the session tokens'
@@ -69,11 +72,12 @@ zip = { version = "9.1", default-features = false, features = ["deflate"] }
 
 # Linux needs GPUI's X11 and Wayland backends (off with default features); Windows its app manifest.
 [target.'cfg(target_os = "linux")'.dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+gpui = { package = "agentty-gpui", version = "0.1.0", default-features = false, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { package = "agentty-gpui-platform", version = "0.1.0", default-features = false, features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 
 [target.'cfg(windows)'.dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders", "windows-manifest"] }
-windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+gpui = { package = "agentty-gpui", version = "0.1.0", default-features = false, features = ["font-kit", "windows-manifest"] }
+windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 # The in-app browser: Microsoft Edge WebView2 (Chromium), the runtime Windows 10 and 11 ship with.
 raw-window-handle = "0.6"

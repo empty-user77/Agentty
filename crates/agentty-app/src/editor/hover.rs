@@ -92,9 +92,9 @@ impl CodeEditor {
         let top = layout.point_at(hover.start)?;
         let height = 10. + 18. * lines.len() as f32;
         let (corner, at) = if f32::from(top.y - layout.corners().0.y) > height {
-            (gpui::Corner::BottomLeft, gpui::point(top.x, top.y - px(4.)))
+            (gpui::Anchor::BottomLeft, gpui::point(top.x, top.y - px(4.)))
         } else {
-            (gpui::Corner::TopLeft, layout.point_below(hover.start)?)
+            (gpui::Anchor::TopLeft, layout.point_below(hover.start)?)
         };
         let panel = div()
             .id("editor-type-hover")

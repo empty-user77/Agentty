@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 const MONO: &str = "JetBrains Mono";
 /// The graph's own colours, after omo's: cyan for what runs, green for what is done.
 const RUNNING: u32 = 0x22d3ee;
+/// The onboarding tour's example orchestration: an id no record ever gets. It is listed (and drawn
+/// from made-up nodes) only while the tour teaches orchestration; nothing runs behind it.
+pub(super) const DEMO_ORCHESTRATION: u64 = u64::MAX - 3;
 const DONE: u32 = 0x34d399;
 const NODE_W: f32 = 196.;
 const NODE_H: f32 = 100.;
@@ -499,6 +502,7 @@ impl Workbench {
             .filter(|p| p.read(cx).is_agent() && p.read(cx).is_running() && self.record_of_pane(p, cx).is_none())
             .collect();
         let still_there = match self.session_board.selected {
+            Some(Thread::Orchestration(DEMO_ORCHESTRATION)) => self.tour_shows_orchestration_demo(),
             Some(Thread::Orchestration(id)) => self.session_board.shown(on).iter().any(|r| r.id == id),
             Some(Thread::Session(id)) => sessions.iter().any(|p| p.read(cx).pane_id == id),
             Some(Thread::Run(id)) => self.session_board.runs.iter().any(|r| r.id == id),
@@ -526,6 +530,7 @@ impl Workbench {
 
         let threads = self.render_threads(&sessions, cx);
         let body = match self.session_board.selected {
+            Some(Thread::Orchestration(DEMO_ORCHESTRATION)) => self.render_demo_orchestration(cx),
             Some(Thread::Orchestration(id)) => {
                 let record = self.session_board.shown(on).iter().find(|r| r.id == id).cloned();
                 match record.as_ref().and_then(|r| self.pane_of_record(r, cx)) {
@@ -538,15 +543,15 @@ impl Workbench {
                 None => div().into_any_element(),
             },
             Some(Thread::Run(id)) => self.render_run_workflow(id, cx),
-            None => div().p_6().child(hint(t(cx, "sessions.no_agents"))).into_any_element(),
+            None => self.render_board_empty(cx),
         };
+        let mono = self.session_board.selected.is_some();
         div()
             .size_full()
             .flex()
-            .font_family(MONO)
             .child(threads)
             .child(self.render_threads_splitter(cx))
-            .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body))
+            .child(div().flex_1().min_w_0().h_full().overflow_hidden().when(mono, |d| d.font_family(MONO)).child(body))
             .into_any_element()
     }
 
@@ -629,8 +634,35 @@ impl Workbench {
                         .children(sub.map(|s| div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(s))),
                 )
         };
-        let heading =
-            |key: &'static str, cx: &gpui::App| div().px_2().pt_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, key));
+        let heading = |icon_name: &'static str, key: &'static str, count: usize, cx: &gpui::App| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .pt_3()
+                .pb_1()
+                .child(icon(icon_name, 12., hex(Chrome::MUTED)))
+                .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(t(cx, key)))
+                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(count.to_string()))
+        };
+        // An empty group: a dashed box, so the space reads as "nothing here yet" rather than as text.
+        let empty = |id: &'static str, icon_name: &'static str, label: SharedString| {
+            div()
+                .id(id)
+                .mx_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .border_dashed()
+                .border_color(hex(Chrome::BORDER))
+                .child(icon(icon_name, 13., hex(Chrome::MUTED)))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(label))
+        };
         let mut list = div()
             .id("session-threads")
             .w(px(self.threads_width(cx)))
@@ -642,11 +674,36 @@ impl Workbench {
             .flex_col()
             .gap_0p5();
 
-        if on {
-            list = list.child(heading("orch.list", cx));
+        let demo = self.tour_shows_orchestration_demo();
+        if on || demo {
+            list = list.child(heading("orbit", "orch.list", self.session_board.shown(on).len() + usize::from(demo), cx));
         }
-        if on && self.session_board.shown(on).is_empty() {
-            list = list.child(div().px_2().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "orch.list_empty")));
+        if demo {
+            let ring = self.tour_target() == Some("orch-demo-row");
+            list = list.child(
+                row(
+                    SharedString::from("orch-demo-row"),
+                    format!("◆ {}", t(cx, "orch.demo_goal")),
+                    Some(format!("{} · {}", t(cx, "flow.demo_tag"), t(cx, "orch.demo_status"))),
+                    RUNNING,
+                    selected == Some(Thread::Orchestration(DEMO_ORCHESTRATION)),
+                )
+                .relative()
+                .when(ring, |d| d.child(crate::ui::pulse_ring("orch-demo-ring", false)))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.session_board.selected = Some(Thread::Orchestration(DEMO_ORCHESTRATION));
+                    cx.notify();
+                })),
+            );
+        } else if on && self.session_board.shown(on).is_empty() {
+            // Nothing to list yet: the first one starts from here.
+            list = list.child(
+                empty("orch-list-new", "plus", t(cx, "orch.new").into()).cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER))).on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group: None }, window, cx)
+                    }),
+                ),
+            );
         }
         for record in self.session_board.shown(on).iter().rev() {
             let id = record.id;
@@ -687,9 +744,9 @@ impl Workbench {
             );
         }
 
-        list = list.child(heading("sessions.threads", cx));
+        list = list.child(heading("bot", "sessions.threads", sessions.len(), cx));
         if sessions.is_empty() {
-            list = list.child(div().px_2().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "sessions.no_agents_short")));
+            list = list.child(empty("sessions-list-empty", "moon", t(cx, "sessions.no_agents_short").into()));
         }
         for pane in sessions {
             let view = pane.read(cx);
@@ -717,7 +774,7 @@ impl Workbench {
             );
         }
         if !self.session_board.runs.is_empty() {
-            list = list.child(heading("sessions.runs", cx));
+            list = list.child(heading("columns-2", "sessions.runs", self.session_board.runs.len(), cx));
             for run in self.session_board.runs.iter().rev() {
                 let id = run.id;
                 let (done, all) = self.run_progress(run, cx);
@@ -738,6 +795,133 @@ impl Workbench {
             }
         }
         list.into_any_element()
+    }
+
+    /// The tour's example orchestration: a goal, the plan in two waves (two workers side by side,
+    /// then a reviewer that needs both), one worker done and one at work. Drawn like a real one.
+    fn render_demo_orchestration(&self, cx: &mut Context<Self>) -> AnyElement {
+        use super::orchestration::PlanAgent;
+        let agent = |name: &str, wave: u32, role: &'static str, model: &str, depends_on: &[&str]| PlanAgent {
+            name: name.into(),
+            wave,
+            role: Some(t(cx, role).to_string()),
+            agent: Some("claude".into()),
+            model: Some(model.into()),
+            depends_on: depends_on.iter().map(|d| d.to_string()).collect(),
+        };
+        let plan = vec![
+            agent("board-builder", 1, "orch.demo_builder", "sonnet", &[]),
+            agent("tasks-tests", 1, "orch.demo_tests", "sonnet", &[]),
+            agent("reviewer", 2, "orch.demo_reviewer", "opus", &["board-builder", "tasks-tests"]),
+        ];
+        let ran = |name: &str, state: NodeState, seconds: u64, line: &'static str| Node {
+            name: name.into(),
+            state,
+            seconds,
+            role: String::new(),
+            model: Some("sonnet".into()),
+            line: Some(t(cx, line).to_string()),
+            open: Open::Nothing,
+            from: None,
+        };
+        let nodes = vec![
+            (1, ran("board-builder", NodeState::Done, 140, "orch.demo_built")),
+            (2, ran("tasks-tests", NodeState::Running, 48, "orch.demo_testing")),
+        ];
+        let orchestrator = Node {
+            name: "orchestrator".into(),
+            state: NodeState::Running,
+            seconds: 190,
+            role: "Claude Code".into(),
+            model: Some("opus".into()),
+            line: Some(t(cx, "orch.demo_lead").to_string()),
+            open: Open::Nothing,
+            from: None,
+        };
+        let waves = self.waves_after(orchestrator, nodes, &plan, "claude", cx);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_5()
+                    .pt_4()
+                    .pb_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .child(
+                        div().min_w_0().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(format!("$ {}", t(cx, "orch.demo_goal"))),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_1p5()
+                            .rounded_sm()
+                            .bg(hex_alpha(Chrome::ATTENTION, 0.18))
+                            .t_caption()
+                            .text_color(hex(Chrome::ATTENTION))
+                            .child(t(cx, "flow.demo_tag")),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_5()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .t_small()
+                    .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(RUNNING)))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "orch.demo_status"))),
+            )
+            .child(div().px_5().pb_1().child(hint(t(cx, "orch.demo_note"))))
+            .child(self.render_waves(waves, cx))
+            .into_any_element()
+    }
+
+    /// Nothing picked (no orchestration and no running session): what shows here, and how to start.
+    fn render_board_empty(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = crate::settings::settings(cx).orchestration;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .p_6()
+            .child(icon("orbit", 28., hex(Chrome::MUTED)))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "sessions.empty_title")))
+            .child(div().max_w(px(420.)).text_center().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sessions.no_agents")))
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .gap_2()
+                    .when(on, |d| {
+                        d.child(crate::ui::action_button_with_icon(
+                            "board-empty-orchestration",
+                            "orbit",
+                            t(cx, "orch.new"),
+                            cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group: None }, window, cx)
+                            }),
+                        ))
+                    })
+                    .child(crate::ui::action_button_with_icon(
+                        "board-empty-claude",
+                        "plus",
+                        t(cx, "new.claude"),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.launch_agent_tab("claude", window, cx)),
+                    )),
+            )
+            .into_any_element()
     }
 
     /// An orchestration whose terminal is closed: its goal, its stage, Resume (or Open) and Delete.
@@ -1562,7 +1746,7 @@ impl Workbench {
                     move |bounds, _, window, _| {
                         // The wheel moves the chart (both ways); with ⌘ or Ctrl it zooms around the pointer.
                         let entity = entity.clone();
-                        window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                        window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, _, cx| {
                             if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&event.position) {
                                 return;
                             }
@@ -2022,7 +2206,7 @@ impl Workbench {
             .flex_col()
             .justify_end()
             .gap_0p5()
-            .on_scroll_wheel(cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(move |this, event: &gpui::ScrollEvent, window, cx| {
                 let dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
                 let board = &mut this.session_board;
                 board.feed_wheel += dy / FEED_ROW;
