@@ -5,7 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.4.6] - 2026-11-15
+## [0.4.7] - 2026-11-15
+
+v0.4.5 and v0.4.6 were withdrawn; this release brings their changes (below) together with these fixes.
+
+### Fixed
+- macOS: menu-bar menus no longer close right after they are clicked while a Korean, Japanese, Chinese or other
+  input-method input source is on.
+- Agentty uses much less CPU while idle or in the background: an idle window no longer keeps redrawing, spinners and
+  the tour's highlight slow down in an inactive window and stop out of sight, the cursor stops blinking in a window
+  in the background, and busy terminals repaint at most 30 times a second (10 in an inactive window) while keys
+  you type still show at once.
+- With windows on several logins, the History menu keeps the main window's recent sessions instead of switching
+  between the windows' lists every few minutes.
+
+## [0.4.6] - 2026-11-15 [YANKED]
 
 ### Changed
 - The run panel lists only the servers you can open: processes of the project that answer on a port over HTTP (or
@@ -16,7 +30,7 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - The in-app browser no longer covers the run menu, the run panel or its add dialog.
 
-## [0.4.5] - 2026-11-15
+## [0.4.5] - 2026-11-15 [YANKED]
 
 ### Added
 - Settings → About → Open source lists what Agentty is built with: the fonts, icons and scripts it bundles and every
