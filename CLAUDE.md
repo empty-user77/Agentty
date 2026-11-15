@@ -83,6 +83,33 @@ Before every commit and push: stage the change in its own command, run the `secu
 - If a release command is denied, don't retry variants or edit permission files: give the user the exact `!` line.
 - Once `scripts/verify-release.sh X.Y.Z --published` passes, clean up the build output (see below).
 
+## Performance (required before every commit, push, hand-off and release)
+
+The app runs all day beside the user's other work: an idle window that keeps drawing, a timer that
+wakes the main thread for nothing or a cache that only grows costs every user CPU, battery and
+memory, and a menu bar rebuilt at the wrong moment closes the menu under the pointer (v0.4.5/0.4.6
+were pulled for that).
+
+- Run `scripts/perf-check.sh` after `cargo build -p agentty-app` and make it pass, together with the
+  CI checks above. It starts the debug build in the background (`AGENTTY_BACKGROUND=1`, no focus
+  taken), lets it settle, and fails when the idle window draws more than once a second
+  (`renders per second`), the app takes more than 3% CPU, or its memory grows while nothing happens.
+  Paste its result into the pull request's test notes. A change that adds work while idle says why.
+- When the change touches rendering, timers, polling, animations, menus or caches, also measure the
+  state it is about (a spinner on screen, a page open, a window in the background) with the debug
+  `perf` command (`renders=` count) and `ps -o time=,rss= -p <pid>`, before and after.
+- Rules for code:
+  - No `with_animation(...).repeat()`: it draws at the display's rate. Use the `ui::Ticking`
+    helpers (`spinner`, `dot_spinner`, `pulse_ring`), which slow down in an inactive window and stop
+    out of sight.
+  - Timers and polls `cx.notify()` only when what they read changed, sleep longer (or stop) while
+    the window is hidden or inactive, and never run shorter than they need to.
+  - No disk walks, process spawns or file writes in `render`; cache them and read the cache.
+  - The menu bar (`set_app_menus`) is rebuilt only on a real change and never while a menu is open
+    (`native::menu_tracking`); the same goes for anything else AppKit-global (activation, first
+    responder, posted system notifications).
+  - Maps keyed by pid, port, session, path or URL get an eviction (an age or a cap).
+
 ## Build output
 
 Cargo's build output is the `target/` folder, several GB each, and every worktree builds its own: a few parallel

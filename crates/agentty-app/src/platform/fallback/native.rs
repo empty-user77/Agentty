@@ -37,6 +37,11 @@ pub fn is_visible(_window: Id) -> bool {
     true
 }
 
+/// Menus are not replaced under an open one here; nothing to wait for.
+pub fn menu_tracking() -> bool {
+    false
+}
+
 /// No app-wide answer here: the window's own view of being in front stands.
 pub fn app_is_active() -> bool {
     true

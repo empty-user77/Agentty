@@ -584,6 +584,9 @@ impl Ticking {
     }
 }
 
+/// How often a spinner moves while its window is not the active one.
+const INACTIVE_TICK: std::time::Duration = std::time::Duration::from_millis(500);
+
 thread_local! {
     /// Views with a redraw already scheduled.
     static TICKING_VIEWS: std::cell::RefCell<std::collections::HashSet<gpui::EntityId>> = Default::default();
@@ -623,15 +626,20 @@ impl gpui::Element for Ticking {
         &mut self,
         _: Option<&gpui::GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {
         self.child.prepaint(window, cx);
+        // Scrolled or clipped out of sight: nothing to move.
+        if !window.content_mask().bounds.intersects(&bounds) {
+            return;
+        }
         let view = window.current_view();
         if TICKING_VIEWS.with(|views| views.borrow_mut().insert(view)) {
-            let every = self.every;
+            // Behind another app a spinner still turns, slowly: each tick draws the whole view.
+            let every = if window.is_window_active() { self.every } else { self.every.max(INACTIVE_TICK) };
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(every).await;
                 TICKING_VIEWS.with(|views| views.borrow_mut().remove(&view));
@@ -671,19 +679,22 @@ pub fn tilde(path: &Path) -> String {
 }
 
 /// A pulsing ring over a control the onboarding tour wants used (the control must be `relative`).
-pub fn pulse_ring(id: &'static str, round: bool) -> gpui::AnimationElement<Div> {
-    div()
-        .absolute()
-        .inset_0()
-        .map(|d| if round { d.rounded_full() } else { d.rounded_md() })
-        .border_2()
-        .border_color(hex(Chrome::WARNING))
-        .bg(hex_alpha(Chrome::WARNING, 0.18))
-        .with_animation(
-            SharedString::from(format!("tour-ring-{id}")),
-            gpui::Animation::new(std::time::Duration::from_millis(1100)).repeat().with_easing(gpui::pulsating_between(0.35, 1.0)),
-            |ring, delta| ring.opacity(delta),
-        )
+/// Drawn 20 times a second (see `Ticking`), not at the display's rate.
+pub fn pulse_ring(_id: &'static str, round: bool) -> impl IntoElement {
+    // Opacity 0.35 → 1 → 0.35 every 1.1 s.
+    let phase = (clock_ms() % 1100) as f32 / 1100.0;
+    let opacity = 0.35 + 0.65 * (0.5 - 0.5 * (phase * std::f32::consts::TAU).cos());
+    Ticking::new(
+        div()
+            .absolute()
+            .inset_0()
+            .map(|d| if round { d.rounded_full() } else { d.rounded_md() })
+            .border_2()
+            .border_color(hex(Chrome::WARNING))
+            .bg(hex_alpha(Chrome::WARNING, 0.18))
+            .opacity(opacity),
+        std::time::Duration::from_millis(50),
+    )
 }
 
 /// A path that fits in `max` characters, cut in the middle: `/Users/me/…/wt/project`. The start

@@ -32,6 +32,11 @@ use std::time::{Duration, Instant};
 actions!(terminal, [Copy, Paste, Clear, SelectAll]);
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+/// Least time between repaints for output nobody is typing into (see `output_gap`).
+const OUTPUT_GAP: Duration = Duration::from_millis(33);
+const OUTPUT_GAP_INACTIVE: Duration = Duration::from_millis(100);
+/// Output this soon after the user typed in the pane is drawn at once.
+const TYPING_ECHO_MS: u64 = 500;
 const SPAWN_FALLBACK_DELAY: Duration = Duration::from_millis(400);
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a turn seen on screen still counts as shown: a read can land mid-repaint, and what
@@ -525,6 +530,11 @@ pub struct TerminalView {
     transcript_file: Option<(String, std::path::PathBuf)>,
     /// Whether the pane had keyboard focus in the last painted frame.
     focused: bool,
+    /// Whether its window was the active one in that frame, and when that frame was: a pane in a
+    /// tab or workspace out of sight, or a window behind another app, does not blink (each blink
+    /// draws the whole window again).
+    window_active: bool,
+    painted_at: Option<std::time::Instant>,
     _events: Option<Task<()>>,
     /// Failed starts so far; a few are retried before the pane shows the error.
     spawn_attempts: usize,
@@ -555,7 +565,8 @@ impl TerminalView {
             let alive = this.update(cx, |view, cx| {
                 // Only the focused pane draws a blinking cursor; any other pane draws it solid, so a
                 // toggle there would redraw it for nothing.
-                if settings(cx).cursor_blink && view.focused {
+                let shown = view.painted_at.is_some_and(|at| at.elapsed() < CURSOR_BLINK_INTERVAL * 3);
+                if settings(cx).cursor_blink && view.focused && view.window_active && shown {
                     view.cursor_visible = !view.cursor_visible;
                     cx.notify();
                 } else if !view.cursor_visible {
@@ -666,6 +677,8 @@ impl TerminalView {
             transcript_file: None,
             banner_model: None,
             focused: false,
+            window_active: false,
+            painted_at: None,
             _events: None,
             spawn_attempts: 0,
             last_repaint: Instant::now(),
@@ -690,6 +703,13 @@ impl TerminalView {
                 self.backend = Some(backend);
                 self._events = Some(cx.spawn(async move |this, cx| {
                     while let Some(event) = rx.next().await {
+                        // Output nobody is typing into (an agent's spinner and streamed text) waits
+                        // for the next tick of a clock all panes share and is drawn together: every
+                        // repaint draws the whole window.
+                        let Ok(gap) = this.update(cx, |view, _| view.output_gap()) else { break };
+                        if !gap.is_zero() {
+                            cx.background_executor().timer(gap).await;
+                        }
                         // Coalesce bursts of output into a single repaint.
                         let mut batch = vec![event];
                         while let Ok(event) = rx.try_recv() {
@@ -2156,6 +2176,24 @@ impl TerminalView {
         }
     }
 
+    /// How long output waits after a repaint before the next one: none right after the user typed
+    /// here (echo stays immediate), 30 repaints a second otherwise, 10 while the window is not the
+    /// active one.
+    /// The wait ends on the next tick of a clock all panes share, so several busy panes repaint
+    /// in the same frame instead of one after another.
+    fn output_gap(&self) -> Duration {
+        let now = crate::ui::now_ms();
+        let gap = if !self.window_active {
+            OUTPUT_GAP_INACTIVE
+        } else if now.saturating_sub(self.last_activity_ms) < TYPING_ECHO_MS {
+            return Duration::ZERO;
+        } else {
+            OUTPUT_GAP
+        };
+        let gap = gap.as_millis() as u64;
+        Duration::from_millis(gap - now % gap)
+    }
+
     /// Input typed by the user: snaps the viewport back to the prompt and drops any selection.
     fn write_user_input(&mut self, bytes: Vec<u8>) {
         self.last_activity_ms = crate::ui::now_ms();
@@ -3203,6 +3241,8 @@ impl Element for TerminalElement {
                 view.marked_text = None;
             }
             view.focused = focused;
+            view.window_active = window.is_window_active();
+            view.painted_at = Some(std::time::Instant::now());
         });
         frame
     }

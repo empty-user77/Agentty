@@ -231,7 +231,31 @@ fn recent_session_items(cx: &App) -> Vec<MenuItem> {
 // Position of the Window menu, registered with AppKit (see `native::register_windows_menu`).
 const WINDOW_MENU_INDEX: usize = 5;
 
+/// Set while new menus wait for an open menu to close (see `set_app_menus`).
+static MENUS_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn set_app_menus(cx: &mut App) {
+    use std::sync::atomic::Ordering;
+    // Replacing the menu bar while one of its menus is open closes that menu. With an input
+    // method on (Korean, Japanese, ...) macOS switches the keyboard layout as a menu opens, which
+    // binds the keys again and lands here: the menus then closed as soon as they were clicked.
+    // Wait for the menu to close instead; the newest state is what gets set then.
+    if native::menu_tracking() {
+        if !MENUS_WAITING.swap(true, Ordering::Relaxed) {
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                    if !native::menu_tracking() {
+                        break;
+                    }
+                }
+                MENUS_WAITING.store(false, Ordering::Relaxed);
+                cx.update(set_app_menus);
+            })
+            .detach();
+        }
+        return;
+    }
     // Dock icon right-click: AppKit lists the open windows above these items; recently closed
     // windows follow so they can be reopened.
     let closed_windows = workbench::ClosedWindows::load().windows;
@@ -805,7 +829,9 @@ fn main() {
             // again: look once more shortly after, and have it read the layout again if so.
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                if cx.update(|cx| keyboard_layout::read_too_early(cx)) {
+                // Not while a menu is open: macOS changes the layout for it on purpose, and the
+                // notification would make every observer in the app (AppKit's too) react.
+                if !native::menu_tracking() && cx.update(|cx| keyboard_layout::read_too_early(cx)) {
                     keyboard_layout::read_again();
                 }
             })
