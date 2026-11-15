@@ -32,6 +32,11 @@ use std::time::{Duration, Instant};
 actions!(terminal, [Copy, Paste, Clear, SelectAll]);
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+/// Least time between repaints for output nobody is typing into (see `output_gap`).
+const OUTPUT_GAP: Duration = Duration::from_millis(33);
+const OUTPUT_GAP_INACTIVE: Duration = Duration::from_millis(100);
+/// Output this soon after the user typed in the pane is drawn at once.
+const TYPING_ECHO_MS: u64 = 500;
 const SPAWN_FALLBACK_DELAY: Duration = Duration::from_millis(400);
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a turn seen on screen still counts as shown: a read can land mid-repaint, and what
@@ -698,6 +703,13 @@ impl TerminalView {
                 self.backend = Some(backend);
                 self._events = Some(cx.spawn(async move |this, cx| {
                     while let Some(event) = rx.next().await {
+                        // Output nobody is typing into (an agent's spinner and streamed text) waits
+                        // for the next tick of a clock all panes share and is drawn together: every
+                        // repaint draws the whole window.
+                        let Ok(gap) = this.update(cx, |view, _| view.output_gap()) else { break };
+                        if !gap.is_zero() {
+                            cx.background_executor().timer(gap).await;
+                        }
                         // Coalesce bursts of output into a single repaint.
                         let mut batch = vec![event];
                         while let Ok(event) = rx.try_recv() {
@@ -2162,6 +2174,24 @@ impl TerminalView {
             None if !self.spawned => self.pending_input.push(bytes),
             None => {}
         }
+    }
+
+    /// How long output waits after a repaint before the next one: none right after the user typed
+    /// here (echo stays immediate), 30 repaints a second otherwise, 10 while the window is not the
+    /// active one.
+    /// The wait ends on the next tick of a clock all panes share, so several busy panes repaint
+    /// in the same frame instead of one after another.
+    fn output_gap(&self) -> Duration {
+        let now = crate::ui::now_ms();
+        let gap = if !self.window_active {
+            OUTPUT_GAP_INACTIVE
+        } else if now.saturating_sub(self.last_activity_ms) < TYPING_ECHO_MS {
+            return Duration::ZERO;
+        } else {
+            OUTPUT_GAP
+        };
+        let gap = gap.as_millis() as u64;
+        Duration::from_millis(gap - now % gap)
     }
 
     /// Input typed by the user: snaps the viewport back to the prompt and drops any selection.
