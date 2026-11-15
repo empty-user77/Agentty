@@ -15,12 +15,14 @@ Language (English, 한국어, 日本語, 中文, Deutsch), **Appearance** (Syste
 |---|---|
 | Build my idea | Offers the idea page on the start screen and in the + menu |
 | Confirm close | Ask before closing a pane, tab or workspace that was used |
+| Delete trash automatically after | How long a deleted workspace stays in the [trash](/docs/monitoring#trash) before it goes for good: 1 to 365 days, 7 by default |
 | Own worktree per session | A second session in a busy project gets its own git worktree |
 | Search box above the workspace list | Searches workspace names and the conversations held in them |
 | Move a finished workspace to the top | Off keeps the order you arranged yourself |
 | Stop servers on close | Closing a pane stops the local servers started in it |
 | Share anonymous usage statistics | See [Telemetry](/docs/telemetry) |
 | Menu bar icon | Keeps Agentty running after you close the window (macOS) |
+| Remote access feature | On by default. Off removes [Remote access](/docs/remote-access) from the side menu and turns it off |
 | Prevent sleep | **On** keeps the machine awake (always, or for a set 1 to 72 hours), **Agents** only while an agent is working, **Off** lets it sleep as usual. Also in the status bar: click the cup |
 
 ## AI settings
@@ -29,6 +31,8 @@ What Agentty adds to agent sessions:
 
 | Setting | What it does |
 |---|---|
+| How agents open | **Chat** or **Terminal**: how Claude Code and Codex open, however they start (from a terminal too). **⇧⌘J** switches the pane in front. See [Chat view](/docs/chat-view) |
+| Orchestration | **Use orchestration** turns it on or off; off hides every way to start one. While on: the models a new one starts with, the other agents it uses, whether the plan waits for **Start**, and whether it opens as a workspace or a tab. See [Orchestration](/docs/session-flow) |
 | Claude advisor | The [advisor](/docs/advisor) new Claude tabs start with |
 | Show the advisor in the status bar | Off by default. On, the status bar of a Claude tab shows its advisor and lets you change it for that tab |
 | AI CLI status bar | The bar above AI panes, and whether it sits above or below the terminal |
@@ -51,13 +55,15 @@ The outside services Agentty works with, one card each with whether it is connec
 
 ## Project
 
-Where a new tab starts, the harness patterns Agentty looks for, whether the harness prompt is sent right away, and which agent starts harness work. Also which editor **Open in editor** uses. The language servers of the file editor, with an install button for a missing one, are there too. So are the file editor's options: problems at the end of their line, completions while typing, the type under the pointer, sticky scroll.
+Where a new tab starts, the harness patterns Agentty looks for, whether the harness prompt is sent right away, and which agent starts harness work. Also which editor **Open in editor** uses. The language servers of the file editor, with an install button for a missing one, are there too. So are the file editor's options: problems at the end of their line, completions while typing, the type under the pointer, **Format the file when saving** (off by default; on, **⌘S** first formats with the formatter **⇧⌥F** uses), sticky scroll.
 
 ## Windows
 
 Every Agentty window (**⇧⌘N** opens another) keeps a workspace list of its own. This page lists the windows, open and recently closed, with the workspaces in each and the terminals still running. Click a workspace to go to it. **Bring forward** shows an open window, **Reopen** opens a closed one again, and **Delete** closes a window and removes its workspaces after asking; the conversations stay in the session list. The main window is never deleted.
 
 ## Accounts
+
+The whole picture is in [Multiple accounts](/docs/accounts).
 
 Sign in to more than one Claude Code or Codex account from the account icon above Settings. Each account runs in its own window, with its own sessions and usage, and accounts can run at the same time. Settings, skills, rules and MCP servers are shared. Pressing an account brings its window forward, or opens one. Here in Settings, each login opens to show its folder (with **Open** and **Copy**), the environment variable that points the agent there, and where its sign-in is kept, with **Sign in again** and **Remove**. On the phone, a workspace shows its account, and a new workspace can choose among the open windows' accounts. Removing an account signs it out and deletes its sessions from this computer; it is refused while a pane runs on that account. Sync is per account too: a window syncs for its Claude Code account, else its Codex account, into a repository of its own, and two accounts can't share one. Sessions of any other account in that window are not synced there. The base account is the login in `~/.claude` and `~/.codex`: it can't be removed, and **Sign in again** replaces it. An account that is signed out, or whose login ends within two days, says so, with **Sign in again** next to it. Starting Claude Code or Codex while that agent has more than one account asks which account to start on, every time; the window's own is picked to begin with. Typing `claude` or `codex` into a terminal (a split pane included) asks the same and runs it on the account picked; Esc closes the question without starting it. With one account, nothing is asked. A pane on another account than its window's shows that account's initial in a blue circle at the start of its bar, with a blue line under the bar; click it for the account's plan, its 5-hour and weekly limits and when they reset, and what it used in the last 7 days. With the status bar off, a pane shown as a chat has the same circle under its composer.
 

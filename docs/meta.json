@@ -91,6 +91,15 @@
           }
         },
         {
+          "slug": "accounts",
+          "title": {
+            "en": "Multiple accounts",
+            "ko": "여러 계정",
+            "ja": "複数のアカウント",
+            "zh": "多个账户"
+          }
+        },
+        {
           "slug": "chat-view",
           "title": {
             "en": "Chat view",

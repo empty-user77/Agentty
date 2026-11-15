@@ -124,6 +124,12 @@ Only you get in, the same as on the page: Agentty answers that address itself an
 
 The address goes away when the server stops, when remote access is turned off and when Agentty quits. Agentty doesn't open a port that Tailscale already serves for something else, or one shared publicly with Funnel; the page tells you why instead.
 
+## Workspaces from the phone apps
+
+The Agentty Remote apps can send workspaces from the phone. They open under their own name, in a group of their own. Files sent with one are saved in the workspace's folder, under `.agentty-remote/`, which is kept out of git. In **Signed-in devices** on the Remote access page, a phone signed in through the app is named **Agentty Remote** instead of a browser.
+
+From the apps you can also put a workspace to sleep, close a tab (with its splits; it can be reopened from the closed tabs) and move a workspace to the [trash](/docs/monitoring#trash). Nothing done from a phone deletes for good: a workspace moved to the trash from a phone keeps its worktree and sync data, and can be restored from the trash like any other.
+
 ## Chat and orchestrations from the phone apps
 
 The Agentty Remote apps can show a pane as a chat and follow your orchestrations, with the same sign-in and the same checks as the page. Choosing the chat on the phone doesn't change how the pane shows on the Mac. The Mac stays on the workspace it shows when an orchestration starts or resumes from the phone; a toast says so.

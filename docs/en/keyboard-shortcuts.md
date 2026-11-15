@@ -60,6 +60,7 @@ Shortcuts follow the keyboard layout in use, and change when you switch layouts:
 | Find text in the project's files (file editor) | ⇧⌘F |
 | Organize imports (file editor) | ⇧⌥O |
 | Next / previous problem (file editor) | F8 / ⇧F8 |
+| Next / previous change an agent made (file editor) | ⌥F5 / ⇧⌥F5 |
 | Quick fix (file editor) | ⌘. |
 | Rename everywhere (file editor) | F2 |
 | Completions (file editor) | ⌃Space |

@@ -109,7 +109,7 @@ ui.column([
 
 ## 元素
 
-每个构建函数的选项和事件见 [Node.js SDK](/docs/plugin-sdk#面板)，每个元素发送的 JSON 见 [协议](/docs/plugin-protocol#ui)。简要如下：
+每个构建函数的选项和事件见 [Node.js SDK](/docs/plugin-sdk#面板)，每个元素发送的 JSON 见 [协议](/docs/plugin-protocol#ui-树)。简要如下：
 
 | 元素 | 事件 |
 |---|---|

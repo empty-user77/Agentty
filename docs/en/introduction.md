@@ -60,13 +60,16 @@ Today, plugins already add panels and automation workspaces, drive the in-app br
 | Area | What it does |
 |---|---|
 | **Agent awareness** | Live status per workspace, lit borders for panes that need an answer, notifications, a notification center, jump to the latest unread |
+| **Chat view** | Claude Code and Codex shown as a desktop-style chat while the CLI keeps running underneath — see [Chat view](/docs/chat-view) |
 | **Sessions** | Browse and resume `~/.claude` and `~/.codex` sessions, search them by title or content, migrate a conversation from Claude to Codex and back |
-| **Orchestration** | Watch an agent's subagents work in waves; drag a line from one agent to another to share its context, and mark it live to forward every turn |
+| **Orchestration** | Write one goal: an orchestrator plans a team of agents, runs it in waves and has the result reviewed. Drag a line from one agent to another to share its context, and mark it live to forward every turn |
 | **Git** | Switch repositories and branches, fetch, pull, push, review diffs, commit selected files, browse history, merge |
 | **Working trees** | A worktree per session, a panel that shows every tree, who works in it and what changed |
-| **Files & editor** | Project tree, a file editor with syntax colors and formatters, "Open in editor" for VS Code or Cursor |
+| **Files & editor** | Project tree, a file editor with syntax colors, formatters and language servers (go to definition and usages, completions, problems, quick fixes, rename), CSV, TSV and Excel files edited as tables, Word documents edited by paragraph, "Open in editor" for VS Code or Cursor |
 | **Extensions** | Skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place |
 | **Monitoring** | Cost, tokens, cache hit rate and models from local transcripts; running AI processes |
+| **Trash** | A deleted workspace waits in the trash for 7 days (or the period you set) and can be restored — see [Monitoring](/docs/monitoring#trash) |
+| **Remote access** | Open your terminals and workspaces from another device on your Tailscale network — see [Remote access](/docs/remote-access) |
 | **Plugins** | Panels, buttons, palette commands and `agentty://` links from other apps — see [Plugins](/docs/plugins-overview) |
 
 ## Platforms

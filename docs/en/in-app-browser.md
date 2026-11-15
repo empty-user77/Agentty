@@ -8,8 +8,10 @@ description: A browser panel beside your terminals, dev servers that open themse
 ## Opening things in it
 
 - ⌘-click a link in any terminal (Ctrl-click on Windows and Linux).
-- **Settings → General** decides whether ⌘-click opens links here or in your default browser.
+- **Settings → Browser** decides where links go. With **In-app browser (local pages only)** a dev server, a local page or a file opens here, and anything on the web opens in your default browser, where you are already signed in. With **Default browser** every link goes there.
 - Type a URL, or a search term — the search engine is configurable.
+
+With links set to **Default browser**, the in-app browser is off: the globe button is hidden, **⇧⌘B** does nothing, file previews open in your default browser, agents get no browser tools, and **Settings → Browser** shows only the link choice. Plugins' own pages, and the sign-in windows they open, still open inside Agentty.
 
 ## Dev servers
 

@@ -11,16 +11,14 @@ It holds everything Agentty needs to draw its interface on the GPU: elements and
 - Crates: [crates.io/crates/agentty-gpui](https://crates.io/crates/agentty-gpui)
 - API docs: [docs.rs/agentty-gpui](https://docs.rs/agentty-gpui)
 - License: Apache License 2.0
-- Rust: 2024 edition, toolchain 1.98 (the same as Agentty's)
 
 ## Getting started
 
-Add two crates to `Cargo.toml`: `agentty-gpui`, the framework, and `agentty-gpui-platform`, which starts the backend for the OS it runs on. Their library names are `gpui` and `gpui_platform`, so code says `use gpui::...`.
+Add two crates: `agentty-gpui`, the framework, and `agentty-gpui-platform`, which starts the backend for the OS it runs on. Their library names are `gpui` and `gpui_platform`, so code says `use gpui::...`.
 
-```toml
-[dependencies]
-gpui = { package = "agentty-gpui", version = "0.1" }
-gpui_platform = { package = "agentty-gpui-platform", version = "0.1" }
+```sh
+cargo add agentty-gpui --rename gpui
+cargo add agentty-gpui-platform --rename gpui_platform
 ```
 
 ```rust
@@ -104,25 +102,15 @@ The iOS and web backends are left out, because Agentty ships on macOS, Windows a
 
 A crate on crates.io can depend only on crates on crates.io. Where the original takes a dependency from Git or a fork, agentty-gpui uses the crates.io release:
 
-| Crate | Version used here | What the original's version adds |
-|---|---|---|
-| `async-task` | 4.7.1 | A fix for task waker vtable identity |
-| `calloop` (Linux) | 0.14.5 | Idle callbacks capped at about 10 ms per loop |
-| `khronos-egl` (Linux) | 6.0.0 | No panic when a failed EGL call reports success |
-| `wgpu`, `naga` (Linux) | 30.0.2 | A newer API (`QueueDescriptor`, `has_srgb_suffix`) |
-| `zed-font-kit`, `zed-scap`, `zed-xim` | crates.io releases | Small fixes since |
-| `oo7` (Linux) | 0.6 | An error when the prompt stream ends |
-| `windows-capture` (Windows, `screen-capture`) | 1.4.4, held in `Cargo.lock` | Nothing; 1.5 no longer builds with `zed-scap`, so a crate that turns on `screen-capture` must hold 1.4.4 too |
-
-## Files changed from the original
-
-Every changed file, the crate manifests included, carries a `Modified for Agentty` comment at the top.
-
-- `crates/gpui/src/style.rs`: its tests use `#[test]` instead of `#[perf]`.
-- `crates/gpui_apple/build.rs`: reads the bundled `gpui-src/` copy when `../gpui` isn't there (a published crate); the script keeps that copy identical to `crates/gpui/src`.
-- `crates/gpui_wgpu/src/{wgpu_context,wgpu_renderer,wgpu_atlas}.rs`: the wgpu 30.0.2 API.
-
-`scripts/apply_agentty.py` writes the crate manifests: the `agentty-gpui-*` package names, the workspace version, no iOS or web, and crates.io instead of Git. CI fails when its output isn't committed.
+| Crate | What the original's version adds |
+|---|---|
+| `async-task` | A fix for task waker vtable identity |
+| `calloop` (Linux) | Idle callbacks capped at about 10 ms per loop |
+| `khronos-egl` (Linux) | No panic when a failed EGL call reports success |
+| `wgpu`, `naga` (Linux) | A newer API (`QueueDescriptor`, `has_srgb_suffix`) |
+| `zed-font-kit`, `zed-scap`, `zed-xim` | Small fixes since |
+| `oo7` (Linux) | An error when the prompt stream ends |
+| `windows-capture` (Windows, `screen-capture`) | Nothing; held in `Cargo.lock` at the last release that builds with `zed-scap`, and a crate that turns on `screen-capture` must hold it too |
 
 ## How it is updated
 
@@ -134,7 +122,7 @@ There are two branches:
 Taking in a new original release:
 
 ```sh
-scripts/sync-upstream.sh v1.29.0   # a new snapshot on upstream
+scripts/sync-upstream.sh <tag>   # a new snapshot on upstream
 git merge upstream                 # into main; only files changed here can conflict
 python3 -I scripts/apply_agentty.py
 ```
@@ -157,7 +145,7 @@ cargo test --workspace --doc --features agentty-gpui-apple/runtime_shaders
 1. Bump `VERSION` in `scripts/apply_agentty.py`, rerun it and push. CI must pass, `cargo publish --workspace --dry-run` included.
 2. Run the **Agentty** workflow in GitHub Actions. It builds and tests Agentty against this checkout on macOS, Windows and Linux.
 3. `cargo publish --workspace` publishes the crates in dependency order.
-4. Tag the release (`git tag v0.1.0 && git push origin v0.1.0`).
+4. Tag the release (`git tag v<version> && git push origin v<version>`).
 
 ## Reporting a problem
 

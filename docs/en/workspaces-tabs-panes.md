@@ -22,7 +22,13 @@ Each row in the sidebar (**⌘B**) is a workspace, with a folder it opens in. **
 
 On macOS the tabs sit in the title bar next to the window buttons, with the sidebar button (**⌘B**) beside them; double-click the empty part of the bar to zoom the window. Turn **Tabs in the title bar** off in Workspace Options for a tab row of its own.
 
-A workspace row shows the status of its agents, so you can see which project needs you without opening it.
+A workspace row shows the status of its agents, so you can see which project needs you without opening it. While an agent runs, a detailed card adds lines under the name:
+
+- its state, in the same words as the pane's header, how long it has run, and the tokens (and cost) its session has used
+- its to-do list's progress, such as **To-do 4/9**, with the item in hand; click it to open the whole list
+- each running subagent with what it is doing right now and for how long, and a count of the rest and the finished ones
+
+The state line and the subagents can each be turned off in Workspace Options.
 
 ### The workspace menu
 
@@ -36,10 +42,13 @@ Right-click a workspace, or click its **⋯**, for what can be done to it. Where
 | Pin | Keeps the workspace at the top of its group |
 | Mark as Unread | Shows the attention mark on the card until you open it |
 | New Group, Move to Group ›, Remove from Group | Files the workspace in a group |
-| Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
 | Move to Window › | Moves the workspace, running, to another open window |
+| Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
+| Hide from remote access | Keeps the workspace off [remote access](/docs/remote-access): it isn't listed there and its terminals can't be reached. Choose it again to undo; a ✓ marks it while hidden. Shown while the remote access feature is on |
 | Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon, as is every workspace not opened since Agentty started. Opening it again starts its tabs and continues their agent sessions |
 | Delete Worktree | Closes the workspace and removes its worktree and branch. Uncommitted changes and commits found nowhere else are kept |
+| Delete Workspace | Moves the workspace to the [trash](/docs/monitoring#trash): its terminals close and it leaves the list, and it can be restored from there |
+| View Trash | Opens the trash |
 
 ## Tabs
 
