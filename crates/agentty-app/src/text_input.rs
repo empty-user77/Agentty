@@ -33,7 +33,22 @@ actions!(
         MoveDown,
         NextField,
         PreviousField,
-        NewLine
+        NewLine,
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectLineStart,
+        SelectLineEnd,
+        DocStart,
+        DocEnd,
+        SelectDocStart,
+        SelectDocEnd,
+        SelectUp,
+        SelectDown,
+        DeleteWordBack,
+        DeleteWordForward,
+        DeleteToLineStart
     ]
 );
 
@@ -62,8 +77,52 @@ pub fn bind_keys(cx: &mut App) {
             crate::key("shift-tab", PreviousField, Some(CONTEXT)),
             crate::key("up", MoveUp, Some(CONTEXT)),
             crate::key("down", MoveDown, Some(CONTEXT)),
+            crate::key("shift-up", SelectUp, Some(CONTEXT)),
+            crate::key("shift-down", SelectDown, Some(CONTEXT)),
+            crate::key("shift-home", SelectLineStart, Some(CONTEXT)),
+            crate::key("shift-end", SelectLineEnd, Some(CONTEXT)),
         ],
     );
+    // Moving and selecting by word and to the ends of lines and of the text, deleting by word and
+    // to the start of the line: macOS and PC conventions differ (the code editor's keys too).
+    if cfg!(target_os = "macos") {
+        crate::bind(
+            cx,
+            [
+                crate::key("alt-left", WordLeft, Some(CONTEXT)),
+                crate::key("alt-right", WordRight, Some(CONTEXT)),
+                crate::key("alt-shift-left", SelectWordLeft, Some(CONTEXT)),
+                crate::key("alt-shift-right", SelectWordRight, Some(CONTEXT)),
+                crate::key("cmd-left", Home, Some(CONTEXT)),
+                crate::key("cmd-right", End, Some(CONTEXT)),
+                crate::key("cmd-shift-left", SelectLineStart, Some(CONTEXT)),
+                crate::key("cmd-shift-right", SelectLineEnd, Some(CONTEXT)),
+                crate::key("cmd-up", DocStart, Some(CONTEXT)),
+                crate::key("cmd-down", DocEnd, Some(CONTEXT)),
+                crate::key("cmd-shift-up", SelectDocStart, Some(CONTEXT)),
+                crate::key("cmd-shift-down", SelectDocEnd, Some(CONTEXT)),
+                crate::key("alt-backspace", DeleteWordBack, Some(CONTEXT)),
+                crate::key("alt-delete", DeleteWordForward, Some(CONTEXT)),
+                crate::key("cmd-backspace", DeleteToLineStart, Some(CONTEXT)),
+            ],
+        );
+    } else {
+        crate::bind(
+            cx,
+            [
+                gpui::KeyBinding::new("ctrl-left", WordLeft, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-right", WordRight, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-right", SelectWordRight, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-home", DocStart, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-end", DocEnd, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-home", SelectDocStart, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-end", SelectDocEnd, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, Some(CONTEXT)),
+            ],
+        );
+    }
 }
 
 pub enum TextInputEvent {
@@ -476,6 +535,36 @@ impl TextInput {
         self.move_to(offset, cx);
     }
 
+    /// Where moving by word from the caret lands. A masked field is one word (nothing of it shows).
+    fn word_target(&self, forward: bool) -> usize {
+        let cursor = self.cursor_offset();
+        match (self.masked, forward) {
+            (true, false) => 0,
+            (true, true) => self.content.len(),
+            (false, false) => word_before(&self.content, cursor),
+            (false, true) => word_after(&self.content, cursor),
+        }
+    }
+
+    /// The start or end of the caret's line (the text's, in a one-line field).
+    fn line_target(&self, end: bool) -> usize {
+        let cursor = self.cursor_offset();
+        match (self.is_multiline(), end) {
+            (true, false) => self.line_at(cursor).1,
+            (true, true) => self.line_end(self.line_at(cursor).0),
+            (false, false) => 0,
+            (false, true) => self.content.len(),
+        }
+    }
+
+    /// Deletes from the caret to `offset` (⌥⌫, ⌘⌫), or what is selected when something is.
+    fn delete_to(&mut self, offset: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(offset, cx);
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
@@ -521,6 +610,23 @@ impl TextInput {
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
+        // A double click takes the word, a triple click the line (all of a one-line field).
+        if event.click_count >= 2 && !event.modifiers.shift {
+            let at = self.index_for_mouse_position(event.position);
+            let range = match (event.click_count, self.masked) {
+                (2, false) => word_range(&self.content, at),
+                (_, _) if self.is_multiline() => {
+                    let (line, start) = self.line_at(at);
+                    start..self.line_end(line)
+                }
+                _ => 0..self.content.len(),
+            };
+            self.is_selecting = false;
+            self.selection_reversed = false;
+            self.selected_range = range;
+            cx.notify();
+            return;
+        }
         self.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -787,6 +893,62 @@ fn scroll_to_show(scroll: Pixels, caret: Pixels, text_width: Pixels, field_width
 /// Hangul syllables and jamo (compatibility and conjoining).
 fn is_hangul(c: char) -> bool {
     matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}')
+}
+
+/// What a character is, for moving by word: a space, part of a word, or punctuation.
+fn char_class(c: char) -> u8 {
+    if c.is_whitespace() {
+        0
+    } else if c.is_alphanumeric() || c == '_' {
+        1
+    } else {
+        2
+    }
+}
+
+/// Where the word before `offset` starts (⌥←): spaces and punctuation before it are passed over.
+fn word_before(content: &str, offset: usize) -> usize {
+    let mut chars = content[..offset].char_indices().rev().peekable();
+    let mut at = offset;
+    while let Some((i, _)) = chars.next_if(|(_, c)| char_class(*c) != 1) {
+        at = i;
+    }
+    while let Some((i, _)) = chars.next_if(|(_, c)| char_class(*c) == 1) {
+        at = i;
+    }
+    at
+}
+
+/// Where the word after `offset` ends (⌥→): spaces and punctuation before it are passed over.
+fn word_after(content: &str, offset: usize) -> usize {
+    let mut chars = content[offset..].char_indices().peekable();
+    let mut at = offset;
+    while let Some((i, c)) = chars.next_if(|(_, c)| char_class(*c) != 1) {
+        at = offset + i + c.len_utf8();
+    }
+    while let Some((i, c)) = chars.next_if(|(_, c)| char_class(*c) == 1) {
+        at = offset + i + c.len_utf8();
+    }
+    at
+}
+
+/// The run of one kind of character (a word, spaces, punctuation) at `offset`: a double click's.
+fn word_range(content: &str, offset: usize) -> Range<usize> {
+    let offset = offset.min(content.len());
+    // The character under the click; past the end of a line, the one before it.
+    let Some(class) = content[offset..]
+        .chars()
+        .next()
+        .filter(|c| *c != '\n')
+        .or_else(|| content[..offset].chars().next_back().filter(|c| *c != '\n'))
+        .map(char_class)
+    else {
+        return offset..offset;
+    };
+    let same = |c: &char| *c != '\n' && char_class(*c) == class;
+    let start = offset - content[..offset].chars().rev().take_while(same).map(char::len_utf8).sum::<usize>();
+    let end = offset + content[offset..].chars().take_while(same).map(char::len_utf8).sum::<usize>();
+    start..end
 }
 
 /// Where each line of `content` starts.
@@ -1245,6 +1407,35 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(|this, _: &WordLeft, _, cx| this.move_to(this.word_target(false), cx)))
+            .on_action(cx.listener(|this, _: &WordRight, _, cx| this.move_to(this.word_target(true), cx)))
+            .on_action(cx.listener(|this, _: &SelectWordLeft, _, cx| this.select_to(this.word_target(false), cx)))
+            .on_action(cx.listener(|this, _: &SelectWordRight, _, cx| this.select_to(this.word_target(true), cx)))
+            .on_action(cx.listener(|this, _: &SelectLineStart, _, cx| this.select_to(this.line_target(false), cx)))
+            .on_action(cx.listener(|this, _: &SelectLineEnd, _, cx| this.select_to(this.line_target(true), cx)))
+            .on_action(cx.listener(|this, _: &DocStart, _, cx| this.move_to(0, cx)))
+            .on_action(cx.listener(|this, _: &DocEnd, _, cx| this.move_to(this.content.len(), cx)))
+            .on_action(cx.listener(|this, _: &SelectDocStart, _, cx| this.select_to(0, cx)))
+            .on_action(cx.listener(|this, _: &SelectDocEnd, _, cx| this.select_to(this.content.len(), cx)))
+            // Shift+Up / Down: a field of many lines selects a line up or down; a one-line field to
+            // its start or end, as macOS's fields do.
+            .on_action(cx.listener(|this, _: &SelectUp, _, cx| {
+                if this.is_multiline() {
+                    this.move_line(false, true, cx);
+                } else {
+                    this.select_to(0, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SelectDown, _, cx| {
+                if this.is_multiline() {
+                    this.move_line(true, true, cx);
+                } else {
+                    this.select_to(this.content.len(), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &DeleteWordBack, window, cx| this.delete_to(this.word_target(false), window, cx)))
+            .on_action(cx.listener(|this, _: &DeleteWordForward, window, cx| this.delete_to(this.word_target(true), window, cx)))
+            .on_action(cx.listener(|this, _: &DeleteToLineStart, window, cx| this.delete_to(this.line_target(false), window, cx)))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
@@ -1330,6 +1521,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn moving_by_word_passes_spaces_and_punctuation_then_the_word() {
+        let text = "hello, 세상 foo_bar";
+        // From the end back: foo_bar is one word, then 세상, then hello (the ", " passed over).
+        assert_eq!(word_before(text, text.len()), text.find("foo_bar").unwrap());
+        assert_eq!(word_before(text, text.find("foo_bar").unwrap()), text.find("세상").unwrap());
+        assert_eq!(word_before(text, text.find("세상").unwrap()), 0);
+        assert_eq!(word_before(text, 0), 0);
+        // And forward: to each word's end.
+        assert_eq!(word_after(text, 0), "hello".len());
+        assert_eq!(word_after(text, "hello".len()), text.find(" foo").unwrap());
+        assert_eq!(word_after(text, text.find(" foo").unwrap()), text.len());
+        assert_eq!(word_after(text, text.len()), text.len());
+        // Across a line break, as across a space.
+        assert_eq!(word_before("one\ntwo", 4), 0);
+        assert_eq!(word_after("one\ntwo", 3), 7);
+    }
+
+    #[test]
+    fn a_double_click_takes_the_run_it_lands_in() {
+        let text = "say 안녕하세요, world\nnext";
+        let at = text.find("녕").unwrap();
+        assert_eq!(&text[word_range(text, at)], "안녕하세요");
+        assert_eq!(&text[word_range(text, text.find(',').unwrap())], ",");
+        // Past a line's end, the word before it; never across the line break.
+        assert_eq!(&text[word_range(text, text.find('\n').unwrap())], "world");
+        assert_eq!(&text[word_range(text, text.len())], "next");
+        assert_eq!(word_range("", 0), 0..0);
+    }
 
     const TEXT: &str = "one\ntwo\n\nfour";
 
