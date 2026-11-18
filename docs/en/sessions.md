@@ -9,9 +9,11 @@ The files are JSONL — one line per event — written by Claude Code and Codex 
 
 ## Browsing
 
-**⇧⌘S** opens the session list: everything in `~/.claude` and `~/.codex`, newest first, with title, folder and agent.
+**⇧⌘S** opens the session list: everything in `~/.claude` and `~/.codex`, under the project it ran in, with title and agent. A session started in a worktree or a subfolder is listed with the repository it belongs to. The projects with the newest sessions come first; runs a plugin started and sessions from temporary folders come last, each as one group.
 
+- Click a project to unfold its sessions. The button above the list folds or unfolds all of them, and the one beside it switches to a single list by time.
 - Click a session to open it, or resume it in a new tab.
+- Sessions that hold the very same conversation (a script asking the same thing again and again) show as one row with a count; click the count to list them all.
 - **⇧⌘O** searches by title, conversation content, path or id. Each result says what matched, with the words marked; a match in the conversation shows the line it was found in and who said it. **✕** or **Esc** clears the search.
 - Star a session to pin it to the top.
 

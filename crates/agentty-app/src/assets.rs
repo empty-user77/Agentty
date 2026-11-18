@@ -122,6 +122,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/panel-left-open.svg", include_bytes!("../assets/icons/panel-left-open.svg")),
     ("icons/package.svg", include_bytes!("../assets/icons/package.svg")),
     ("icons/fold-vertical.svg", include_bytes!("../assets/icons/fold-vertical.svg")),
+    ("icons/unfold-vertical.svg", include_bytes!("../assets/icons/unfold-vertical.svg")),
     ("icons/pencil.svg", include_bytes!("../assets/icons/pencil.svg")),
     ("icons/picture-in-picture-2.svg", include_bytes!("../assets/icons/picture-in-picture-2.svg")),
     ("icons/plus.svg", include_bytes!("../assets/icons/plus.svg")),

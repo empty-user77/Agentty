@@ -46,6 +46,7 @@ pub mod run_configs;
 pub mod search;
 pub mod secret_store;
 pub mod service_status;
+pub mod session_groups;
 pub mod subagent_trace;
 pub mod sync;
 pub mod update;

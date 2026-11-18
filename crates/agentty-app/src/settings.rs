@@ -344,6 +344,8 @@ pub struct Settings {
     pub system_notifications: bool,
     /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
     pub favorite_sessions: Vec<String>,
+    /// The local sessions listed under the project they ran in, instead of as one run by time.
+    pub group_sessions: bool,
     /// Sidebar plugins kept as icons of their own in the activity bar, by plugin id, however many
     /// are installed (the rest fold into one group once there are enough of them).
     pub pinned_plugins: Vec<String>,
@@ -1079,6 +1081,7 @@ impl Default for Settings {
             lsp_trusted_builds: Vec::new(),
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
+            group_sessions: true,
             pinned_plugins: Vec::new(),
             pin_sidebar_plugins: false,
             resume_bar: true,
