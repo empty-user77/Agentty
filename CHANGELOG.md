@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-11-18
+
+### Added
+- The local sessions panel lists sessions by project. A session started in a worktree or a subfolder is listed with
+  its repository; runs a plugin started and sessions from temporary folders are groups of their own, after your
+  projects. Projects start folded, a button folds or unfolds them all, another switches back to one list by time, and
+  a search shows only the projects with a result.
+- Sessions that hold the very same conversation show as one row with a count; a click on the count lists them.
+- Auto control (macOS): while a Claude Code session is in front, a monitor button in the status bar turns Claude
+  Code's built-in computer use on or off for it, so Claude can operate desktop apps such as a messenger or iPhone
+  Mirroring. Claude Code still asks you for each app first.
+- Settings → Agents → Claude Code has a switch for Claude Code's experimental Code Mode.
+- Text fields (a chat's composer, the orchestrator's goal, forms) move, select and delete by word and by line with
+  the usual keys of each system (⌥ / ⌘ with the arrows and Backspace on macOS, Ctrl on Windows and Linux), and a
+  double or triple click selects the word or the line.
+
+### Fixed
+- A line longer than the view can be read to its end: a changed file's diff scrolls sideways (trackpad, Shift+wheel,
+  a bar along the bottom, or dragging a selection to the edge), and the file editor shows a bar along the bottom
+  while a line is wider than the view.
+
 ## [0.4.7] - 2026-11-15
 
 v0.4.5 and v0.4.6 were withdrawn; this release brings their changes (below) together with these fixes.
