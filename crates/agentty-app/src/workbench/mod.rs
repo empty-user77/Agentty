@@ -1507,6 +1507,8 @@ impl Workbench {
                 cx.notify();
             }
         }
+        // The status bar says whether the Claude session in front can use the computer.
+        self.refresh_computer_use(false, cx);
     }
 
     fn focus_pane(&self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
@@ -1660,6 +1662,10 @@ impl Workbench {
         {
             self.usage_refreshed = Some(std::time::Instant::now());
             self.refresh_account_usage(cx);
+        }
+        // A turn ended: the user may have turned computer use on or off in it (`/mcp`).
+        if signal.kind == crate::agent_signal::SignalKind::Stop {
+            self.refresh_computer_use(false, cx);
         }
         if let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == signal.pane_id) {
             pane.update(cx, |view, cx| view.apply_signal(signal, cx));

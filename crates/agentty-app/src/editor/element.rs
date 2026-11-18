@@ -107,6 +107,8 @@ pub struct Layout {
     pub max_scroll_x: f32,
     pub max_scroll_y: f32,
     thumb: Option<Bounds<Pixels>>,
+    /// The sideways scrollbar's thumb, along the bottom, while a line shown is wider than the view.
+    thumb_x: Option<Bounds<Pixels>>,
     folds: super::fold::Folds,
     /// Where each folded line's `⋯` is (a click on it unfolds).
     fold_marks: Vec<(usize, Bounds<Pixels>)>,
@@ -161,6 +163,24 @@ impl Layout {
 
     pub fn on_scrollbar(&self, position: Point<Pixels>) -> bool {
         self.thumb.is_some() && f32::from(position.x) >= f32::from(self.bounds.right()) - SCROLLBAR_WIDTH - 2.
+    }
+
+    /// Whether `position` is on the sideways scrollbar along the bottom.
+    pub fn on_scrollbar_x(&self, position: Point<Pixels>) -> bool {
+        self.thumb_x.is_some()
+            && f32::from(position.y) >= f32::from(self.bounds.bottom()) - SCROLLBAR_WIDTH - 2.
+            && f32::from(position.x) >= self.text_left - TEXT_PADDING / 2.
+            && !self.on_scrollbar(position)
+    }
+
+    /// Sideways scroll offset after its thumb was dragged `dx` from where it was at `start`.
+    pub fn scroll_for_thumb_x_drag(&self, start: f32, dx: f32) -> f32 {
+        let Some(thumb) = self.thumb_x else { return start };
+        let track = f32::from(self.bounds.right()) - SCROLLBAR_WIDTH - self.text_left - f32::from(thumb.size.width);
+        if track <= 0. {
+            return start;
+        }
+        (start + dx * self.max_scroll_x / track).clamp(0., self.max_scroll_x)
     }
 
     /// Scroll offset after the scrollbar's thumb was dragged `dy` from where it was at `start`.
@@ -259,6 +279,7 @@ pub struct Prepainted {
     cursor: Option<PaintQuad>,
     gutter: PaintQuad,
     thumb: Option<PaintQuad>,
+    thumb_x: Option<PaintQuad>,
     line_height: Pixels,
     /// Fold arrows in the gutter: (center, folded).
     arrows: Vec<(Point<Pixels>, bool)>,
@@ -412,6 +433,7 @@ impl Element for EditorElement {
                     cursor: None,
                     gutter: fill(bounds, hex(Chrome::EDITOR)),
                     thumb: None,
+                    thumb_x: None,
                     line_height: px(line_height),
                     arrows: Vec::new(),
                 };
@@ -769,6 +791,16 @@ impl Element for EditorElement {
                 Bounds::new(point(bounds.right() - px(SCROLLBAR_WIDTH), px(top)), size(px(SCROLLBAR_WIDTH - 2.), px(thumb_height)))
             });
 
+            // Sideways: a thumb along the bottom while a line on screen runs past the view, so
+            // there is something to see and to take hold of (the wheel alone gave no sign of it).
+            let thumb_x = (max_scroll_x > 0.).then(|| {
+                let track = (f32::from(bounds.right()) - SCROLLBAR_WIDTH - text_left).max(1.);
+                let content = max_scroll_x + track;
+                let thumb_width = (track * track / content).max(24.).min(track);
+                let left = text_left + scroll.x / max_scroll_x * (track - thumb_width);
+                Bounds::new(point(px(left), bounds.bottom() - px(SCROLLBAR_WIDTH)), size(px(thumb_width), px(SCROLLBAR_WIDTH - 2.)))
+            });
+
             let mut lines: Vec<(Point<Pixels>, ShapedLine)> = laid.iter().map(|l| (origin(l.index), l.shaped.clone())).collect();
             // Folding: an arrow in the gutter where a region starts (always on a folded one, on the
             // others while the pointer is over the gutter), and `⋯` after a folded line.
@@ -831,6 +863,7 @@ impl Element for EditorElement {
                 max_scroll_x,
                 max_scroll_y,
                 thumb,
+                thumb_x,
                 folds,
                 fold_marks,
             });
@@ -844,6 +877,7 @@ impl Element for EditorElement {
                 cursor: cursor_quad,
                 gutter: fill(Bounds::new(bounds.origin, size(px(gutter_width), bounds.size.height)), hex(Chrome::EDITOR)),
                 thumb: thumb.map(|t| fill(t, hex_alpha(0xffffff, 0.14)).corner_radii(px(3.))),
+                thumb_x: thumb_x.map(|t| fill(t, hex_alpha(0xffffff, 0.14)).corner_radii(px(3.))),
                 line_height: px(line_height),
                 arrows,
             }
@@ -897,6 +931,9 @@ impl Element for EditorElement {
                 }
             });
             if let Some(thumb) = prepainted.thumb.take() {
+                window.paint_quad(thumb);
+            }
+            if let Some(thumb) = prepainted.thumb_x.take() {
                 window.paint_quad(thumb);
             }
         });

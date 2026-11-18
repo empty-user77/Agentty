@@ -37,6 +37,10 @@ const SCROLL_EDGE: f32 = 40.;
 /// Rows a tick scrolls at its fastest.
 const SCROLL_ROWS: f32 = 1.5;
 const SCROLL_TICK: Duration = Duration::from_millis(30);
+/// How close to the code's left or right edge a drag has to come for the lines to move sideways,
+/// and how far they move a tick at their fastest.
+const SIDE_EDGE: f32 = 28.;
+const SIDE_STEP: f32 = 28.;
 /// The most diff lines a prompt carries: the rest is named, not pasted.
 const PROMPT_ROWS: usize = 200;
 
@@ -70,6 +74,11 @@ pub(crate) struct DiffBody {
     commit: Option<String>,
     focus: FocusHandle,
     scroll: gpui::UniformListScrollHandle,
+    /// How far the code is moved to the left, for lines longer than the view is wide: the strip
+    /// under the list scrolls it, and the bar at the bottom is its bar.
+    side: gpui::ScrollHandle,
+    /// The widest line as drawn, for the lines and font it was measured with.
+    widest: Option<(usize, SharedString, f32)>,
     /// Where the list is on screen, as last painted.
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// Where the code starts in a row, as last drawn.
@@ -81,6 +90,8 @@ pub(crate) struct DiffBody {
     /// Where the pointer last was in a drag, and how far a tick scrolls (rows, up is negative).
     pointer: Point<Pixels>,
     scroll_by: f32,
+    /// How far a tick moves the lines sideways (pixels, left is negative).
+    side_by: f32,
     scrolling: Option<gpui::Task<()>>,
     /// The pointer's x when the selection was made: the bar comes up there.
     bar_x: Pixels,
@@ -206,7 +217,7 @@ fn rows_label(rows: &[DiffLine]) -> String {
 }
 
 /// One row of a diff, with what is selected of its text and whether the selection runs on past it.
-fn diff_row(line: &DiffLine, gutter: f32, font: SharedString, selected: Option<Range<usize>>, past_end: bool) -> AnyElement {
+fn diff_row(line: &DiffLine, gutter: f32, font: SharedString, selected: Option<Range<usize>>, past_end: bool, side: f32) -> AnyElement {
     let (bg, fg, sign) = match line.kind {
         LineKind::Added => (Some(hex_alpha(0x2ea043, 0.16)), Chrome::FOREGROUND, "+"),
         LineKind::Removed => (Some(hex_alpha(0xf85149, 0.16)), Chrome::FOREGROUND, "-"),
@@ -234,17 +245,18 @@ fn diff_row(line: &DiffLine, gutter: f32, font: SharedString, selected: Option<R
         .child(number(line.new))
         .child(div().w(px(SIGN)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(sign))
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .items_center()
-                .cursor(gpui::CursorStyle::IBeam)
-                .text_color(hex(fg))
-                .child(text)
-                // The end of the line is selected too, which an empty line otherwise doesn't show.
-                .when(past_end, |d| d.child(div().flex_shrink_0().w(px(6.)).h_full().bg(color))),
+            // The code alone moves sideways: the numbers and the sign stay where they are.
+            div().flex_1().min_w_0().h_full().flex().overflow_hidden().cursor(gpui::CursorStyle::IBeam).text_color(hex(fg)).child(
+                div()
+                    .flex_shrink_0()
+                    .h_full()
+                    .ml(px(-side))
+                    .flex()
+                    .items_center()
+                    .child(text)
+                    // The end of the line is selected too, which an empty line otherwise doesn't show.
+                    .when(past_end, |d| d.child(div().flex_shrink_0().w(px(6.)).h_full().bg(color))),
+            ),
         )
         .into_any_element()
 }
@@ -257,6 +269,8 @@ impl DiffBody {
             commit: None,
             focus: cx.focus_handle(),
             scroll: gpui::UniformListScrollHandle::new(),
+            side: gpui::ScrollHandle::new(),
+            widest: None,
             bounds: Rc::new(Cell::new(Bounds::default())),
             text_left: 0.,
             font: SharedString::default(),
@@ -265,6 +279,7 @@ impl DiffBody {
             dragging: false,
             pointer: Point::default(),
             scroll_by: 0.,
+            side_by: 0.,
             scrolling: None,
             bar_x: px(0.),
             ask: None,
@@ -280,6 +295,7 @@ impl DiffBody {
         let same_file = self.rel == rel && self.commit == commit;
         if !same_file {
             self.scroll = gpui::UniformListScrollHandle::new();
+            self.side = gpui::ScrollHandle::new();
             self.ask = None;
         }
         if !same_file || *self.lines != *lines {
@@ -303,6 +319,50 @@ impl DiffBody {
         self.scroll.0.borrow().base_handle.clone()
     }
 
+    /// How far the code is moved to the left now.
+    fn side_offset(&self) -> f32 {
+        -f32::from(self.side.offset().x)
+    }
+
+    /// Moves the code sideways by `by` pixels (right is positive), as far as its widest line goes.
+    /// Whether it moved.
+    fn scroll_side(&mut self, by: f32) -> bool {
+        let offset = self.side.offset();
+        let x = (f32::from(offset.x) - by).clamp(-f32::from(self.side.max_offset().x), 0.);
+        if px(x) == offset.x {
+            return false;
+        }
+        self.side.set_offset(gpui::point(px(x), offset.y));
+        true
+    }
+
+    /// The width of the widest line as drawn, measured once for these lines in this font.
+    fn widest_line(&mut self, window: &mut Window) -> f32 {
+        let key = Rc::as_ptr(&self.lines) as usize;
+        if let Some((_, _, width)) = self.widest.as_ref().filter(|(lines, font, _)| *lines == key && *font == self.font) {
+            return *width;
+        }
+        // The longest few by characters and by bytes: one of them is the widest (wide characters
+        // take more room than their count says, and more bytes).
+        let mut by_chars: Vec<&DiffLine> = self.lines.iter().collect();
+        by_chars.sort_by_key(|line| std::cmp::Reverse(line.text.chars().count()));
+        let mut by_bytes: Vec<&DiffLine> = self.lines.iter().collect();
+        by_bytes.sort_by_key(|line| std::cmp::Reverse(line.text.len()));
+        let mut style = window.text_style();
+        style.font_family = self.font.clone();
+        let mut width = 0f32;
+        for line in by_chars.into_iter().take(4).chain(by_bytes.into_iter().take(4)) {
+            let text = drawn(&line.text);
+            if text.is_empty() {
+                continue;
+            }
+            let run = style.to_run(text.len());
+            width = width.max(f32::from(window.text_system().shape_line(text.into(), px(TEXT), &[run], None).width));
+        }
+        self.widest = Some((key, self.font.clone(), width));
+        width
+    }
+
     /// The place under `position`. Past the list's ends is its first or last place, so a drag can
     /// leave the list and still reach them.
     fn place_at(&self, position: Point<Pixels>, window: &mut Window) -> Option<Place> {
@@ -320,7 +380,7 @@ impl DiffBody {
             return Some(Place { row, at: drawn(&self.lines[row].text).len() });
         }
         let text = drawn(&self.lines[row].text);
-        let x = f32::from(position.x - bounds.origin.x) - self.text_left;
+        let x = f32::from(position.x - bounds.origin.x) - self.text_left + self.side_offset();
         if x <= 0. || text.is_empty() {
             return Some(Place { row, at: 0 });
         }
@@ -382,7 +442,21 @@ impl DiffBody {
         } else {
             0.
         };
-        if self.scroll_by == 0. {
+        // Sideways too: near the code's right edge the lines move left under the pointer, near
+        // its left edge back, so a drag reaches the end of a line longer than the view.
+        let (x, left, right) = (
+            f32::from(event.position.x),
+            f32::from(bounds.origin.x) + self.text_left,
+            f32::from(bounds.origin.x + bounds.size.width) - SCROLLBAR,
+        );
+        self.side_by = if x > right - SIDE_EDGE {
+            ((x - (right - SIDE_EDGE)) / SIDE_EDGE).clamp(0.2, 1.) * SIDE_STEP
+        } else if x < left + SIDE_EDGE {
+            -(((left + SIDE_EDGE) - x) / SIDE_EDGE).clamp(0.2, 1.) * SIDE_STEP
+        } else {
+            0.
+        };
+        if self.scroll_by == 0. && self.side_by == 0. {
             self.scrolling = None;
         } else if self.scrolling.is_none() {
             let handle = window.window_handle();
@@ -398,15 +472,21 @@ impl DiffBody {
     }
 
     fn scroll_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.dragging || self.scroll_by == 0. {
+        if !self.dragging || (self.scroll_by == 0. && self.side_by == 0.) {
             return false;
         }
         let base = self.base();
         let offset = base.offset();
         let y = (f32::from(offset.y) - self.scroll_by * ROW).clamp(-f32::from(base.max_offset().y), 0.);
+        let moved_down = px(y) != offset.y;
         base.set_offset(gpui::point(offset.x, px(y)));
-        self.move_head(window, cx);
-        cx.notify();
+        let moved_aside = self.side_by != 0. && self.scroll_side(self.side_by);
+        // At the end both ways: nothing to draw until the pointer moves again (the ticks go on
+        // while it is held at the edge, as before, and end with the drag).
+        if moved_down || moved_aside {
+            self.move_head(window, cx);
+            cx.notify();
+        }
         true
     }
 
@@ -421,6 +501,7 @@ impl DiffBody {
     fn end_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.dragging = false;
         self.scroll_by = 0.;
+        self.side_by = 0.;
         self.scrolling = None;
         self.bar_x = position.x;
         cx.notify();
@@ -617,6 +698,8 @@ impl DiffBody {
             "dragging": self.dragging,
             "asking": self.ask.is_some(),
             "scroll": f32::from(self.base().offset().y),
+            "side": self.side_offset(),
+            "side_max": f32::from(self.side.max_offset().x),
             "prompt": range.map(|(from, to)| {
                 diff_prompt(&self.rel, &selected_rows(&self.lines, from, to), self.commit.as_deref(), "INSTRUCTION", false)
             }),
@@ -625,12 +708,16 @@ impl DiffBody {
 }
 
 impl Render for DiffBody {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.lines.clone();
         let font: SharedString = crate::settings::terminal_font(cx).into();
         self.font = font.clone();
         let gutter = rows.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(0).to_string().len().max(3) as f32 * 8. + 12.;
         self.text_left = gutter * 2. + SIGN;
+        let widest = self.widest_line(window);
+        let side = self.side_offset();
+        let side_handle = self.side.clone();
+        let text_left = self.text_left;
         let selection = self.range();
         let handle = self.scroll.clone();
         let base = self.base();
@@ -676,7 +763,7 @@ impl Render for DiffBody {
                                 Some((range, past_end)) => ((!range.is_empty()).then_some(range), past_end),
                                 None => (None, false),
                             };
-                            diff_row(line, gutter, font.clone(), selected, past_end)
+                            diff_row(line, gutter, font.clone(), selected, past_end, side)
                         })
                         .collect::<Vec<_>>()
                 })
@@ -688,6 +775,20 @@ impl Render for DiffBody {
                     |_, _, _| {},
                     move |area, _, window, _| {
                         bounds.set(area);
+                        // A sideways scroll (a trackpad's, or the wheel with Shift) moves the code. It is
+                        // taken before the list sees it: the list would scroll up or down by it.
+                        let scrolled = this.clone();
+                        window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, _, cx| {
+                            let delta = event.delta.pixel_delta(px(ROW));
+                            if phase.capture() && area.contains(&event.position) && delta.x.abs() > delta.y.abs() {
+                                let _ = scrolled.update(cx, |this, cx| {
+                                    if this.scroll_side(-f32::from(delta.x)) {
+                                        cx.notify();
+                                    }
+                                });
+                                cx.stop_propagation();
+                            }
+                        });
                         if !dragging {
                             return;
                         }
@@ -712,6 +813,21 @@ impl Render for DiffBody {
                 .size_full(),
             )
             .child(crate::ui::scrollbar(base))
+            // What the sideways scroll is measured in: a strip as wide as the code's column, holding
+            // something as wide as the widest line. Its bar is drawn over the list's bottom edge.
+            .child(
+                div()
+                    .id("diff-side")
+                    .absolute()
+                    .left(px(text_left))
+                    .right(px(SCROLLBAR))
+                    .bottom_0()
+                    .h(px(1.))
+                    .overflow_x_scroll()
+                    .track_scroll(&side_handle)
+                    .child(div().flex_shrink_0().h(px(1.)).w(px(widest + 24.))),
+            )
+            .child(crate::ui::scrollbar_h(side_handle))
             .children(self.ask.as_ref().map(|ask| self.render_ask(ask, cx)).or_else(|| self.render_bar(cx)))
     }
 }

@@ -21,6 +21,10 @@ Agentty registers servers with the agent CLIs rather than proxying them: the ser
 
 When a value in a server's URL or arguments looks like a secret, it is shown redacted.
 
+### Auto control (macOS)
+
+Claude Code can operate desktop apps for you — a messenger, iPhone Mirroring, anything on screen — with its built-in `computer-use` server. Where your Claude Code has it, the status bar shows a monitor button next to the MCP icon while a Claude session is in front. Click it and Agentty types `/mcp enable computer-use` into that session; from then on the status bar says **Auto control** for that project. Claude Code still asks you for each app before it touches it. Click the button again to turn it off.
+
 ## API connectors
 
 A connector turns any HTTP API into an MCP server your agents can use. You describe the endpoints once — method, path, what the parameters mean — and the agent gets tools it can call.

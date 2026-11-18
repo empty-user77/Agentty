@@ -540,6 +540,10 @@ pub struct CodeEditor {
     drag: Option<(DragUnit, Pos, Pos)>,
     /// Dragging the scrollbar: (mouse y at start, scroll y at start).
     scrollbar_drag: Option<(f32, f32)>,
+    /// The sideways scrollbar's thumb being dragged: the pointer's x and the scroll it started at.
+    scrollbar_drag_x: Option<(f32, f32)>,
+    /// The pointer is over one of the scrollbars: it is an arrow there, not the text's I-beam.
+    over_scrollbar: bool,
     /// What the tab strip last showed (names and unsaved marks), to tell it only about changes.
     shown_tabs: Vec<(PathBuf, bool)>,
     /// The markdown preview's web view (one, for whichever file is in front).
@@ -724,6 +728,8 @@ impl CodeEditor {
             layout: None,
             drag: None,
             scrollbar_drag: None,
+            scrollbar_drag_x: None,
+            over_scrollbar: false,
             shown_tabs: Vec::new(),
             preview: Preview::new(),
             grid_focus: cx.focus_handle(),
@@ -1535,6 +1541,11 @@ impl CodeEditor {
             self.scrollbar_drag = Some((f32::from(event.position.y), scroll));
             return;
         }
+        if layout.on_scrollbar_x(event.position) {
+            let scroll = self.docs.get(self.active).map_or(0., |d| d.scroll.x);
+            self.scrollbar_drag_x = Some((f32::from(event.position.x), scroll));
+            return;
+        }
         let Some(pos) = self.docs.get(self.active).map(|doc| layout.position_for(event.position, &doc.buffer)) else { return };
         let mark = layout.fold_mark_at(event.position);
         if layout.on_fold_arrow(event.position) && !layout.below_text(event.position) && self.toggle_fold(pos.line, cx) {
@@ -1593,10 +1604,16 @@ impl CodeEditor {
         if event.pressed_button != Some(gpui::MouseButton::Left) {
             self.drag = None;
             self.scrollbar_drag = None;
+            self.scrollbar_drag_x = None;
             self.pointer = Some(event.position);
             let in_gutter = self.layout.as_ref().is_some_and(|l| l.in_gutter(event.position));
             if in_gutter != self.gutter_hover {
                 self.gutter_hover = in_gutter;
+                cx.notify();
+            }
+            let over_scrollbar = self.layout.as_ref().is_some_and(|l| l.on_scrollbar(event.position) || l.on_scrollbar_x(event.position));
+            if over_scrollbar != self.over_scrollbar {
+                self.over_scrollbar = over_scrollbar;
                 cx.notify();
             }
             let over = self.text_position(event.position);
@@ -1611,6 +1628,14 @@ impl CodeEditor {
             let scroll = layout.scroll_for_thumb_drag(start_scroll, f32::from(event.position.y) - start_y);
             if let Some(doc) = self.doc() {
                 doc.scroll.y = scroll;
+            }
+            return cx.notify();
+        }
+        if let Some((start_x, start_scroll)) = self.scrollbar_drag_x {
+            let scroll = layout.scroll_for_thumb_x_drag(start_scroll, f32::from(event.position.x) - start_x);
+            if let Some(doc) = self.doc() {
+                doc.scroll.x = scroll;
+                doc.autoscroll = false;
             }
             return cx.notify();
         }
@@ -1633,12 +1658,13 @@ impl CodeEditor {
             cx.notify();
         }
         self.scrollbar_drag = None;
+        self.scrollbar_drag_x = None;
     }
 
     /// The text position under a point in the text (not in the gutter or on the scrollbar).
     fn text_position(&self, position: Point<Pixels>) -> Option<Pos> {
         let layout = self.layout.as_ref()?;
-        if layout.in_gutter(position) || layout.on_scrollbar(position) {
+        if layout.in_gutter(position) || layout.on_scrollbar(position) || layout.on_scrollbar_x(position) {
             return None;
         }
         let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text))?;
@@ -2973,7 +2999,13 @@ impl Render for CodeEditor {
                 .min_w_0()
                 .min_h_0()
                 .relative()
-                .cursor(if self.link.is_some() { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::IBeam })
+                .cursor(if self.over_scrollbar || self.scrollbar_drag.is_some() || self.scrollbar_drag_x.is_some() {
+                    gpui::CursorStyle::Arrow
+                } else if self.link.is_some() {
+                    gpui::CursorStyle::PointingHand
+                } else {
+                    gpui::CursorStyle::IBeam
+                })
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::mouse_down))
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
