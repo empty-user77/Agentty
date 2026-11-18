@@ -82,6 +82,7 @@ pub(super) fn agent_row_id(argument: &str) -> Option<&'static str> {
 fn feature_label(feature: ClaudeFeature) -> (&'static str, &'static str) {
     match feature {
         ClaudeFeature::AgentTeams => ("agents.claude_teams", "agents.claude_teams_hint"),
+        ClaudeFeature::CodeMode => ("agents.claude_code_mode", "agents.claude_code_mode_hint"),
         ClaudeFeature::AlwaysThinking => ("agents.claude_thinking", "agents.claude_thinking_hint"),
         ClaudeFeature::AutoUpdates => ("agents.claude_updates", "agents.claude_updates_hint"),
     }

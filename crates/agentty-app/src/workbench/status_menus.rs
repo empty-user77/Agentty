@@ -7,6 +7,7 @@ use crate::launch::PaneKind;
 use crate::settings::{AdvisorChoice, SleepMode};
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
+use agentty_bridge::computer_use::ComputerUse;
 use agentty_bridge::context::ContextSnapshot;
 use agentty_bridge::extensions::{
     discover, parse_claude_mcp_list, parse_codex_mcp_list, Extension, ExtensionKind, McpHealth, McpStatus, Scope,
@@ -48,7 +49,17 @@ pub struct AgentInventory {
     mcp: Option<(Key, Instant, McpCheck)>,
     /// Context of a session (agent, session id): `None` while it loads or when it can't be read.
     pub(super) context: Option<((Agent, String), bool, Option<ContextSnapshot>)>,
+    /// Claude Code's own computer use for the folder of the Claude session in front, and when it
+    /// was read.
+    computer_use: Option<(PathBuf, Instant, ComputerUse)>,
+    /// The pointer is over that icon: its words show.
+    computer_use_hovered: bool,
 }
+
+/// How long a reading of Claude Code's computer use is taken as it is.
+const COMPUTER_USE_TTL: Duration = Duration::from_secs(5);
+/// After the button turned it on: when to read again, until Claude Code has written it down.
+const COMPUTER_USE_RECHECKS: [u64; 3] = [2, 5, 12];
 
 const MCP_TTL: Duration = Duration::from_secs(60);
 const MAX_ROWS: usize = 40;
@@ -168,6 +179,116 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Reads Claude Code's computer use for the Claude session in front again (in the background),
+    /// unless it was just read. `force`: read whatever the age.
+    pub(super) fn refresh_computer_use(&mut self, force: bool, cx: &mut Context<Self>) {
+        let Some((Agent::Claude, cwd)) = self.active_agent(cx) else { return };
+        let fresh = self.inventory.computer_use.as_ref().is_some_and(|(known, at, _)| *known == cwd && at.elapsed() < COMPUTER_USE_TTL);
+        if fresh && !force {
+            return;
+        }
+        // Until the answer is in, what was read for this folder stays; another folder's goes.
+        let before = self.inventory.computer_use.as_ref().filter(|(known, _, _)| *known == cwd).map(|(_, _, state)| *state);
+        self.inventory.computer_use = Some((cwd.clone(), Instant::now(), before.unwrap_or(ComputerUse::Unknown)));
+        let account = self.accounts.claude.clone();
+        let folder = cwd.clone();
+        let task = cx.background_spawn(async move { agentty_bridge::computer_use::state(&folder, account.as_deref()) });
+        cx.spawn(async move |this, cx| {
+            let state = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some((_, _, known)) = this.inventory.computer_use.as_mut().filter(|(known, _, _)| *known == cwd) {
+                    if *known != state {
+                        *known = state;
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Turns Claude Code's computer use on or off for the session in front, with Claude Code's own
+    /// command, typed where the user sees it. On, Claude Code still asks the user for each application.
+    fn set_computer_use(&mut self, on: bool, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.active_pane().filter(|pane| pane.read(cx).agent_kind() == Some(PaneKind::Claude)) else { return };
+        let command = if on { agentty_bridge::computer_use::ENABLE_COMMAND } else { agentty_bridge::computer_use::DISABLE_COMMAND };
+        pane.update(cx, |view, cx| view.submit_prompt(command.into(), cx));
+        self.focus_pane(&pane, window, cx);
+        // Claude Code writes it down a moment later.
+        for seconds in COMPUTER_USE_RECHECKS {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(seconds)).await;
+                let _ = this.update(cx, |this, cx| this.refresh_computer_use(true, cx));
+            })
+            .detach();
+        }
+    }
+
+    /// Claude Code's computer use in the status bar: a button that turns it on while it is off,
+    /// and a mark that says it can be used once it is on. Nothing where Claude Code has none.
+    fn render_computer_use(&self, key: &Key, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if key.0 != Agent::Claude {
+            return None;
+        }
+        let Some((_, _, state)) = self.inventory.computer_use.as_ref().filter(|(cwd, _, _)| *cwd == key.1) else {
+            // Nothing read for this folder yet (a session just came to the front): read it once
+            // this frame is done. The reading is remembered at once, so this asks once per folder.
+            let this = cx.entity();
+            cx.defer(move |cx| this.update(cx, |this, cx| this.refresh_computer_use(false, cx)));
+            return None;
+        };
+        let (on, words) = match state {
+            ComputerUse::Unknown => return None,
+            ComputerUse::Off => (false, t(cx, "computer_use.enable")),
+            ComputerUse::On => (true, t(cx, "computer_use.on_tip")),
+        };
+        // What the icon is shows the moment the pointer is over it, not after a tooltip's wait:
+        // off and on differ only by the icon's colour, so its words have to be right there.
+        let hovered = self.inventory.computer_use_hovered;
+        let bubble = hovered.then(|| {
+            gpui::deferred(
+                div().absolute().bottom(px(24.)).right_0().child(
+                    div()
+                        .w(px(250.))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(hex(Chrome::OVERLAY))
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .shadow_md()
+                        .t_small()
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(words),
+                ),
+            )
+            .with_priority(1)
+        });
+        Some(
+            div()
+                .id("status-computer-use")
+                .relative()
+                .h_full()
+                .px_1p5()
+                .flex()
+                .items_center()
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    this.inventory.computer_use_hovered = *hovered;
+                    cx.notify();
+                }))
+                // A button like its neighbours, green while it is on: a click turns it on, the next
+                // one off again.
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .child(icon("monitor", 13., hex(if on { Chrome::SUCCESS } else { Chrome::MUTED })))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.set_computer_use(!on, window, cx);
+                }))
+                .children(bubble)
+                .into_any_element(),
+        )
+    }
+
     /// `[skills] [agents] [MCP]` icons for the status bar; empty when the active tab isn't an agent.
     pub(super) fn render_status_icons(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = self.active_agent(cx)?;
@@ -210,6 +331,7 @@ impl Workbench {
                 .child(button("status-skills", "sparkles", StatusMenu::Skills, cx))
                 .child(button("status-agents", "bot", StatusMenu::Agents, cx))
                 .child(button("status-mcp", "blocks", StatusMenu::Mcp, cx))
+                .children(self.render_computer_use(&key, cx))
                 .children(menu)
                 .into_any_element(),
         )

@@ -18,19 +18,24 @@ pub enum ClaudeFeature {
     AlwaysThinking,
     /// Claude Code updates itself in the background; off sets `env.DISABLE_AUTOUPDATER = "1"`.
     AutoUpdates,
+    /// Code Mode: Claude writes a script that runs several tools in one go and reads its result,
+    /// instead of calling them one at a time (`env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = "1"`).
+    CodeMode,
 }
 
 const AGENT_TEAMS: &str = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS";
 const NO_AUTO_UPDATES: &str = "DISABLE_AUTOUPDATER";
+const CODE_MODE: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
 
 impl ClaudeFeature {
-    pub const ALL: [ClaudeFeature; 3] = [Self::AgentTeams, Self::AlwaysThinking, Self::AutoUpdates];
+    pub const ALL: [ClaudeFeature; 4] = [Self::AgentTeams, Self::CodeMode, Self::AlwaysThinking, Self::AutoUpdates];
 
     /// Whether the feature is on in `settings` (the file's JSON).
     pub fn is_on(self, settings: &Value) -> bool {
         let env_set = |name: &str| settings["env"][name].as_str().is_some_and(|v| !matches!(v.trim(), "" | "0" | "false"));
         match self {
             Self::AgentTeams => env_set(AGENT_TEAMS),
+            Self::CodeMode => env_set(CODE_MODE),
             Self::AlwaysThinking => settings["alwaysThinkingEnabled"].as_bool() == Some(true),
             Self::AutoUpdates => !env_set(NO_AUTO_UPDATES),
         }
@@ -55,6 +60,7 @@ impl ClaudeFeature {
         };
         match self {
             Self::AgentTeams => set_env(AGENT_TEAMS, on),
+            Self::CodeMode => set_env(CODE_MODE, on),
             Self::AutoUpdates => set_env(NO_AUTO_UPDATES, !on),
             Self::AlwaysThinking => {
                 if on {
@@ -165,7 +171,9 @@ mod tests {
 
     #[test]
     fn off_values_read_as_off() {
-        let settings = serde_json::json!({"env": {AGENT_TEAMS: "0", NO_AUTO_UPDATES: "1"}});
+        let settings = serde_json::json!({"env": {AGENT_TEAMS: "0", NO_AUTO_UPDATES: "1", CODE_MODE: "false"}});
+        assert!(!ClaudeFeature::CodeMode.is_on(&settings));
+        assert!(ClaudeFeature::CodeMode.is_on(&serde_json::json!({"env": {CODE_MODE: "1"}})));
         assert!(!ClaudeFeature::AgentTeams.is_on(&settings));
         assert!(!ClaudeFeature::AutoUpdates.is_on(&settings));
         assert!(!ClaudeFeature::AlwaysThinking.is_on(&settings));

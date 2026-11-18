@@ -12,6 +12,7 @@ pub mod claude_features;
 pub mod claude_trust;
 pub mod clone;
 pub mod codex;
+pub mod computer_use;
 pub mod connectors;
 pub mod context;
 pub mod context_windows;
