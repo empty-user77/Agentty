@@ -145,6 +145,12 @@ fn is_managed(path: &Path, managed: &Path) -> bool {
     }
 }
 
+/// Where the worktrees Agentty makes for the repository whose main tree is `main_root` are kept,
+/// under `managed` ([`managed_dir`]).
+pub fn managed_home_in(main_root: &Path, managed: &Path) -> PathBuf {
+    home_for(main_root, managed)
+}
+
 /// Folder (under `managed`) for the worktrees of the repository whose main tree is `main_root`.
 fn home_for(main_root: &Path, managed: &Path) -> PathBuf {
     let canonical = main_root.canonicalize().unwrap_or_else(|_| main_root.to_path_buf());

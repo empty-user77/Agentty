@@ -86,6 +86,7 @@ mod servers;
 mod service_status;
 mod session_board;
 mod session_card;
+mod session_list;
 mod session_viewer;
 mod settings_agents;
 mod settings_lsp;
@@ -479,6 +480,14 @@ pub struct Workbench {
     palette: Option<palette::Palette>,
     rename: Option<Rename>,
     sessions: Vec<SessionInfo>,
+    /// The project each of `sessions` belongs to (same order), worked out when they were listed.
+    session_groups: Vec<agentty_bridge::session_groups::SessionGroup>,
+    /// Groups of the session list the user folded or unfolded, by key: the ones not as they start.
+    session_groups_toggled: HashSet<String>,
+    /// Sessions with the same conversation shown one by one instead of as one row, by the first's key.
+    session_stacks_open: HashSet<String>,
+    /// What the session list last laid out (row kinds), to tell its list state when rows change.
+    session_rows_shape: std::cell::Cell<u64>,
     /// The "new orchestrator" dialog, while it is open.
     orchestrator_dialog: Option<orchestrator::OrchestratorDialog>,
     sessions_loading: bool,
@@ -737,7 +746,7 @@ pub struct Workbench {
     installed_fonts: Option<Vec<String>>,
     /// Settings: the "more fonts" list of every installed family is expanded.
     font_list_open: bool,
-    sessions_scroll: gpui::UniformListScrollHandle,
+    sessions_list: gpui::ListState,
     sidebar_scroll: gpui::ScrollHandle,
     settings_scroll: gpui::ScrollHandle,
     settings_section: settings_page::SettingsSection,
@@ -966,6 +975,10 @@ impl Workbench {
             palette: None,
             rename: None,
             sessions: Vec::new(),
+            session_groups: Vec::new(),
+            session_groups_toggled: HashSet::new(),
+            session_stacks_open: HashSet::new(),
+            session_rows_shape: std::cell::Cell::new(0),
             sessions_loading: false,
             session_filter: SessionFilter::All,
             status: None,
@@ -1120,7 +1133,7 @@ impl Workbench {
             servers: Default::default(),
             installed_fonts: None,
             font_list_open: false,
-            sessions_scroll: gpui::UniformListScrollHandle::new(),
+            sessions_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(600.)),
             sidebar_scroll: gpui::ScrollHandle::new(),
             settings_scroll: gpui::ScrollHandle::new(),
             settings_section: settings_page::SettingsSection::General,
@@ -2495,9 +2508,14 @@ impl Workbench {
         self.sessions_loading = true;
         let accounts = self.accounts.clone();
         let listed = accounts.clone();
-        let task = cx.background_spawn(async move { agentty_bridge::list_of(None, &listed, 300) });
+        let task = cx.background_spawn(async move {
+            let sessions = agentty_bridge::list_of(None, &listed, 300);
+            // Which project each belongs to reads `.git` entries: here, not while drawing.
+            let groups = agentty_bridge::session_groups::assign(&sessions.iter().map(|s| s.cwd.as_deref()).collect::<Vec<_>>());
+            (sessions, groups)
+        });
         cx.spawn(async move |this, cx| {
-            let sessions = task.await;
+            let (sessions, groups) = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.sessions_loading = false;
                 // The window moved to another account while this was read: its list is the one to show.
@@ -2510,6 +2528,8 @@ impl Workbench {
                     crate::set_recent_sessions(&sessions, cx);
                 }
                 this.sessions = sessions;
+                this.session_groups = groups;
+                this.prune_session_list_state();
                 if let Some(picker) = this.picker.as_mut() {
                     picker.add_session_dirs(&this.sessions);
                 }
@@ -2794,7 +2814,13 @@ impl Workbench {
         }
         match agentty_bridge::delete(&session) {
             Ok(()) => {
-                self.sessions.retain(|s| s.path != session.path);
+                // Each session's group goes with it: the two are read by the same index.
+                if let Some(at) = self.sessions.iter().position(|s| s.path == session.path) {
+                    self.sessions.remove(at);
+                    if at < self.session_groups.len() {
+                        self.session_groups.remove(at);
+                    }
+                }
                 if self.session_viewer.as_ref().is_some_and(|v| v.session.path == session.path) {
                     self.session_viewer = None;
                 }
@@ -4841,6 +4867,17 @@ impl Workbench {
                     self.visible_sessions(cx).len(),
                     self.session_content_hits.as_ref().map(|h| h.1.len())
                 );
+                // The list as it is laid out: headings (`> ` folded) and sessions (`+n` standing for more).
+                for row in self.session_rows(cx) {
+                    match row {
+                        session_list::SessionRow::Heading { heading, sessions, folded } => {
+                            eprintln!("sessions-row: {}[{}] {sessions}", if folded { "> " } else { "" }, heading.key())
+                        }
+                        session_list::SessionRow::Session { index, alike, .. } => {
+                            eprintln!("sessions-row:   {} +{alike}", self.sessions[index].title)
+                        }
+                    }
+                }
             }
             "about" => {
                 self.about_open = true;

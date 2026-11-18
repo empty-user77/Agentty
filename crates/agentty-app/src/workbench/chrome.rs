@@ -1,5 +1,6 @@
 //! Title bar, activity bar, side bar (workspaces / local sessions), tab strip, launcher and status bar.
 
+use super::session_list::session_key;
 use super::{other_agent, LaunchTarget, Page, RenameTarget, SessionFilter, SidePanel, Workbench, Workspace};
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchChoice, PaneKind};
@@ -51,7 +52,6 @@ pub(super) const PR_LINK_HINT: &str = "⌘ click → open";
 const DRAG_EDGE: f32 = 44.;
 const DRAG_SCROLL_STEP: f32 = 12.;
 const DRAG_SCROLL_TICK: std::time::Duration = std::time::Duration::from_millis(30);
-const SESSION_ROW_HEIGHT: f32 = 96.;
 /// The start page: a column this wide, with as many launch cards to a row as fit (four at most).
 const WELCOME_WIDTH: f32 = 920.;
 const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
@@ -1849,6 +1849,27 @@ impl Workbench {
             // Sessions other computers synced that are not here (or were deleted here).
             .when(self.sync_connected(), |d| {
                 d.child(filter_chip("filter-synced", t(cx, "sync.sessions_filter"), SessionFilter::Synced, cx))
+            })
+            // By project, or one list by time; and, by project, all of them folded or unfolded.
+            .child(div().flex_1())
+            .children((settings(cx).group_sessions && self.session_query(cx).is_empty()).then(|| {
+                let open = self.any_session_group_open();
+                icon_only_sized(
+                    "sessions-fold-all",
+                    if open { "fold-vertical" } else { "unfold-vertical" },
+                    24.,
+                    IconSize::INLINE,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.fold_session_groups(open, cx)),
+                )
+                .tooltip(crate::ui::Tooltip::text(t(cx, if open { "sessions.fold_all" } else { "sessions.unfold_all" }), None))
+            }))
+            .child({
+                let by_project = settings(cx).group_sessions;
+                icon_only_sized("sessions-by-project", "list-tree", 24., IconSize::INLINE, |_, _, cx| {
+                    crate::settings::update_settings(cx, |s| s.group_sessions = !s.group_sessions);
+                })
+                .when(by_project, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.25)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "sessions.by_project"), None))
             });
         let running = self.session_search_running(cx);
         let search = self.render_search_box("session-search", &self.session_search, running, cx).px_3().pb_2();
@@ -1861,28 +1882,24 @@ impl Workbench {
         } else if visible.is_empty() {
             hint(t(cx, "sessions.empty")).into_any_element()
         } else {
-            // Virtualized: only rows in view are built, so long histories scroll smoothly.
-            let handle = self.sessions_scroll.clone();
-            let base = handle.0.borrow().base_handle.clone();
+            // Only rows in view are built, so long histories scroll smoothly; headings and
+            // sessions differ in height, so it is a list that measures its rows.
+            let rows = std::rc::Rc::new(self.session_rows(cx));
+            self.sync_session_list(&rows);
+            let this = cx.entity();
             div()
                 .relative()
                 .flex_1()
                 .min_h_0()
                 .child(
-                    gpui::uniform_list(
-                        "sessions-list",
-                        visible.len(),
-                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                            let rows = this.visible_sessions(cx);
-                            range.filter_map(|i| rows.get(i).copied()).map(|index| this.render_session_row(index, cx)).collect::<Vec<_>>()
-                        }),
-                    )
-                    .track_scroll(&handle)
-                    .size_full()
-                    .px_2(),
+                    gpui::list(self.sessions_list.clone(), move |row, _, cx| match rows.get(row) {
+                        Some(row) => this.update(cx, |this, cx| this.render_session_list_row(row, cx)),
+                        None => div().into_any_element(),
+                    })
+                    .size_full(),
                 )
                 .group(crate::ui::SCROLL_GROUP)
-                .child(crate::ui::scrollbar(base))
+                .child(crate::ui::list_scrollbar(self.sessions_list.clone()))
                 .into_any_element()
         };
         // While searching: how many sessions matched, and whether conversations are still read.
@@ -1920,12 +1937,20 @@ impl Workbench {
         session.id.to_lowercase().starts_with(query).then(|| match_line(t(cx, "search.in_id"), marked(session.id.clone(), query)))
     }
 
-    fn render_session_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// One session. `place` is the line under its title (its folder; `None` leaves the line out),
+    /// `alike` how many more sessions with the same conversation it stands for.
+    pub(super) fn render_session_row(
+        &self,
+        index: usize,
+        place: Option<String>,
+        alike: usize,
+        alike_shown: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let session = &self.sessions[index];
         let now = now_ms();
         let to = other_agent(session.agent);
         let migrate_from = session.agent;
-        let cwd = session.cwd.as_ref().map(|c| tilde(std::path::Path::new(c))).unwrap_or_default();
         let key = session_key(session);
         let favorite = settings(cx).favorite_sessions.contains(&key);
         let (resume, migrate, view, delete) = (session.clone(), session.clone(), session.clone(), session.clone());
@@ -1940,7 +1965,6 @@ impl Workbench {
         div()
             .id(("session", index))
             .group("session-row")
-            .h(px(SESSION_ROW_HEIGHT))
             .px_3()
             .py_2()
             .mb_1()
@@ -1965,6 +1989,7 @@ impl Workbench {
                             .text_color(hex(Chrome::FOREGROUND))
                             .child(super::content_search::marked(session.title.clone(), title_words)),
                     )
+                    .children((alike > 0).then(|| self.render_alike_pill(index, alike, alike_shown, cx)))
                     .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(relative_time(now, session.updated_at)))
                     .child(
                         div()
@@ -1992,7 +2017,7 @@ impl Workbench {
                             .child(icon("star", IconSize::INLINE, hex(if favorite { Chrome::FAVORITE } else { Chrome::MUTED }))),
                     ),
             )
-            .child(div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(cwd))
+            .children(place.map(|place| div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(place)))
             .child(match found {
                 Some(line) => div().pl(px(24.)).child(line),
                 None => div().pl(px(24.)).truncate().t_small().text_color(hex(0xa8a8a8)).child(summary.unwrap_or_default()),
@@ -3357,11 +3382,6 @@ impl Workbench {
 /// "Claude Code v2.1.274", or just the name while the CLI version is unknown.
 fn with_version(name: &str, version: Option<&str>) -> String {
     version.map_or_else(|| name.to_string(), |v| format!("{name} v{v}"))
-}
-
-/// Stable identifier for favorites: `claude:<id>` / `codex:<id>`.
-fn session_key(session: &agentty_bridge::model::SessionInfo) -> String {
-    format!("{}:{}", session.agent.id(), session.id)
 }
 
 /// Title of a closed tab (its first pane) and how many panes it had.
