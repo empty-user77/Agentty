@@ -31,6 +31,9 @@ All notable changes to this project are documented here. The format follows
   copied image pastes into a terminal as a file.
 
 ### Fixed
+- Linux (agentty-gpui 0.1.1): a paste no longer ends the app when it runs out of file descriptors or the display
+  server does not take the request, nor does a keymap that cannot be read; on X11, text copied together with a
+  picture of it (a spreadsheet's cells) pastes as the text, as on Wayland.
 - Orchestration: a plan could stay at "Planning" after the orchestrator had finished it (the spinner still on screen
   when its turn ended was read as new work), and a run could say "Done" while the orchestrator only rested between
   waves. An orchestrator that waits for you (a folder to trust, an approval, a question) is shown as waiting, not as
