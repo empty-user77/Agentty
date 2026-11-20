@@ -191,6 +191,9 @@ impl Backend {
         let (child_pid, tty_fd) = (pty.child_watcher().pid().map_or(0, |pid| pid.get()), -1);
         // Only this process and what it starts may speak for the pane on the signal socket.
         crate::agent_signal::register_pane(child_pid, pane_id);
+        // Linux: a control group of its own for the pane, so memory running short ends one agent
+        // and not the app with all of them.
+        crate::platform::pane_scope::give(child_pid);
         let event_loop =
             EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false).context("failed to start PTY event loop")?;
         let notifier = Notifier(event_loop.channel());

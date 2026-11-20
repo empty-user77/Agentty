@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
   stack, and so is a signal that ended the app from outside. Every system: a run that was killed, ran out of memory
   or went down with the computer is noticed at the next start and recorded then. Each record says how long the app
   had run, its memory, open files and threads, the system, the session and the graphics device.
+- Linux: each pane's program runs in a control group of its own (a systemd scope), so when memory runs short the
+  system's low-memory daemon ends the heaviest agent instead of Agentty with every pane.
 - What the app's libraries print before giving up (a display server's or graphics layer's error) is kept in
   `stderr.log`, with the run before's in `stderr.prev.log`. The troubleshooting page says where these files are.
 
