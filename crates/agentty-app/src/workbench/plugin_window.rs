@@ -36,6 +36,7 @@ impl gpui::Render for PluginWindow {
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
             .children(contents)
+            .map(crate::edit_menu::handled)
             .children(crate::context_menu::render(window, cx))
             // Last, so the window's edges stay grabbable over the panel.
             .children(crate::platform::decorations::resize_edges(window))

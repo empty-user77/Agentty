@@ -3761,6 +3761,9 @@ impl Render for Workbench {
                 }
                 // Esc closes an open right-click menu (and only that: the terminal under it never
                 // sees the key).
+                if event.keystroke.key == "escape" && crate::context_menu::close_open(window, cx) {
+                    return cx.stop_propagation();
+                }
                 if event.keystroke.key == "escape" && this.close_context_menus() {
                     this.menu_has_keyboard = false;
                     this.focus_active(window, cx);
@@ -3881,18 +3884,7 @@ impl Render for Workbench {
             // The Edit menu's ⌘X / ⌘C / ⌘V / ⌘A land here when no terminal is focused: a page in
             // the in-app browser needs them (a menu key equivalent never reaches it), and so does
             // whatever else has the keyboard, when the menu is used with the pointer.
-            .on_action(cx.listener(|_, _: &crate::terminal::Cut, window, cx| {
-                crate::edit_menu::perform(crate::webview::EditCommand::Cut, window, cx)
-            }))
-            .on_action(cx.listener(|_, _: &crate::terminal::Copy, window, cx| {
-                crate::edit_menu::perform(crate::webview::EditCommand::Copy, window, cx)
-            }))
-            .on_action(cx.listener(|_, _: &crate::terminal::Paste, window, cx| {
-                crate::edit_menu::perform(crate::webview::EditCommand::Paste, window, cx)
-            }))
-            .on_action(cx.listener(|_, _: &crate::terminal::SelectAll, window, cx| {
-                crate::edit_menu::perform(crate::webview::EditCommand::SelectAll, window, cx)
-            }))
+            .map(crate::edit_menu::handled)
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
             // ⌘⇧R inside the page is caught by the web view itself; here it works from the terminals too.
             .on_action(cx.listener(|this, _: &HardReloadBrowser, _, cx| {

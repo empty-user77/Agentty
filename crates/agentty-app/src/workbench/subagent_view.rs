@@ -736,7 +736,8 @@ impl Workbench {
                 .font_family(MONO)
                 .text_color(hex(Chrome::FOREGROUND));
             if !step.diff.is_empty() {
-                let all_diff = step.diff.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+                // Shared by the lines: each keeps a pointer to it, not a copy of it.
+                let all_diff: gpui::SharedString = step.diff.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n").into();
                 body = body.children(step.diff.iter().map(|line| {
                     let all = all_diff.clone();
                     let (sign, color, bg) = match line.kind {
@@ -750,19 +751,19 @@ impl Workbench {
                         .when_some(bg, |d, bg| d.bg(bg))
                         .child(div().flex_shrink_0().text_color(hex(color)).child(sign))
                         .child(div().min_w_0().child(line.text.clone()))
-                        .copyable_with(line.text.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.clone())])
+                        .copyable_with(line.text.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.to_string())])
                 }));
             } else {
                 if failed && step.output_more > 0 {
                     body = body.child(more_lines(step.output_more, cx));
                 }
-                let all_output = step.output.join("\n");
+                let all_output: gpui::SharedString = step.output.join("\n").into();
                 body = body.children(step.output.iter().map(|l| {
                     let all = all_output.clone();
                     div()
                         .text_color(hex(if failed { Chrome::ERROR } else { Chrome::FOREGROUND }))
                         .child(if l.is_empty() { " ".to_string() } else { l.clone() })
-                        .copyable_with(l.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.clone())])
+                        .copyable_with(l.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.to_string())])
                 }));
                 if !failed && step.output_more > 0 {
                     body = body.child(more_lines(step.output_more, cx));

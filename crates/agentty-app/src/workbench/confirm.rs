@@ -1,6 +1,7 @@
 //! "Close this?" confirmation for panes, tabs and workspaces (unless turned off in settings).
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf, tf_count};
 use crate::settings::{settings, update_settings};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -290,7 +291,7 @@ impl Workbench {
                         .border_color(hex(Chrome::OVERLAY_BORDER))
                         .shadow_lg()
                         .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title))
-                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body))
+                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).copyable(body.clone()).child(body))
                         .when(!confirm.trees.is_empty(), |d| {
                             let remove = confirm.remove_trees;
                             let names = confirm

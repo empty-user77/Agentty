@@ -122,6 +122,9 @@ pub fn bind_keys(cx: &mut App) {
                 gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, Some(CONTEXT)),
                 // The Insert keys, and the terminal's own copy and paste keys: a field sits beside
                 // terminals here, and the hand keeps pressing theirs.
+                // Taken here, so the table a cell's field sits in does not move on them.
+                gpui::KeyBinding::new("ctrl-up", MoveUp, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-down", MoveDown, Some(CONTEXT)),
                 gpui::KeyBinding::new("ctrl-insert", Copy, Some(CONTEXT)),
                 gpui::KeyBinding::new("shift-insert", Paste, Some(CONTEXT)),
                 gpui::KeyBinding::new("shift-delete", Cut, Some(CONTEXT)),
@@ -607,7 +610,10 @@ impl TextInput {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if self.take_pasted_files {
             let files = crate::platform::drops::pasted_paths(cx);
-            if !files.is_empty() {
+            // Text with a picture of it beside it (cells copied from a spreadsheet) is the text.
+            let text_too = crate::platform::drops::is_written_image(&files)
+                && cx.read_from_clipboard().and_then(|item| item.text()).is_some_and(|text| !text.trim().is_empty());
+            if !files.is_empty() && !text_too {
                 cx.emit(TextInputEvent::PastedFiles(files));
                 return;
             }
@@ -623,7 +629,7 @@ impl TextInput {
                 cx.emit(TextInputEvent::PastedLines(text.to_string()));
                 return;
             }
-            self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
+            self.replace_text_in_range(None, &one_line(&text), window, cx);
         }
     }
 
@@ -668,7 +674,11 @@ impl TextInput {
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.is_selecting = false;
+        // Every button let go anywhere in the window comes here: only a selection made in this
+        // field just now is news.
+        if !std::mem::take(&mut self.is_selecting) {
+            return;
+        }
         // Linux: what the pointer selected is what a middle click pastes, here or in a terminal.
         if !self.selected_range.is_empty() && !self.masked {
             crate::platform::primary::set(self.content[self.selected_range.clone()].to_string(), cx);
@@ -680,7 +690,7 @@ impl TextInput {
         let Some(text) = crate::platform::primary::get(cx) else { return };
         window.focus(&self.focus_handle, cx);
         self.move_to(self.index_for_mouse_position(event.position), cx);
-        let text = if self.is_multiline() { text } else { text.replace('\n', " ") };
+        let text = if self.is_multiline() { text } else { one_line(&text) };
         self.replace_text_in_range(None, &text, window, cx);
     }
 
@@ -1540,6 +1550,12 @@ impl Render for TextInput {
             .child(TextElement { input: cx.entity() })
             .children(self.render_menu(cx))
     }
+}
+
+/// Pasted text for a one-line field: the line break a copy ends with is dropped (a token copied
+/// with its newline gets no trailing space), and the ones inside become spaces, Windows' too.
+fn one_line(text: &str) -> String {
+    text.trim_end_matches(['\r', '\n']).replace("\r\n", " ").replace(['\n', '\r'], " ")
 }
 
 /// Byte offset in `text` of its `units`-th UTF-16 unit (its end when it has fewer).

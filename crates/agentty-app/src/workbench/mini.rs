@@ -151,7 +151,7 @@ impl MiniPeek {
 }
 
 impl gpui::Render for MiniPeek {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Dark like the mini window it opens from.
         let _dark = crate::theme::DarkOnly::hold();
         let title = self.pane.read(cx).display_title();
@@ -203,6 +203,8 @@ impl gpui::Render for MiniPeek {
                     })),
             )
             .child(div().flex_1().min_h_0().child(self.pane.clone()))
+            // The terminal's right-click menu, and the Edit menu's commands for it.
+            .children(crate::context_menu::render(window, cx))
     }
 }
 

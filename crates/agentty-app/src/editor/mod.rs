@@ -133,15 +133,22 @@ const DISK_CHECK: Duration = Duration::from_secs(2);
 /// How often the markdown preview catches up with edits and looks for clicked links.
 const PREVIEW_TICK: Duration = Duration::from_millis(150);
 
-/// The file editor's and its table view's actions for a command of the Edit menu
-/// (see `crate::edit_menu`).
-pub fn edit_menu_actions(command: crate::webview::EditCommand) -> Vec<Box<dyn gpui::Action>> {
+/// The table view's key context (see `crate::edit_menu`).
+pub const TABLE_CONTEXT: &str = table_view::CONTEXT;
+
+/// The file editor's action for a command of the Edit menu, or its table view's when the table
+/// has the keyboard (see `crate::edit_menu`).
+pub fn edit_menu_action(command: crate::webview::EditCommand, table: bool) -> Box<dyn gpui::Action> {
     use crate::webview::EditCommand;
-    match command {
-        EditCommand::Cut => vec![Box::new(Cut), Box::new(table_view::GridCut)],
-        EditCommand::Copy => vec![Box::new(Copy), Box::new(table_view::GridCopy)],
-        EditCommand::Paste => vec![Box::new(Paste), Box::new(table_view::GridPaste)],
-        EditCommand::SelectAll => vec![Box::new(SelectAll), Box::new(table_view::GridSelectAll)],
+    match (command, table) {
+        (EditCommand::Cut, false) => Box::new(Cut),
+        (EditCommand::Copy, false) => Box::new(Copy),
+        (EditCommand::Paste, false) => Box::new(Paste),
+        (EditCommand::SelectAll, false) => Box::new(SelectAll),
+        (EditCommand::Cut, true) => Box::new(table_view::GridCut),
+        (EditCommand::Copy, true) => Box::new(table_view::GridCopy),
+        (EditCommand::Paste, true) => Box::new(table_view::GridPaste),
+        (EditCommand::SelectAll, true) => Box::new(table_view::GridSelectAll),
     }
 }
 
@@ -1680,6 +1687,30 @@ impl CodeEditor {
         self.scrollbar_drag_x = None;
     }
 
+    /// Right click in the text: Cut, Copy, Paste and Select All, as the keys do them.
+    fn right_click(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::context_menu::Item;
+        let Some(doc) = self.docs.get(self.active) else { return };
+        let (editable, selected) = (doc.editable(), !doc.buffer.selection.is_empty());
+        window.focus(&self.focus_handle, cx);
+        let focus = self.focus_handle.clone();
+        let item = |label: &'static str, action: fn() -> Box<dyn gpui::Action>| {
+            let focus = focus.clone();
+            Item::new(t(cx, label), move |window, cx| {
+                window.focus(&focus, cx);
+                window.dispatch_action(action(), cx);
+            })
+        };
+        let items = vec![
+            item("input.cut", || Box::new(Cut)).enabled(editable && selected),
+            item("input.copy", || Box::new(Copy)).enabled(selected),
+            item("input.paste", || Box::new(Paste)).enabled(editable),
+            item("input.select_all", || Box::new(SelectAll)),
+        ];
+        crate::context_menu::open(event.position, items, window, cx);
+        cx.stop_propagation();
+    }
+
     /// Middle click (Linux): the text the pointer selected last goes in where the click is.
     fn middle_click(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = crate::platform::primary::get(cx) else { return };
@@ -3041,6 +3072,7 @@ impl Render for CodeEditor {
                 })
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::mouse_down))
                 .on_mouse_down(gpui::MouseButton::Middle, cx.listener(Self::middle_click))
+                .on_mouse_down(gpui::MouseButton::Right, cx.listener(Self::right_click))
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(Self::mouse_up))

@@ -2,6 +2,7 @@
 //! start page before its command line tool is there, with a link to the official guide.
 
 use super::Workbench;
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -72,7 +73,14 @@ impl Workbench {
                             )),
                         ))
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(tf(cx, "install.body", &[("name", name)])))
-                        .child(div().t_small().font_family("JetBrains Mono").text_color(hex(Chrome::MUTED)).child(url))
+                        .child(
+                            div()
+                                .t_small()
+                                .font_family("JetBrains Mono")
+                                .text_color(hex(Chrome::MUTED))
+                                .copyable(url.to_string())
+                                .child(url),
+                        )
                         .child(
                             div()
                                 .pt_1()

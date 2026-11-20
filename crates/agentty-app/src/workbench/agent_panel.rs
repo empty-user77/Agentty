@@ -77,6 +77,7 @@ impl Render for SubagentWindow {
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
             .children(body)
+            .map(crate::edit_menu::handled)
             .children(crate::context_menu::render(window, cx))
     }
 }

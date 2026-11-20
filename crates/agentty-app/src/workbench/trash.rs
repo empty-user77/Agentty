@@ -8,6 +8,7 @@
 use super::persist::{LayoutState, NodeSnapshot, PaneSnapshot, TabSnapshot, WorkspaceSnapshot};
 use super::tree_manager::{badge, check_box, confirm_dialog};
 use super::{Workbench, Workspace};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf, tf_count};
 use crate::launch::PaneKind;
 use crate::settings::{settings, update_settings};
@@ -733,7 +734,7 @@ impl Workbench {
                 .gap_2()
                 .min_w_0()
                 .child(div().w(px(112.)).flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(label.to_string()))
-                .child(path_line(&value, detail_room).flex_1().t_small().text_color(hex(Chrome::FOREGROUND)))
+                .child(path_line(&value, detail_room).flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).copyable(value.clone()))
         };
         let mut details = div()
             .flex()

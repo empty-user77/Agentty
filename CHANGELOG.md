@@ -6,7 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- A right-click on a terminal gives Copy, Paste and Select All.
+- A right-click on a terminal, the file editor's text or a diff gives Copy, Paste and Select All (what applies
+  there).
 - Text that cannot be selected is copied with a right-click → Copy: errors and notices, run log lines, the in-app
   browser's network details, commit messages and Git errors, a past session's messages, subagent output, database
   results, plugin logs, paths and command lines across the pages.

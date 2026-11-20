@@ -78,6 +78,16 @@ pub fn pasted_paths(cx: &gpui::App) -> Vec<PathBuf> {
     image.and_then(|image| write_image(image.format, &image.bytes)).into_iter().collect()
 }
 
+/// Whether `paths` is a copied image that was written out for this paste (not files the user
+/// copied): where text is on the clipboard beside it, a place that takes text pastes the text.
+pub fn is_written_image(paths: &[PathBuf]) -> bool {
+    let folder = drop_dir();
+    !paths.is_empty()
+        && paths.iter().all(|path| {
+            path.parent() == Some(folder.as_path()) && path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("pasted-"))
+        })
+}
+
 /// A copied image as a file in the drop folder; `None` for a format agents do not read.
 fn write_image(format: gpui::ImageFormat, bytes: &[u8]) -> Option<PathBuf> {
     let extension = match format {
@@ -138,5 +148,11 @@ mod tests {
         // Nothing to write, and a format agents do not read.
         assert_eq!(write_image(gpui::ImageFormat::Png, b""), None);
         assert_eq!(write_image(gpui::ImageFormat::Svg, b"<svg/>"), None);
+        // An image written for a paste is told from files the user copied.
+        let written = write_image(gpui::ImageFormat::Png, b"x").unwrap();
+        assert!(is_written_image(std::slice::from_ref(&written)));
+        assert!(!is_written_image(&[written.clone(), PathBuf::from("/tmp/report.pdf")]));
+        assert!(!is_written_image(&[]));
+        std::fs::remove_file(written).ok();
     }
 }

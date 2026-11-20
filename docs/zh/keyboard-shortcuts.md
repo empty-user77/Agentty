@@ -28,10 +28,11 @@ description: 全部默认快捷键，以及它们在 Windows 与 Linux 上的对
 | 终端（Windows） | Ctrl+Shift+C，或在选中文字时按 Ctrl+C | Ctrl+Shift+V 或 Ctrl+V |
 | 终端（Linux） | Ctrl+Shift+C | Ctrl+Shift+V |
 | 文本输入框、文件编辑器、表格 | ⌘C / Ctrl+C | ⌘V / Ctrl+V |
-| 聊天中的文字、diff | ⌘C / Ctrl+C（Ctrl+Shift+C 也可以） | |
+| 聊天中的文字 | ⌘C / Ctrl+C（Ctrl+Shift+C 也可以） | ⌘V / Ctrl+V：进入消息框 |
+| diff | ⌘C / Ctrl+C（Ctrl+Shift+C 也可以） | |
 
 - 在 Windows 和 Linux 上，任何地方都可以用 **Ctrl+Insert** 复制、**Shift+Insert** 粘贴。文本输入框也接受终端的 Ctrl+Shift+C / Ctrl+Shift+V。
-- **右键点击**终端会出现复制、粘贴和全选。无法选中的文字（错误、日志行、路径、提交信息、查询结果）用右键 → **复制**。
+- **右键点击**终端、文件编辑器中的文字或 diff，会出现复制、粘贴、全选中适用于该处的项。无法选中的文字（错误、日志行、路径、提交信息、查询结果）用右键 → **复制**。
 - **Linux**：用指针选中的文字，可在终端、文本输入框和文件编辑器中用鼠标中键粘贴。
 - 把复制的文件或图片粘贴到终端会输入其路径，粘贴到聊天的消息框则作为附件。
 

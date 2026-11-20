@@ -28,10 +28,11 @@ description: 기본 단축키 전체와, Windows·Linux에서의 대응 표기.
 | 터미널 (Windows) | Ctrl+Shift+C, 또는 글자를 선택한 상태에서 Ctrl+C | Ctrl+Shift+V 또는 Ctrl+V |
 | 터미널 (Linux) | Ctrl+Shift+C | Ctrl+Shift+V |
 | 텍스트 입력란, 파일 편집기, 표 | ⌘C / Ctrl+C | ⌘V / Ctrl+V |
-| 채팅의 글, diff | ⌘C / Ctrl+C (Ctrl+Shift+C도 됨) | |
+| 채팅의 글 | ⌘C / Ctrl+C (Ctrl+Shift+C도 됨) | ⌘V / Ctrl+V: 메시지 입력란으로 들어감 |
+| diff | ⌘C / Ctrl+C (Ctrl+Shift+C도 됨) | |
 
 - Windows와 Linux에서는 어디서나 **Ctrl+Insert**로 복사하고 **Shift+Insert**로 붙여넣습니다. 텍스트 입력란은 터미널의 Ctrl+Shift+C / Ctrl+Shift+V도 받습니다.
-- 터미널을 **우클릭**하면 복사, 붙여넣기, 모두 선택이 나옵니다. 선택할 수 없는 글(오류, 로그 줄, 경로, 커밋 메시지, 쿼리 결과)은 우클릭 → **복사**로 복사합니다.
+- 터미널, 파일 편집기의 글, diff를 **우클릭**하면 복사, 붙여넣기, 모두 선택 가운데 그곳에 맞는 것이 나옵니다. 선택할 수 없는 글(오류, 로그 줄, 경로, 커밋 메시지, 쿼리 결과)은 우클릭 → **복사**로 복사합니다.
 - **Linux**: 포인터로 선택한 글은 터미널, 텍스트 입력란, 파일 편집기에서 가운데 클릭으로 붙여넣습니다.
 - 복사한 파일이나 이미지를 터미널에 붙여넣으면 경로가 들어가고, 채팅의 메시지 입력란에 붙여넣으면 첨부됩니다.
 

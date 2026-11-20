@@ -50,7 +50,7 @@ actions!(
     ]
 );
 
-const CONTEXT: &str = "TableGrid";
+pub(super) const CONTEXT: &str = "TableGrid";
 const ROW_HEIGHT: f32 = 26.;
 const NUMBER_WIDTH: f32 = 52.;
 /// A header's room besides its name: the cell's padding and border, and the sort arrow's place.

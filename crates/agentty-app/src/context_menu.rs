@@ -69,10 +69,17 @@ pub fn open(at: Point<Pixels>, items: Vec<Item>, window: &mut Window, cx: &mut A
 }
 
 fn close(window: &mut Window, cx: &mut App) {
-    if cx.try_global::<State>().is_some_and(|state| state.0.is_some()) {
+    close_open(window, cx);
+}
+
+/// Closes the menu (Escape); false when none was open.
+pub fn close_open(window: &mut Window, cx: &mut App) -> bool {
+    let open = cx.try_global::<State>().is_some_and(|state| state.0.is_some());
+    if open {
         cx.set_global(State(None));
         window.refresh();
     }
+    open
 }
 
 /// Text that says something worth keeping gets a right-click "Copy": `text` is what is copied

@@ -7,6 +7,7 @@
 
 use super::diff_body::DiffBody;
 use super::Workbench;
+use crate::context_menu::Copyable as _;
 use crate::i18n::t;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, middle_ellipsis, IconSize, TypeScale};
@@ -143,7 +144,15 @@ impl Workbench {
             .bg(hex(Chrome::TAB_INACTIVE))
             .t_small()
             .child(icon("git-commit-horizontal", IconSize::INLINE, hex(Chrome::MUTED)))
-            .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::BRIGHT)).child(middle_ellipsis(&name, 70)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .copyable(name.clone())
+                    .child(middle_ellipsis(&name, 70)),
+            )
             // The file itself is one click away: a diff answers "what changed", not "what is it".
             .child(
                 div()
@@ -177,7 +186,7 @@ impl Workbench {
             None => crate::ui::loading_row(t(cx, "files.diff_loading")).into_any_element(),
             Some(lines) if lines.is_empty() => {
                 let text = diff.error.clone().unwrap_or_else(|| t(cx, "files.diff_none").to_string());
-                div().flex_1().p_6().t_body().text_color(hex(Chrome::MUTED)).child(text).into_any_element()
+                div().flex_1().p_6().t_body().text_color(hex(Chrome::MUTED)).copyable(text.clone()).child(text).into_any_element()
             }
             Some(_) => div().flex_1().min_h_0().child(diff.body.clone()).into_any_element(),
         };

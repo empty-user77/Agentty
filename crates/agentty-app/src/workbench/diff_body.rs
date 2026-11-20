@@ -743,6 +743,27 @@ impl Render for DiffBody {
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::press))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    use crate::context_menu::Item;
+                    window.focus(&this.focus, cx);
+                    let focus = this.focus.clone();
+                    let item = |label: &'static str, action: fn() -> Box<dyn gpui::Action>| {
+                        let focus = focus.clone();
+                        Item::new(crate::i18n::t(cx, label), move |window, cx| {
+                            window.focus(&focus, cx);
+                            window.dispatch_action(action(), cx);
+                        })
+                    };
+                    let items = vec![
+                        item("input.copy", || Box::new(DiffCopy)).enabled(this.range().is_some()),
+                        item("input.select_all", || Box::new(DiffSelectAll)),
+                    ];
+                    crate::context_menu::open(event.position, items, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             // A quick click comes up before the drag's own listeners below are painted.
             .on_mouse_up(
                 MouseButton::Left,
