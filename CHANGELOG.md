@@ -31,6 +31,9 @@ All notable changes to this project are documented here. The format follows
   copied image pastes into a terminal as a file.
 
 ### Fixed
+- Linux (agentty-gpui 0.1.1): a paste no longer ends the app when it runs out of file descriptors or the display
+  server does not take the request, nor does a keymap that cannot be read; on X11, text copied together with a
+  picture of it (a spreadsheet's cells) pastes as the text, as on Wayland.
 - Linux: Agentty's windows show its icon in the dock and the window switcher instead of a generic one.
 - Windows and Linux: Ctrl+C copies a selection in a chat, a diff and the file editor's table view (it took
   Ctrl+Shift+C), and the table view's cut, paste and select all use plain Ctrl as well.

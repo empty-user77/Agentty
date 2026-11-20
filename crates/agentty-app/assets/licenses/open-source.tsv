@@ -17,24 +17,24 @@ crate	accesskit_windows	0.34.0	MIT OR Apache-2.0	https://github.com/AccessKit/ac
 crate	addr2line	0.27.1	Apache-2.0 OR MIT	https://github.com/gimli-rs/addr2line
 crate	adler2	2.0.1	0BSD OR MIT OR Apache-2.0	https://github.com/oyvindln/adler2
 crate	aes	0.8.4	MIT OR Apache-2.0	https://github.com/RustCrypto/block-ciphers
-crate	agentty-gpui	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-apple	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-collections	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-derive-refineable	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-http-client	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-linux	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-macos	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-macros	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-platform	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-refineable	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-scheduler	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-shared-string	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-sum-tree	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-util	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-wgpu	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-windows	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-ztracing	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
-crate	agentty-gpui-ztracing-macro	0.1.0	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-apple	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-collections	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-derive-refineable	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-http-client	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-linux	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-macos	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-macros	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-platform	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-refineable	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-scheduler	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-shared-string	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-sum-tree	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-util	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-wgpu	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-windows	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-ztracing	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
+crate	agentty-gpui-ztracing-macro	0.1.1	Apache-2.0	https://github.com/empty-user77/agentty-gpui
 crate	ahash	0.8.12	MIT OR Apache-2.0	https://github.com/tkaitchuck/ahash
 crate	aho-corasick	1.1.5	Unlicense OR MIT	https://github.com/BurntSushi/aho-corasick
 crate	alacritty_terminal	0.26.0	Apache-2.0	https://github.com/alacritty/alacritty
