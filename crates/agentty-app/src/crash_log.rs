@@ -1,14 +1,31 @@
-//! What a crash leaves behind. Release builds abort on a panic (`panic = "abort"`), and on Windows
-//! the app has no console: without this, a crash says nothing anywhere. The panic's message,
-//! place and backtrace are appended to `<data dir>/crash.log` (the last few hundred kilobytes are
-//! kept), then the default hook runs as before.
+//! What a crash leaves behind. Release builds abort on a panic (`panic = "abort"`), and an app
+//! started from the desktop has no console: without this, a crash says nothing anywhere. The
+//! panic's message, place and backtrace are appended to `<data dir>/crash.log` (the last few
+//! hundred kilobytes are kept), then the default hook runs as before.
 //!
-//! Windows also records what is not a Rust panic: an exception nothing handled (an access
+//! What is not a Rust panic is recorded too. On Windows, an exception nothing handled (an access
 //! violation, a stack overflow — in Agentty or in a DLL loaded into it, such as a graphics
-//! driver or an overlay) goes to the same file with its code and the modules on the stack, and
-//! the process's standard error goes to `<data dir>/stderr.log`, where Rust's own last words
-//! ("fatal runtime error: …") land when it aborts without a panic.
+//! driver or an overlay), with its code and the modules on the stack. On Linux and macOS, a fatal
+//! signal with its address and stack, and a signal that ends the app from outside (`signals`).
+//! On all three, a run that ended with no code of its own running — killed, out of memory, the
+//! computer going down — is noticed at the next start and recorded then (`run`).
+//!
+//! Every record says how the process was doing (`context`: how long it ran, its memory, open
+//! files and threads, the system, the session and the graphics device). Standard error goes to
+//! `<data dir>/stderr.log` when nobody would see it otherwise, the run before's is kept as
+//! `stderr.prev.log`, and the libraries' warnings and errors are printed there (`logger`): Rust's
+//! own last words ("fatal runtime error: …") and a display server's or graphics layer's reason
+//! for giving up land in it.
 
+mod context;
+mod logger;
+mod run;
+#[cfg(unix)]
+mod signals;
+#[cfg(unix)]
+mod stall;
+
+pub use context::note;
 use std::io::Write;
 
 /// Keeps the file from growing without end: past this, it starts over.
@@ -16,13 +33,45 @@ const MAX_BYTES: u64 = 512 * 1024;
 
 /// Installs the hook (the app itself only, not its command-line subcommands).
 pub fn install() {
+    context::start();
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // The abort that follows is this crash, not another one.
+        #[cfg(unix)]
+        signals::PANICKED.store(true, std::sync::atomic::Ordering::Relaxed);
         write(info);
+        run::recorded();
         default(info);
     }));
     #[cfg(windows)]
     native::install();
+    // Standard error first: what the run before printed is moved aside here, and the record of
+    // how it ended (below) quotes it.
+    #[cfg(unix)]
+    signals::install();
+    logger::install();
+    run::start();
+}
+
+/// A quit was asked for (⌘Q, the menu, the main window closed, an update's restart): the quit
+/// hook that follows is the app ending as it should.
+pub fn quit_asked() {
+    run::quit_asked();
+}
+
+/// The app's quit hook. After [`quit_asked`], nothing is recorded of this run. Without it, on
+/// Linux, the event loop ended on its own while windows were open — the connection to the display
+/// server was lost, or the loop met an error — and that is recorded: the app closed without
+/// anyone closing it.
+pub fn quit(windows_open: bool) {
+    run::quit(windows_open);
+}
+
+/// One more entry in `crash.log`: `what`, under a line saying when and which Agentty.
+fn append(what: &str) {
+    if let Some(mut file) = open_log() {
+        let _ = writeln!(file, "{}\n", heading(what));
+    }
 }
 
 /// Windows: notices the UI thread not answering (see [`hang`]). The window then shows "Not
@@ -30,8 +79,8 @@ pub fn install() {
 pub fn watch_ui(cx: &mut gpui::App) {
     #[cfg(windows)]
     hang::watch(cx);
-    #[cfg(not(windows))]
-    let _ = cx;
+    #[cfg(unix)]
+    stall::watch(cx);
 }
 
 /// `agentty hang-dump <pid>`: the separate process that writes a minidump of a hung Agentty
@@ -85,7 +134,13 @@ fn write(info: &std::panic::PanicHookInfo<'_>) {
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "(no message)".into());
     let place = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_default();
-    let _ = writeln!(file, "{}\n{message}\n{}\n", heading(&format!("panicked at {place}:")), std::backtrace::Backtrace::force_capture(),);
+    let _ = writeln!(
+        file,
+        "{}\n{message}\n{}{}\n",
+        heading(&format!("panicked at {place}:")),
+        context::refresh(),
+        std::backtrace::Backtrace::force_capture(),
+    );
 }
 
 #[cfg(windows)]
@@ -121,7 +176,10 @@ mod native {
         if !current.is_null() && current != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
             return; // Started from a terminal, or with its output piped: left as it is.
         }
-        let path = agentty_bridge::fsutil::data_dir().join("stderr.log");
+        let folder = agentty_bridge::fsutil::data_dir();
+        let path = folder.join("stderr.log");
+        // The run before's: what it printed last is what explains how it ended.
+        let _ = std::fs::rename(&path, folder.join("stderr.prev.log"));
         let Ok(file) = std::fs::File::create(path) else { return };
         // The handle stays open for the life of the process.
         let handle = file.into_raw_handle();
@@ -191,13 +249,15 @@ mod native {
         let stack: Vec<String> = frames[..count].iter().map(|f| format!("  {}", module_of(*f as usize))).collect();
         let _ = writeln!(
             file,
-            "{}\n{} {:#010x} at {}{detail}\nstack (this handler first):\n{}\n",
+            "{}\n{} {:#010x} at {}{detail}\n{}stack (this handler first):\n{}\n",
             super::heading("crashed:"),
             describe(code),
             code as u32,
             module_of(address),
+            super::context::refresh(),
             stack.join("\n"),
         );
+        super::run::recorded();
         CONTINUE_SEARCH
     }
 }

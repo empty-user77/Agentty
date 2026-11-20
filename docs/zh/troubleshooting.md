@@ -58,6 +58,22 @@ Agentty 只提供能在你**登录 shell** 的 `PATH` 中找到的智能体 CLI�
 
 更新从 GitHub 下载并在使用前校验。若因代理或被阻断的主机导致失败，请到[发布页面](https://github.com/empty-user77/Agentty/releases)手动获取安装文件。
 
+## 应用自己关闭了
+
+Agentty 会把自己是如何结束的记录在数据文件夹（`~/.agentty`，Windows 上为 `%USERPROFILE%\.agentty`）中。这些记录不会发送到任何地方。
+
+- **`crash.log`**：每次崩溃一条，最新的在最后。其中有内部错误的位置和调用栈、Agentty 或其加载的库（例如显卡驱动）的故障，以及从外部结束应用的信号。没有留下任何信息就结束的运行（被强制结束、系统内存不足、电脑关机）会在下次启动时补记。每条记录还写明运行了多久、内存、打开的文件数和线程数、系统、会话类型和显卡设备。
+- **`stderr.log`** 与 **`stderr.prev.log`**：从桌面启动时，应用及其库输出的内容，保留本次运行和上一次运行的。显示服务器或图形层放弃的原因就在这里。
+
+在 Linux 上，如果 `crash.log` 显示有"没有记录就结束的运行"，下面的命令能提供更多信息：
+
+```sh
+journalctl -k -b | grep -i -E "oom|killed process"   # 系统内存不足
+coredumpctl list agentty                              # 系统记录的崩溃
+```
+
+反馈时请附上 `crash.log`（如有 `stderr.prev.log` 也一并附上）。其中包含你电脑上的路径，发布前请先看一遍。
+
 ## 仍然没解决
 
 请到[问题跟踪](https://github.com/empty-user77/Agentty/issues)反馈，并附上你的 Agentty 版本（**设置 → 关于 Agentty**）、操作系统，以及你期望的行为。粘贴日志或截图前请先遮蔽凭据。

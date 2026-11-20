@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 pub const CLI_COMMANDS: &[&str] = &[
     "mcp-connector",
     "worktree-guard",
+    "subagent-guard",
+    "hang-dump",
     "statusline",
     "mcp-browser",
     "mcp-plugins",
@@ -243,6 +245,19 @@ mod macos {
 
 #[cfg(test)]
 mod tests {
+    /// Every command `main` answers without starting the app is in the list: a process running
+    /// one that is missing would be taken for a stray Agentty at the next start, and ended.
+    #[test]
+    fn every_command_of_main_is_known() {
+        let main = include_str!("main.rs");
+        let needle = "args.get(1).map(String::as_str) == Some(\"";
+        let commands: Vec<&str> = main.split(needle).skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        assert!(commands.len() >= 10, "main.rs no longer names its commands this way: {commands:?}");
+        for command in commands {
+            assert!(super::CLI_COMMANDS.contains(&command), "`agentty {command}` is missing from CLI_COMMANDS");
+        }
+    }
+
     use super::*;
 
     /// `agentty.com` must wait for every command, or that command runs into the race it exists to end.

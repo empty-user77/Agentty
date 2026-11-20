@@ -217,7 +217,15 @@ impl Listener {
 
     /// Accepted connections, forever. Nothing is read here; `agent_signal` decides who each one is.
     pub fn incoming(&self) -> impl Iterator<Item = Stream> + '_ {
-        self.inner.incoming().flatten().map(|inner| Stream { inner })
+        self.inner.incoming().filter_map(|accepted| match accepted {
+            Ok(inner) => Some(Stream { inner }),
+            Err(_) => {
+                // Out of descriptors (or the like): the error is there again at once, and an
+                // accept loop that asks again without a pause takes a whole processor.
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                None
+            }
+        })
     }
 
     /// Removes the socket file and the private folder `bind` made for it (Unix).

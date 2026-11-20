@@ -27,7 +27,8 @@ pub const SETTINGS_URL: &str = if cfg!(windows) { "ms-settings:notifications" } 
 
 pub fn show(_pane_id: u64, title: &str, body: &str) {
     let (title, body) = (clean(title, 120), clean(body, 300));
-    std::thread::spawn(move || {
+    // A notification the system has no thread for is not shown; it does not end the app.
+    let _ = std::thread::Builder::new().name("notification".into()).spawn(move || {
         #[cfg(windows)]
         let _ = agentty_bridge::process::windows_powershell()
             .args([

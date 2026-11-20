@@ -895,7 +895,7 @@ pub fn signal(pid: u32, force: u8) {
             _ => libc::SIGKILL,
         };
         // The whole tree, not only the group: `ps` runs, so not on the UI thread.
-        std::thread::spawn(move || signal_tree(pid, signal));
+        let _ = std::thread::Builder::new().name("run-stop".into()).spawn(move || signal_tree(pid, signal));
     }
     #[cfg(windows)]
     {

@@ -17,6 +17,8 @@ use std::time::Duration;
 const COMMANDS: &[&str] = &[
     "mcp-connector",
     "worktree-guard",
+    "subagent-guard",
+    "hang-dump",
     "statusline",
     "mcp-browser",
     "mcp-plugins",
