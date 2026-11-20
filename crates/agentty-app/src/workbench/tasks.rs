@@ -10,6 +10,7 @@ use super::panes::Axis;
 use super::{Pane, Workbench};
 use crate::agent_signal::{browser_reply, TasksRequest};
 use crate::agents::AgentPick;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -279,7 +280,7 @@ impl Workbench {
                             )
                             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(agent)),
                     )
-                    .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(preview)),
+                    .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(preview).copyable(task.prompt.clone())),
             );
         }
         let button = |id: &'static str, label: String, primary: bool| {

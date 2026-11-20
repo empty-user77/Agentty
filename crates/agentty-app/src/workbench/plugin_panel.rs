@@ -2,6 +2,7 @@
 //! with its own UI tree) and plugin buttons in the tab strip.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::plugins::{self, RunState};
 use crate::settings::settings;
@@ -498,7 +499,7 @@ impl Workbench {
                 .flex_col()
                 .gap_2()
                 .child(div().t_body().text_color(hex(Chrome::ERROR)).child(tf(cx, "plugins.failed", &[("name", &manifest.name)])))
-                .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(error))
+                .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).copyable(error.clone()).child(error))
                 .child(
                     div()
                         .p_2()
@@ -507,6 +508,7 @@ impl Workbench {
                         .t_caption()
                         .font_family("JetBrains Mono")
                         .text_color(hex(Chrome::MUTED))
+                        .copyable(log_tail.join("\n"))
                         .child(log_tail.join("\n")),
                 )
                 .into_any_element(),

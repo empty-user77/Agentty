@@ -8,6 +8,7 @@
 //! open does it look again every few seconds — always off the UI thread (`agentty_bridge::docker`).
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -375,7 +376,7 @@ impl Workbench {
                 .flex()
                 .flex_col()
                 .child(note(t(cx, "docker.not_running").to_string()))
-                .child(div().px_3().t_caption().text_color(hex(Chrome::MUTED)).child(detail.clone()))
+                .child(div().px_3().t_caption().text_color(hex(Chrome::MUTED)).copyable(detail.clone()).child(detail.clone()))
                 .into_any_element(),
             Some(Engine::Ready) => self.render_docker_services(overview.expect("engine came from it"), cx),
         };
@@ -535,7 +536,9 @@ impl Workbench {
             column = column.child(crate::ui::loading_row(tf(cx, "docker.busy", &[("command", command)])));
         }
         for error in [state.error.as_ref(), overview.error.as_ref()].into_iter().flatten() {
-            column = column.child(div().flex_shrink_0().px_3().py_1().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()));
+            column = column.child(
+                div().flex_shrink_0().px_3().py_1().t_small().text_color(hex(Chrome::ERROR)).copyable(error.clone()).child(error.clone()),
+            );
         }
         if overview.services.is_empty() {
             let key = if overview.compose.is_some() {
@@ -590,7 +593,7 @@ impl Workbench {
             .text_color(hex(Chrome::MUTED))
             .child(div().text_color(hex(color)).child(t(cx, state_label(service.state))));
         if !service.image.is_empty() {
-            meta = meta.child(div().max_w(px(150.)).truncate().child(format!("· {}", service.image)));
+            meta = meta.child(div().max_w(px(150.)).truncate().copyable(service.image.clone()).child(format!("· {}", service.image)));
         }
         for port in &service.ports {
             meta =

@@ -82,6 +82,7 @@ pub enum BrowserKey {
 /// A standard editing command, as the Edit menu names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditCommand {
+    Cut,
     Copy,
     Paste,
     SelectAll,
@@ -1975,6 +1976,7 @@ pub fn perform_in_page(command: EditCommand) -> bool {
         return false;
     };
     match command {
+        EditCommand::Cut => evaluate(&page.webview, "document.execCommand('cut')", None, |_| {}),
         EditCommand::Copy => evaluate(&page.webview, "document.execCommand('copy')", None, |_| {}),
         EditCommand::SelectAll => evaluate(&page.webview, "document.execCommand('selectAll')", None, |_| {}),
         EditCommand::Paste => {

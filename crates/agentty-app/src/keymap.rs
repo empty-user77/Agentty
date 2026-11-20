@@ -13,8 +13,8 @@
 //! | `cmd-1`…`9`    | `alt-1`…`9`          |
 //! | `cmd-=` `-` `0`| `ctrl-=` `-` `0`     |
 //!
-//! Text fields (not terminals) use plain Ctrl (`cmd-c` → `ctrl-c`), and ⌘-click becomes
-//! Ctrl-click.
+//! Text fields and text to read (not terminals) use plain Ctrl (`cmd-c` → `ctrl-c`), and ⌘-click
+//! becomes Ctrl-click.
 
 use std::borrow::Cow;
 
@@ -26,8 +26,9 @@ struct Chord {
     cmd: bool,
 }
 
-/// Contexts whose bindings are plain text editing (Ctrl+C copies there, there is no shell).
-const TEXT_CONTEXTS: &[&str] = &["TextInput", "CodeEditor"];
+/// Contexts whose bindings are plain text editing or reading (Ctrl+C copies there, there is no
+/// shell): fields, the file editor and its table view, a chat's text, a diff.
+const TEXT_CONTEXTS: &[&str] = &["TextInput", "CodeEditor", "TableGrid", "ChatReading", "DiffBody"];
 
 /// Splits `alt-cmd-c` / `cmd--` into modifiers and key.
 fn parse(keys: &str) -> (Chord, &str) {
@@ -451,6 +452,12 @@ mod tests {
         assert_eq!(t("cmd-="), "ctrl-=");
         assert_eq!(t("ctrl-tab"), "ctrl-tab");
         assert_eq!(translate_binding("cmd-c", Some("TextInput")), "ctrl-c");
+        // Text to read copies with the key every other program copies with; only a terminal,
+        // where Ctrl+C is the shell's, moves it to Ctrl+Shift+C.
+        for context in ["CodeEditor", "TableGrid", "ChatReading", "DiffBody"] {
+            assert_eq!(translate_binding("cmd-c", Some(context)), "ctrl-c", "{context}");
+        }
+        assert_eq!(translate_binding("cmd-c", Some("Terminal")), "ctrl-shift-c");
         assert_eq!(parse("cmd--"), (Chord { cmd: true, ..Chord::default() }, "-"));
     }
 
@@ -524,6 +531,11 @@ mod tests {
         ("cmd-r", Some("GitView")),
         ("cmd-c", Some("Terminal")),
         ("cmd-c", Some("ChatReading")),
+        ("cmd-c", Some("DiffBody")),
+        ("cmd-a", Some("DiffBody")),
+        ("cmd-k", Some("DiffBody")),
+        ("cmd-v", Some("ChatReading")),
+        ("cmd-a", Some("ChatReading")),
         ("cmd-v", Some("Terminal")),
         ("cmd-k", Some("Terminal")),
         ("cmd-a", Some("Terminal")),

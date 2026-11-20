@@ -4,6 +4,7 @@
 
 use super::settings_page::section;
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::t;
 use crate::launch::LaunchSpec;
 use crate::setup_check::{self, Need, Tool};
@@ -200,7 +201,14 @@ impl Workbench {
                                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, tool.need.label_key()))),
                             )
                             .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, tool.purpose)))
-                            .child(div().t_small().truncate().text_color(hex(Chrome::MUTED)).child(detail)),
+                            .child(
+                                div()
+                                    .t_small()
+                                    .truncate()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .copyable(tool.found.clone().unwrap_or_default())
+                                    .child(detail),
+                            ),
                     )
                     .child(buttons),
             );

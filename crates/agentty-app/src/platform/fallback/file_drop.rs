@@ -6,8 +6,8 @@ pub use crate::platform::drops::drain;
 
 pub fn install(_ns_window: crate::native::Id) {}
 
-/// Files on the clipboard for ⌘V. GPUI's clipboard carries text and images but no file list here,
-/// so pasting stays text-only until the platform offers one.
+/// Files on the clipboard for a paste. There is no reader of the system's clipboard here; what
+/// GPUI's own carries (images, files) is read where a paste happens (`drops::pasted_paths`).
 pub fn clipboard_paths() -> Vec<std::path::PathBuf> {
     Vec::new()
 }

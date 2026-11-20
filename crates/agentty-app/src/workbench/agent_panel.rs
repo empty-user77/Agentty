@@ -77,6 +77,8 @@ impl Render for SubagentWindow {
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
             .children(body)
+            .map(crate::edit_menu::handled)
+            .children(crate::context_menu::render(window, cx))
     }
 }
 
@@ -649,11 +651,13 @@ impl Workbench {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions { title: Some(t(cx, "collab.agents").into()), ..Default::default() }),
             window_min_size: Some(gpui::size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))),
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         // Opened after this update: the window draws its first frame from the workbench at once.
         cx.defer(move |cx| {
-            let opened = cx.open_window(options, |_, cx| {
+            let opened = cx.open_window(options, |window, cx| {
+                window.set_app_id(crate::APP_ID);
                 cx.new(|cx| {
                     // Redrawn whenever the workbench is: the steps arrive there.
                     cx.observe(&workbench, |_, _, cx| cx.notify()).detach();

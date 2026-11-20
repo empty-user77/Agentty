@@ -4,6 +4,7 @@
 
 use super::settings_page::{row_with_hint, section, switch};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::TextInput;
 use crate::theme::{hex, Chrome};
@@ -254,7 +255,8 @@ impl Workbench {
                 .child(row_with_hint(t(cx, "backup.password_again"), "", field(again)));
         }
         let color = |error: bool| hex(if error { Chrome::ERROR } else { Chrome::SUCCESS });
-        let message = self.backup.message.clone().map(|(text, error)| div().t_small().text_color(color(error)).child(text));
+        let message =
+            self.backup.message.clone().map(|(text, error)| div().t_small().text_color(color(error)).copyable(text.clone()).child(text));
         let (export_message, import_message) = if self.backup.message_on_export { (message, None) } else { (None, message) };
         export = export.child(
             div().flex().child(
@@ -308,7 +310,14 @@ impl Workbench {
                     .rounded_md()
                     .border_1()
                     .border_color(hex(Chrome::BORDER))
-                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).truncate().child(middle_ellipsis(&tilde(&path), 90)))
+                    .child(
+                        div()
+                            .t_body()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .truncate()
+                            .copyable(path.display().to_string())
+                            .child(middle_ellipsis(&tilde(&path), 90)),
+                    )
                     .child(muted(tf(
                         cx,
                         "backup.file_from",

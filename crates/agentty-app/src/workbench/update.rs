@@ -6,6 +6,7 @@
 //! packages are installed with the package manager.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, TypeScale};
@@ -536,7 +537,7 @@ impl Workbench {
         };
         let notes = match &self.updates.state {
             UpdateState::Available(release) if !release.notes.trim().is_empty() => {
-                Some(release.notes.chars().take(600).collect::<String>())
+                Some((release.notes.chars().take(600).collect::<String>(), release.notes.clone()))
             }
             _ => None,
         };
@@ -571,8 +572,10 @@ impl Workbench {
                             .child(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title)),
                     )
                     .when(!body.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body)))
-                    .when_some(detail, |d, detail| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).line_clamp(3).child(detail)))
-                    .when_some(notes, |d, notes| {
+                    .when_some(detail, |d, detail| {
+                        d.child(div().t_caption().text_color(hex(Chrome::MUTED)).line_clamp(3).copyable(detail.clone()).child(detail))
+                    })
+                    .when_some(notes, |d, (notes, full)| {
                         d.child(
                             div()
                                 .id("update-notes-text")
@@ -583,6 +586,7 @@ impl Workbench {
                                 .bg(hex(0x1a1a1a))
                                 .t_small()
                                 .text_color(hex(Chrome::MUTED))
+                                .copyable(full)
                                 .child(notes),
                         )
                     })
@@ -673,6 +677,7 @@ impl Workbench {
                         .t_heading()
                         .font_weight(crate::theme::EMPHASIS)
                         .text_color(hex(Chrome::BRIGHT))
+                        .copyable(format!("Agentty v{CURRENT_VERSION}"))
                         .child(format!("Agentty v{CURRENT_VERSION}")),
                 )
                 .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "tagline")))

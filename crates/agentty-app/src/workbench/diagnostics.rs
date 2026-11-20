@@ -3,6 +3,7 @@
 //! "Fix all" for every one of them.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::diagnostics::{Finding, Fix, Level};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -250,11 +251,17 @@ impl Workbench {
             .gap_1()
             .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(SharedString::from(tf(cx, finding.title, &args))));
         if let Some(detail) = finding.detail {
-            text = text.child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(SharedString::from(tf(cx, detail, &args))));
+            let detail = SharedString::from(tf(cx, detail, &args));
+            text = text.child(div().t_small().text_color(hex(Chrome::FOREGROUND)).copyable(detail.clone()).child(detail));
         }
         for line in &finding.lines {
             text = text.child(
-                div().t_caption().font_family("JetBrains Mono").text_color(hex(Chrome::MUTED)).child(SharedString::from(line.clone())),
+                div()
+                    .t_caption()
+                    .font_family("JetBrains Mono")
+                    .text_color(hex(Chrome::MUTED))
+                    .copyable(line.clone())
+                    .child(SharedString::from(line.clone())),
             );
         }
         let mut row = div()

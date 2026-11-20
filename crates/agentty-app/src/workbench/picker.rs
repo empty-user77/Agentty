@@ -3,6 +3,7 @@
 //! subfolders → "Select" starts there. A new folder can be created and started in directly.
 
 use super::{LaunchTarget, Workbench};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::launch::{home_dir, PaneKind};
 use crate::settings::settings;
@@ -174,7 +175,7 @@ impl Workbench {
                     }
                 }
                 TextInputEvent::Cancelled => return this.close_picker(window, cx),
-                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) => {}
+                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) | TextInputEvent::PastedFiles(_) => {}
             }
             cx.notify();
         });
@@ -390,6 +391,7 @@ impl Workbench {
             list = list.child(
                 div()
                     .id(("picker-entry", index))
+                    .copyable(path.display().to_string())
                     .flex()
                     .items_center()
                     .gap_3()

@@ -10,6 +10,7 @@
 
 use super::Workbench;
 use crate::agent_signal::{browser_reply, DbRequest};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -1145,7 +1146,10 @@ impl Workbench {
                             div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(connection.name.clone()),
                         ),
                     )
-                    .child(div().t_caption().text_color(hex(Chrome::FOREGROUND)).truncate().child(connection.config.summary()))
+                    .child({
+                        let summary = connection.config.summary();
+                        div().t_caption().text_color(hex(Chrome::FOREGROUND)).truncate().copyable(summary.clone()).child(summary)
+                    })
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(source))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_db_connection(id.clone(), cx)));
             for missing in &connection.missing {
@@ -1272,7 +1276,13 @@ impl Workbench {
             .when(!diagram, |d| d.children(query));
         if let Some((text, error)) = &db.message {
             body = body.child(
-                div().px_3().py_2().t_small().text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS })).child(text.clone()),
+                div()
+                    .px_3()
+                    .py_2()
+                    .t_small()
+                    .text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS }))
+                    .copyable(text.clone())
+                    .child(text.clone()),
             );
         }
         if db.busy && !diagram {
@@ -1370,6 +1380,8 @@ impl Workbench {
             }));
         let picked = self.db.picked_row;
         let rows = result.rows.iter().enumerate().map(|(i, row)| {
+            let texts: Vec<String> = row.iter().map(cell_text).collect();
+            let row_tsv = SharedString::from(texts.join("\t"));
             div()
                 .id(("db-row", i))
                 .flex()
@@ -1384,7 +1396,8 @@ impl Workbench {
                 }))
                 .child(number_cell((i + 1).to_string(), false))
                 .children(row.iter().enumerate().map(|(c, value)| {
-                    let text = cell_text(value);
+                    let text = texts[c].clone();
+                    let row_tsv = row_tsv.clone();
                     div()
                         .w(px(widths.get(c).copied().unwrap_or(COLUMN_MIN_WIDTH)))
                         .flex_shrink_0()
@@ -1394,6 +1407,9 @@ impl Workbench {
                         .t_small()
                         .font_family("monospace")
                         .text_color(hex(if value.is_null() { Chrome::MUTED } else { Chrome::FOREGROUND }))
+                        .copyable_with(text.clone(), move |cx| {
+                            vec![crate::context_menu::Item::copy_as(t(cx, "input.copy_all"), row_tsv.clone())]
+                        })
                         .child(if value.is_null() { "NULL".to_string() } else { text.lines().next().unwrap_or("").to_string() })
                 }))
         });
@@ -1422,14 +1438,16 @@ impl Workbench {
                         .py_0p5()
                         .t_small()
                         .child(div().w(px(160.)).flex_shrink_0().truncate().text_color(hex(Chrome::MUTED)).child(name.clone()))
-                        .child(
+                        .child({
+                            let shown = value.map(cell_text).unwrap_or_default();
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .font_family("monospace")
                                 .text_color(hex(if null { Chrome::MUTED } else { Chrome::BRIGHT }))
-                                .child(value.map(cell_text).unwrap_or_default()),
-                        )
+                                .copyable(shown.clone())
+                                .child(shown)
+                        })
                 }))
         });
         div()
@@ -1706,6 +1724,7 @@ impl Workbench {
                                 .font_family(crate::settings::BUNDLED_FONT)
                                 .t_small()
                                 .text_color(hex(Chrome::BRIGHT))
+                                .copyable(approval.job.describe())
                                 .child(approval.job.describe()),
                         )
                         .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "db.approve_note")))
@@ -1760,7 +1779,7 @@ fn detail(label: &str, value: String, color: u32) -> gpui::Div {
         .gap_2()
         .t_small()
         .child(div().w(px(80.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(label.to_string()))
-        .child(div().flex_1().min_w_0().truncate().text_color(hex(color)).child(value))
+        .child(div().flex_1().min_w_0().truncate().text_color(hex(color)).copyable(value.clone()).child(value))
 }
 
 /// A small modal box over the page.

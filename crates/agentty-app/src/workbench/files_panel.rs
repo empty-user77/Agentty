@@ -4,6 +4,7 @@
 //! (`worktrees.rs`), so this is where that is made visible.
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_only_sized, menu_item, popover, tilde, IconSize, Tooltip, TypeScale};
@@ -1267,7 +1268,9 @@ impl Workbench {
                 .children(trees)
                 .child(tabs)
                 .when_some(panel.error.clone(), |d, error| {
-                    d.child(div().flex_shrink_0().px_3().py_1p5().t_small().text_color(hex(Chrome::ERROR)).child(error))
+                    d.child(
+                        div().flex_shrink_0().px_3().py_1p5().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()).copyable(error),
+                    )
                 })
                 .child(body)
                 .into_any_element(),

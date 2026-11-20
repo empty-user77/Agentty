@@ -4,6 +4,7 @@
 //! on a branch opens its actions: rename, delete (on the server too, for a remote branch), a new
 //! branch from it, copy its name.
 
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -604,7 +605,7 @@ impl BranchPicker {
             menu = menu.child(crate::ui::loading_row(t(cx, "git.working")));
         }
         if let Some(error) = &actions.error {
-            menu = menu.child(div().px_3().py_1().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()));
+            menu = menu.child(div().px_3().py_1().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()).copyable(error.clone()));
         }
         // Where the click was, over the menu the picker sits in.
         Some(

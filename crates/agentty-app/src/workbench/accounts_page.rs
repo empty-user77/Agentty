@@ -6,6 +6,7 @@
 use super::account_menu::AccountRow;
 use super::settings_page::{row_with_hint, section};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::TextInput;
 use crate::theme::{hex, Chrome};
@@ -462,7 +463,7 @@ impl Workbench {
                         )
                     }),
             )
-            .child(div().flex_shrink_0().t_caption().text_color(hex(color)).child(detail))
+            .child(div().flex_shrink_0().t_caption().text_color(hex(color)).copyable(detail.clone()).child(detail))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if !this.account_details_open.remove(&toggle) {
                     this.account_details_open.insert(toggle.clone());
@@ -489,8 +490,15 @@ impl Workbench {
                 .child(div().flex_shrink_0().w(gpui::px(LABEL_WIDTH)).t_caption().text_color(hex(Chrome::MUTED)).child(label.to_string()))
                 .child(value.flex_1().min_w_0())
         };
-        let mono =
-            |text: String| div().truncate().t_caption().font_family(super::plugin_ui::MONO).text_color(hex(Chrome::FOREGROUND)).child(text);
+        let mono = |text: String| {
+            div()
+                .truncate()
+                .t_caption()
+                .font_family(super::plugin_ui::MONO)
+                .text_color(hex(Chrome::FOREGROUND))
+                .copyable(text.clone())
+                .child(text)
+        };
         let mut details = div().flex().flex_col().gap_1().pl(gpui::px(36.)).pr_3().pt_1().pb_3();
         if let Some(place) = place {
             let shown = crate::ui::tilde(&place.folder);
@@ -568,9 +576,9 @@ impl Workbench {
                 .child(input.clone())
         };
         let status_line = |status: &Status| {
-            status
-                .as_ref()
-                .map(|(ok, text)| div().t_small().text_color(hex(if *ok { Chrome::MUTED } else { Chrome::ERROR })).child(text.clone()))
+            status.as_ref().map(|(ok, text)| {
+                div().t_small().text_color(hex(if *ok { Chrome::MUTED } else { Chrome::ERROR })).copyable(text.clone()).child(text.clone())
+            })
         };
         let saved_text = |masked: &Option<String>, cx: &gpui::App| match masked {
             Some(masked) => tf(cx, "accounts.saved_in", &[("store", store), ("key", masked)]),
@@ -702,7 +710,7 @@ impl Workbench {
                             cx.listener(|this, _: &ClickEvent, _, cx| this.pick_codex_auth_json(cx)),
                         )),
                     ))
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(imported));
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).copyable(imported.clone()).child(imported));
             }
         }
         codex = codex

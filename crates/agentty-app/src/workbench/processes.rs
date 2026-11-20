@@ -3,6 +3,7 @@
 
 use super::{Page, Workbench};
 use crate::ai_processes::AgentProcess;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, TypeScale};
@@ -415,13 +416,26 @@ impl Workbench {
                                             .gap_1p5()
                                             .t_body()
                                             .child(div().text_color(hex(Chrome::BRIGHT)).child(brand.name))
-                                            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("PID {root}"))),
+                                            .child(
+                                                div()
+                                                    .t_caption()
+                                                    .text_color(hex(Chrome::MUTED))
+                                                    .copyable(root.to_string())
+                                                    .child(format!("PID {root}")),
+                                            ),
                                     )
-                                    .child(div().t_small().truncate().text_color(hex(Chrome::MUTED)).child(tf(
-                                        cx,
-                                        "processes.row_sub",
-                                        &[("n", &process.tree.len().to_string()), ("where", &location), ("folder", &folder)],
-                                    ))),
+                                    .child(
+                                        div()
+                                            .t_small()
+                                            .truncate()
+                                            .text_color(hex(Chrome::MUTED))
+                                            .copyable(process.cwd.as_ref().map(|c| c.display().to_string()).unwrap_or_default())
+                                            .child(tf(
+                                                cx,
+                                                "processes.row_sub",
+                                                &[("n", &process.tree.len().to_string()), ("where", &location), ("folder", &folder)],
+                                            )),
+                                    ),
                             ),
                     )
                     .child(
@@ -462,9 +476,24 @@ impl Workbench {
                                     .min_w_0()
                                     .flex()
                                     .gap_2()
-                                    .child(div().flex_shrink_0().w(px(54.)).text_color(hex(Chrome::MUTED)).child(child.pid.to_string()))
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .w(px(54.))
+                                            .text_color(hex(Chrome::MUTED))
+                                            .copyable(child.pid.to_string())
+                                            .child(child.pid.to_string()),
+                                    )
                                     .child(div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(child.name()))
-                                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(child.command.clone())),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_color(hex(Chrome::MUTED))
+                                            .copyable(child.command.clone())
+                                            .child(child.command.clone()),
+                                    ),
                             )
                             .child(div().w(px(76.)))
                             .child(div().w(px(64.)).flex().justify_end().child(format!("{:.1}%", child.cpu)))

@@ -2,6 +2,7 @@
 
 use super::session_list::session_key;
 use super::{other_agent, LaunchTarget, Page, RenameTarget, SessionFilter, SidePanel, Workbench, Workspace};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchChoice, PaneKind};
 use crate::settings::settings;
@@ -950,7 +951,9 @@ impl Workbench {
             let id = ws.id;
             // Named as its card names it; the whole path goes on the line below.
             let title = self.workspace_label(ws, cx);
-            let folder = tilde(&self.workspace_folder(ws, cx));
+            let folder_path = self.workspace_folder(ws, cx);
+            let folder = tilde(&folder_path);
+            let folder_full = folder_path.to_string_lossy().to_string();
             let by_name = title.to_lowercase().contains(query);
             let by_folder = folder.to_lowercase().contains(query);
             let group = ws.group.and_then(|gid| self.groups.iter().find(|g| g.id == gid)).map(|g| g.name.clone());
@@ -999,13 +1002,14 @@ impl Workbench {
                         })),
                 );
             card = if by_folder {
-                card.child(match_line(t(cx, "search.in_folder"), marked(folder, query)))
+                card.child(match_line(t(cx, "search.in_folder"), marked(folder, query)).copyable(folder_full))
             } else {
-                card.child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(folder))
+                card.child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(folder).copyable(folder_full))
             };
             if let Some(found) = hit {
                 let label = format!("{} · {}", t(cx, "search.in_conversation"), role_label(found.hit.role, cx));
-                card = card.child(match_block(label, snippet(&found.hit, 24))).child(
+                let said = format!("{}{}{}", found.hit.before, found.hit.matched, found.hit.after);
+                card = card.child(match_block(label, snippet(&found.hit, 24)).copyable(said)).child(
                     div().pl_1().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(if found.sessions > 1 {
                         tf(cx, "search.session_and_more", &[("title", &found.session_title), ("n", &(found.sessions - 1).to_string())])
                     } else {
@@ -1926,15 +1930,20 @@ impl Workbench {
         let hit = self.session_content_hits.as_ref().filter(|(q, _)| q == query).and_then(|(_, hits)| hits.get(&session.path));
         if let Some(hit) = hit {
             let label = format!("{} · {}", t(cx, "search.in_conversation"), role_label(hit.role, cx));
-            return Some(match_line(label, snippet(hit, 10)));
+            let said = format!("{}{}{}", hit.before, hit.matched, hit.after);
+            return Some(match_line(label, snippet(hit, 10)).copyable(said));
         }
         if session.title.to_lowercase().contains(query) {
-            return Some(match_line(t(cx, "search.in_title"), marked(session.title.clone(), query)));
+            return Some(match_line(t(cx, "search.in_title"), marked(session.title.clone(), query)).copyable(session.title.clone()));
         }
         if let Some(cwd) = session.cwd.as_deref().filter(|c| c.to_lowercase().contains(query)) {
-            return Some(match_line(t(cx, "search.in_folder"), marked(cwd.to_string(), query)));
+            return Some(match_line(t(cx, "search.in_folder"), marked(cwd.to_string(), query)).copyable(cwd.to_string()));
         }
-        session.id.to_lowercase().starts_with(query).then(|| match_line(t(cx, "search.in_id"), marked(session.id.clone(), query)))
+        session
+            .id
+            .to_lowercase()
+            .starts_with(query)
+            .then(|| match_line(t(cx, "search.in_id"), marked(session.id.clone(), query)).copyable(session.id.clone()))
     }
 
     /// One session. `place` is the line under its title (its folder; `None` leaves the line out),
@@ -1974,6 +1983,7 @@ impl Workbench {
             .when(!selected, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
             // A click shows the conversation; the buttons below continue it.
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_session_viewer(view.clone(), cx)))
+            .copyable(session.title.clone())
             .child(
                 div()
                     .flex()
@@ -2017,7 +2027,10 @@ impl Workbench {
                             .child(icon("star", IconSize::INLINE, hex(if favorite { Chrome::FAVORITE } else { Chrome::MUTED }))),
                     ),
             )
-            .children(place.map(|place| div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(place)))
+            .children(place.map(|place| {
+                let full = session.cwd.clone().unwrap_or_else(|| place.clone());
+                div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(place).copyable(full)
+            }))
             .child(match found {
                 Some(line) => div().pl(px(24.)).child(line),
                 None => div().pl(px(24.)).truncate().t_small().text_color(hex(0xa8a8a8)).child(summary.unwrap_or_default()),
@@ -3364,6 +3377,7 @@ impl Workbench {
                             crate::platform::reveal(&reveal);
                         }
                     })
+                    .copyable(cwd.to_string_lossy().to_string())
                     .child(icon("folder", 12., hex(Chrome::MUTED)))
                     // Cut in the middle past 50 characters: a worktree path is mostly its ends, and
                     // the whole thing pushed everything else off the bar.

@@ -5,6 +5,7 @@
 //! takes it off the list, and closes its terminal if asked.
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::remote::server::OrchestrationCommand;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -971,7 +972,7 @@ impl Workbench {
                         .child(t(cx, if ready { "orch.plan_ready" } else { "orch.card" })),
                 )
                 .when(!ready, |d| d.child(div().flex_shrink_0().size(gpui::px(6.)).rounded_full().bg(hex(color))))
-                .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(said))
+                .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).copyable(said.clone()).child(said))
                 .child(
                     div()
                         .id(SharedString::from(format!("strip-workflow-{id}")))

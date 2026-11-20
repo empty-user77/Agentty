@@ -3,6 +3,7 @@
 
 use super::settings_page::{row_with_hint, switch};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::remote::server::Command;
 use crate::remote::snapshot::{PortInfo, Screen, SessionInfo, TabInfo, WorkspaceInfo};
@@ -787,7 +788,12 @@ impl Workbench {
                         .child(field(first, "remote-password-eye-1"))
                         .child(field(second, "remote-password-eye-2"))
                         .children(warning.map(|key| div().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, key))))
-                        .children(self.remote_page.dialog_error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).child(e)))
+                        .children(
+                            self.remote_page
+                                .dialog_error
+                                .clone()
+                                .map(|e| div().t_small().text_color(hex(Chrome::ERROR)).copyable(e.clone()).child(e)),
+                        )
                         .child(
                             div()
                                 .flex()
@@ -1046,7 +1052,7 @@ impl Workbench {
                 .child(languages),
         );
         if let Some(err) = &self.remote_page.voice_error {
-            body = body.child(div().t_small().text_color(hex(Chrome::ERROR)).child(err.clone()));
+            body = body.child(div().t_small().text_color(hex(Chrome::ERROR)).copyable(err.clone()).child(err.clone()));
         }
         body
     }
@@ -1345,7 +1351,7 @@ impl Workbench {
                         .text_color(hex(Chrome::BRIGHT))
                         .child(value),
                 )
-                .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(sub))
+                .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).copyable(sub.clone()).child(sub))
         };
         let stats = div()
             .flex()
@@ -1560,7 +1566,9 @@ impl Workbench {
                 })),
         );
         if let Some((text, error)) = &self.remote_page.message {
-            password = password.child(div().t_small().text_color(hex(if *error { Chrome::ERROR } else { NEON_GREEN })).child(text.clone()));
+            password = password.child(
+                div().t_small().text_color(hex(if *error { Chrome::ERROR } else { NEON_GREEN })).copyable(text.clone()).child(text.clone()),
+            );
         }
 
         // ── From another device ──────────────────────────────────────────────────────────

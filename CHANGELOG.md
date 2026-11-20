@@ -15,6 +15,27 @@ All notable changes to this project are documented here. The format follows
   system's low-memory daemon ends the heaviest agent instead of Agentty with every pane.
 - What the app's libraries print before giving up (a display server's or graphics layer's error) is kept in
   `stderr.log`, with the run before's in `stderr.prev.log`. The troubleshooting page says where these files are.
+- A right-click on a terminal, the file editor's text or a diff gives Copy, Paste and Select All (what applies
+  there).
+- Text that cannot be selected is copied with a right-click → Copy: errors and notices, run log lines, the in-app
+  browser's network details, commit messages and Git errors, a past session's messages, subagent output, database
+  results, plugin logs, paths and command lines across the pages.
+- ⌘A / Ctrl+A in a chat's text selects all of it that has been shown, and a Word document's paragraphs and tables
+  have Copy in their right-click menu (a file that cannot be edited too).
+- A program that reads the mouse itself (vim, tmux) gets the right and middle buttons in a terminal; Shift keeps
+  them for Agentty's menu and paste.
+- A copied file or image pasted into a chat's message box, the idea chat or the orchestrator's goal is attached.
+- Windows and Linux: Ctrl+Insert copies and Shift+Insert pastes everywhere, and text fields also take the terminal's
+  Ctrl+Shift+C / Ctrl+Shift+V.
+- Linux: text selected with the pointer is pasted with a middle click (terminal, text fields, file editor), and a
+  copied image pastes into a terminal as a file.
+
+### Fixed
+- Linux: Agentty's windows show its icon in the dock and the window switcher instead of a generic one.
+- Windows and Linux: Ctrl+C copies a selection in a chat, a diff and the file editor's table view (it took
+  Ctrl+Shift+C), and the table view's cut, paste and select all use plain Ctrl as well.
+- The Edit menu's Cut, Copy, Paste and Select All work in text fields, the file editor, tables, chats and diffs when
+  chosen with the pointer, and Cut cuts in an in-app browser page.
 
 ## [0.4.8] - 2026-11-18
 

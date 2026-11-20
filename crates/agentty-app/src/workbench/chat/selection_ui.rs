@@ -44,6 +44,8 @@ impl Workbench {
     pub(super) fn selection_ended(&mut self, id: EntityId, at: Point<Pixels>, cx: &mut Context<Self>) {
         if selectable::take_just_selected() {
             let Some(text) = selectable::selected_text() else { return };
+            // Linux: what the pointer selected is what a middle click pastes.
+            crate::platform::primary::set(text.clone(), cx);
             let at = selectable::bar_point(at);
             self.chat_select = Some(SelectUi { chat: id, at, text, terminal: false, kind: SelectUiKind::Bar });
             cx.notify();
@@ -196,23 +198,26 @@ impl Workbench {
                 pane.read(cx).agent_kind().and_then(crate::launch::PaneKind::agent) == Some(agentty_bridge::model::Agent::Claude)
             });
         let at = ui.at;
-        let row = |key: &'static str, label: String, keys: Option<&'static str>| {
-            div()
-                .id(key)
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_6()
-                .px_2()
-                .py_1p5()
-                .rounded_md()
-                .cursor_pointer()
-                .t_body()
-                .text_color(hex(Chrome::BRIGHT))
-                .hover(|s| s.bg(hex(Chrome::HOVER)))
-                .child(label)
-                .children(keys.map(|keys| div().t_small().text_color(hex(Chrome::MUTED)).child(keys)))
-        };
+        let row =
+            |key: &'static str, label: String, keys: Option<&'static str>| {
+                div()
+                    .id(key)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_6()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .t_body()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(label)
+                    .children(keys.map(|keys| {
+                        div().t_small().text_color(hex(Chrome::MUTED)).child(crate::keymap::display_in_text(keys).into_owned())
+                    }))
+            };
         let separator = || div().my_1().h(px(1.)).bg(hex(Chrome::BORDER));
         let panel = || {
             div()

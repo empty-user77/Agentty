@@ -6,6 +6,7 @@ use super::buffer::Pos;
 use super::lsp;
 use super::symbols;
 use super::{CodeEditor, Content};
+use crate::context_menu::Copyable as _;
 use crate::theme::{hex, Chrome};
 use gpui::{div, prelude::*, px, AnyElement, Context};
 use std::path::PathBuf;
@@ -111,6 +112,7 @@ impl CodeEditor {
             .font_family(crate::settings::terminal_font(cx))
             .text_size(px(12.))
             .text_color(hex(Chrome::FOREGROUND))
+            .copyable(lines.join("\n"))
             .children(lines.into_iter().enumerate().map(|(i, line)| {
                 // The signature first, the documentation after it quieter.
                 div().truncate().when(i > 0, |d| d.text_color(hex(Chrome::MUTED))).child(line)

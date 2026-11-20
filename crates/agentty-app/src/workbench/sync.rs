@@ -9,6 +9,7 @@
 
 use super::settings_page::{row_with_hint, section, switch};
 use super::{PaneKind, Workbench, Workspace};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -1752,11 +1753,9 @@ impl Workbench {
                 .t_body()
                 .child(input)
         };
-        let message = self
-            .sync
-            .message
-            .clone()
-            .map(|(text, error)| div().t_small().text_color(hex(if error { Chrome::ERROR } else { Chrome::SUCCESS })).child(text));
+        let message = self.sync.message.clone().map(|(text, error)| {
+            div().t_small().text_color(hex(if error { Chrome::ERROR } else { Chrome::SUCCESS })).copyable(text.clone()).child(text)
+        });
         let sqlite = match &self.sync.config.remote {
             Some(remote) => remote.is_sqlite(),
             None => self.sync.method == Method::Sqlite,

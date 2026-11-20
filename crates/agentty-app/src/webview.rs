@@ -117,6 +117,7 @@ fn file_in_root(view: Id, url: &str) -> bool {
 /// A standard editing command, as the Edit menu names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditCommand {
+    Cut,
     Copy,
     Paste,
     SelectAll,
@@ -132,7 +133,7 @@ pub fn perform_in_page(command: EditCommand) -> bool {
         unsafe {
             let Some(responder) = keyboard_responder(&*view) else { continue };
             let selector = match command {
-                // The Edit menu wires ⌘X to the same action as ⌘C, so a page's cut copies.
+                EditCommand::Cut => sel!(cut:),
                 EditCommand::Copy => sel!(copy:),
                 EditCommand::Paste => sel!(paste:),
                 EditCommand::SelectAll => sel!(selectAll:),

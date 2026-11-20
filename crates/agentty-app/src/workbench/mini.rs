@@ -4,6 +4,7 @@
 //! peek's ⤢ button (or the expand button) brings the full window back.
 
 use super::{status_label, Workbench};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::native;
@@ -151,7 +152,7 @@ impl MiniPeek {
 }
 
 impl gpui::Render for MiniPeek {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Dark like the mini window it opens from.
         let _dark = crate::theme::DarkOnly::hold();
         let title = self.pane.read(cx).display_title();
@@ -203,6 +204,8 @@ impl gpui::Render for MiniPeek {
                     })),
             )
             .child(div().flex_1().min_h_0().child(self.pane.clone()))
+            // The terminal's right-click menu, and the Edit menu's commands for it.
+            .children(crate::context_menu::render(window, cx))
     }
 }
 
@@ -398,7 +401,7 @@ impl Render for MiniView {
                             )
                             .child(div().text_color(hex(Chrome::MUTED)).child(ago)),
                     )
-                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(bubble.text))
+                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).copyable(bubble.text.clone()).child(bubble.text))
                     .children(answers)
                     // Tail pointing down at the panel.
                     .child(
@@ -551,7 +554,16 @@ impl Render for MiniView {
             )
             .child(rows);
 
-        div().size_full().flex().flex_col().gap_2().p(px(4.)).child(bubbles).child(panel).into_any_element()
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p(px(4.))
+            .child(bubbles)
+            .child(panel)
+            .children(crate::context_menu::render(window, cx))
+            .into_any_element()
     }
 }
 
@@ -784,6 +796,7 @@ impl Workbench {
             is_minimizable: false,
             display_id: display.as_ref().map(|d| d.id()),
             window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         let workbench = cx.entity();
@@ -836,6 +849,7 @@ impl Workbench {
             is_minimizable: false,
             display_id: display.as_ref().map(|d| d.id()),
             window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         let workbench = cx.entity();

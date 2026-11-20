@@ -135,6 +135,24 @@ pub(in crate::workbench) fn selected_text() -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+/// Selects all of chat `chat`'s text that has been drawn (the messages scrolled through so far:
+/// a long conversation draws its messages as they come into view); false when it has none.
+pub(in crate::workbench) fn select_all(chat: u64) -> bool {
+    let ends = BLOCKS.with(|blocks| {
+        let blocks = blocks.borrow();
+        let mut drawn = blocks.range((chat, 0, 0)..=(chat, usize::MAX, usize::MAX));
+        let (first, _) = drawn.next()?;
+        let (last, text) = drawn.next_back().unwrap_or((first, &blocks[first]));
+        Some((*first, *last, text.len()))
+    });
+    let Some((first, last, end)) = ends else { return false };
+    SELECTION.with(|selection| {
+        *selection.borrow_mut() =
+            Some(Selection { anchor: Point { place: first, at: 0 }, head: Point { place: last, at: end }, dragging: false });
+    });
+    true
+}
+
 /// Whether a selection is there or being made (a press on text, the button still down perhaps).
 pub(in crate::workbench) fn has_selection() -> bool {
     SELECTION.with(|s| s.borrow().is_some())
