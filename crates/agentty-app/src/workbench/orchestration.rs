@@ -219,6 +219,9 @@ pub struct Team {
     pub all: usize,
     /// Agents of its plan that have not started yet (not in `all`).
     pub pending: usize,
+    /// The orchestrator itself waits for the user (an approval, a question, a folder to trust):
+    /// nothing moves until they answer in its pane, and the page says so.
+    pub asks: bool,
 }
 
 /// The orchestrator's pane as seen now.
@@ -234,7 +237,20 @@ pub struct Seen {
     pub team: Team,
     /// It was just told something and has not started on it yet.
     pub settling: bool,
+    /// Its plan is registered (`agentty plan`).
+    pub planned: bool,
+    /// It rests without having said its turn was over: the pane gave up waiting for that word
+    /// (the Stop hook never came) and says it is waiting.
+    pub resting: bool,
+    /// Milliseconds since anything was heard from its pane.
+    pub quiet_ms: u64,
 }
+
+/// How long an orchestrator may rest between waves — its turn over, nothing running, agents of
+/// its plan not started yet — before that is taken for the end. It ends its turn while it waits
+/// for work it left running in the background and starts the next wave when that reports; read
+/// as the end at once, the page said "done" in the middle of a run.
+pub const RESTS_BETWEEN_WAVES_MS: u64 = 5 * 60 * 1000;
 
 /// The stage after seeing the pane: (stage, the process seen). Stopped stays until the user resumes;
 /// a new process while it planned or ran means it was cut off.
@@ -269,9 +285,16 @@ pub fn next_stage(stage: Stage, seen_since: Option<u64>, seen: &Seen) -> (Stage,
         // Its turn is over with nothing running: whatever was cut off before, it has dealt with.
         if team.all == 0 {
             Stage::Ready
+        } else if team.pending > 0 && seen.quiet_ms < RESTS_BETWEEN_WAVES_MS {
+            // Agents of the plan are still to come: it rests between waves (see the constant).
+            Stage::Running
         } else {
             Stage::Done
         }
+    } else if stage == Stage::Planning && seen.planned && seen.resting && team.all == 0 {
+        // Its plan is in and it waits for an answer, but the end of its turn was never reported:
+        // the plan is ready all the same (and not "planning" for as long as nobody types).
+        Stage::Ready
     } else if stage == Stage::Running && team.all > 0 && team.cut_off == 0 && team.pending == 0 {
         // Resting in the same process with its whole team done (the last agent's report came in
         // after its turn, so the pane says idle rather than finished): done.
@@ -522,6 +545,9 @@ impl Workbench {
                         turn_over: matches!(view.status, crate::terminal::AgentStatus::Finished(_)),
                         team: self.team_of(&record.session, Some(pane), cx),
                         settling,
+                        planned: !record.plan.is_empty(),
+                        resting: view.status == crate::terminal::AgentStatus::Idle,
+                        quiet_ms: now.saturating_sub(view.last_activity_ms),
                     }
                 }
                 None => Seen { settling, ..Seen::default() },
@@ -560,6 +586,9 @@ impl Workbench {
     pub(super) fn stage_words(&self, stage: Stage, team: Team, cx: &gpui::App) -> (String, u32) {
         let (done, all) = (team.done.to_string(), (team.all + team.pending).to_string());
         match stage {
+            // Planning or running, and stopped at a question of its own: that is what the user
+            // has to know, not that it is "planning".
+            Stage::Planning | Stage::Running if team.asks => (t(cx, "orch.stage_asks").to_string(), CUT),
             Stage::Planning => (t(cx, "orch.stage_planning").to_string(), RUNNING),
             Stage::Ready => (t(cx, "orch.plan_ready_hint_pane").to_string(), RUNNING),
             Stage::Running if team.running > 0 => {
@@ -1026,9 +1055,51 @@ impl Workbench {
 mod tests {
     use super::*;
 
+    /// Its turn over and nothing running, but agents of the plan have not started: it rests
+    /// between waves (waiting for background work to report), and is done only when it stays so.
+    #[test]
+    fn a_rest_between_waves_is_not_the_end() {
+        let rest = |pending: usize, quiet_ms: u64| {
+            let mut seen = seen(false, true, (0, 1, 0, 1));
+            seen.team.pending = pending;
+            seen.quiet_ms = quiet_ms;
+            seen
+        };
+        assert_eq!(next_stage(Stage::Running, Some(100), &rest(1, 20_000)).0, Stage::Running);
+        // Every agent of the plan ran: done at once.
+        assert_eq!(next_stage(Stage::Running, Some(100), &rest(0, 20_000)).0, Stage::Done);
+        // Nothing more came for a long while: it ended without the rest of its plan.
+        assert_eq!(next_stage(Stage::Running, Some(100), &rest(1, RESTS_BETWEEN_WAVES_MS + 1)).0, Stage::Done);
+    }
+
+    /// The end of the planning turn was never reported (the pane says it is waiting, not that it
+    /// finished): with the plan in, it is ready — not planning for as long as nobody types.
+    #[test]
+    fn a_plan_is_ready_when_its_turn_end_was_never_reported() {
+        let resting = |planned: bool| Seen { planned, resting: true, ..seen(false, false, (0, 0, 0, 0)) };
+        assert_eq!(next_stage(Stage::Planning, Some(100), &resting(true)).0, Stage::Ready);
+        // No plan yet: it only stopped to ask something, or has not started.
+        assert_eq!(next_stage(Stage::Planning, Some(100), &resting(false)).0, Stage::Planning);
+        // Still in its turn, or thinking (not resting): planning.
+        let thinking = Seen { planned: true, ..seen(true, false, (0, 0, 0, 0)) };
+        assert_eq!(next_stage(Stage::Planning, Some(100), &thinking).0, Stage::Planning);
+        let quiet = Seen { planned: true, ..seen(false, false, (0, 0, 0, 0)) };
+        assert_eq!(next_stage(Stage::Planning, Some(100), &quiet).0, Stage::Planning);
+        // A run is not taken back to its plan by a rest.
+        let run = Seen { planned: true, resting: true, ..seen(false, false, (0, 1, 0, 3)) };
+        assert_ne!(next_stage(Stage::Running, Some(100), &run).0, Stage::Ready);
+    }
+
     fn seen(in_turn: bool, turn_over: bool, team: (usize, usize, usize, usize)) -> Seen {
         let (running, done, cut_off, all) = team;
-        Seen { alive: true, since: Some(100), in_turn, turn_over, team: Team { running, done, cut_off, all, pending: 0 }, settling: false }
+        Seen {
+            alive: true,
+            since: Some(100),
+            in_turn,
+            turn_over,
+            team: Team { running, done, cut_off, all, ..Team::default() },
+            ..Seen::default()
+        }
     }
 
     #[test]
@@ -1201,8 +1272,8 @@ mod tests {
 
     #[test]
     fn a_running_team_with_agents_yet_to_start_is_not_done() {
-        let mut team = Team { running: 0, done: 2, cut_off: 0, all: 2, pending: 3 };
-        let seen = Seen { alive: true, since: Some(100), in_turn: false, turn_over: false, team, settling: false };
+        let mut team = Team { running: 0, done: 2, cut_off: 0, all: 2, pending: 3, asks: false };
+        let seen = Seen { alive: true, since: Some(100), team, ..Seen::default() };
         assert_eq!(next_stage(Stage::Running, Some(100), &seen).0, Stage::Running);
         team.pending = 0;
         let seen = Seen { team, ..seen };
