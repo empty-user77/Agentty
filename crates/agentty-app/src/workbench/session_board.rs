@@ -2112,7 +2112,8 @@ impl Workbench {
             let unseen = plan.iter().filter(|a| !runs.iter().any(|(name, ..)| name.as_ref() == Some(&a.name))).count();
             pending = unseen.min(plan.len().saturating_sub(runs.len()));
         }
-        let mut team = super::orchestration::Team { pending, ..Default::default() };
+        let asks = pane.is_some_and(|pane| pane.read(cx).status.needs_user());
+        let mut team = super::orchestration::Team { pending, asks, ..Default::default() };
         for (_, _, state) in &runs {
             match state {
                 NodeState::Done => team.done += 1,

@@ -31,6 +31,11 @@ All notable changes to this project are documented here. The format follows
   copied image pastes into a terminal as a file.
 
 ### Fixed
+- Orchestration: a plan could stay at "Planning" after the orchestrator had finished it (the spinner still on screen
+  when its turn ended was read as new work), and a run could say "Done" while the orchestrator only rested between
+  waves. An orchestrator that waits for you (a folder to trust, an approval, a question) is shown as waiting, not as
+  planning. An agent of another CLI (Codex, Gemini) run by a Claude Code orchestrator is counted when it starts and
+  finishes.
 - Linux: Agentty's windows show its icon in the dock and the window switcher instead of a generic one.
 - Windows and Linux: Ctrl+C copies a selection in a chat, a diff and the file editor's table view (it took
   Ctrl+Shift+C), and the table view's cut, paste and select all use plain Ctrl as well.

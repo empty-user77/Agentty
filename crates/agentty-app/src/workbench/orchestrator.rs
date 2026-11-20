@@ -152,7 +152,9 @@ pub fn prompt(
 column: claude, or one of these):
 {}
 Run one from a subagent's Bash (or your own), in this folder, with everything it needs in its prompt; read what it \
-produces and have it checked like any other agent's work. A change that should land as its own branch in a git \
+produces and have it checked like any other agent's work. Such an agent of the plan does not start through the Agent \
+tool, so Agentty's page cannot see it: right before starting it, run `agentty plan --start <name>` with its name from \
+the plan, and once it has finished and you have read what it produced, `agentty plan --done <name>`. A change that should land as its own branch in a git \
 repository can go to a Codex session instead: `\"agent\": \"codex\"` in that task of `agentty tasks --plan`. Never \
 turn off their permission or sandbox checks (no `--yolo`, no `--dangerously-…` flags).
 
@@ -966,6 +968,10 @@ mod tests {
         assert!(text.contains("`/opt/example/bin/codex exec --skip-git-repo-check"));
         assert!(!text.contains("{cmd}"));
         assert!(text.contains("an `agent`"));
+        // Another CLI does not start through the Agent tool: the lead says when it starts and
+        // finishes, or the page would count it as never run. Without one, nothing is said of it.
+        assert!(text.contains("agentty plan --start <name>") && text.contains("agentty plan --done <name>"));
+        assert!(!straight.contains("agentty plan --start"));
         assert!(text.contains("no `--yolo`"));
         assert!(text.ends_with("Talk to me in English."));
     }
