@@ -56,7 +56,8 @@ fn action_in(context: &KeyContext, command: EditCommand) -> Option<Option<Box<dy
         match command {
             EditCommand::Copy => Some(Box::new(crate::workbench::CopyChatSelection)),
             EditCommand::Paste => Some(Box::new(crate::workbench::PasteIntoChat)),
-            EditCommand::Cut | EditCommand::SelectAll => None,
+            EditCommand::SelectAll => Some(Box::new(crate::workbench::SelectAllChat)),
+            EditCommand::Cut => None,
         }
     } else {
         return None;

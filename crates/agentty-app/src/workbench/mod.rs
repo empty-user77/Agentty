@@ -201,6 +201,7 @@ actions!(
         ToggleChatView,
         CopyChatSelection,
         PasteIntoChat,
+        SelectAllChat,
         ToggleVoiceInput,
     ]
 );

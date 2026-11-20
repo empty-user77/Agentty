@@ -71,11 +71,56 @@ pub fn pasted_paths(cx: &gpui::App) -> Vec<PathBuf> {
     if !files.is_empty() {
         return files;
     }
+    // Wayland hands copied files over as text (their addresses or paths, a line each).
+    if let Some(copied) = item.text() {
+        let files = files_in_text(&copied);
+        if !files.is_empty() {
+            return files.iter().map(|path| terminal_safe(path)).collect();
+        }
+    }
     // Text beside a picture of it (a spreadsheet's cells) is pasted as the text.
     if text {
         return Vec::new();
     }
     image.and_then(|image| write_image(image.format, &image.bytes)).into_iter().collect()
+}
+
+/// The files a file manager's copy names when it reaches us as text: every line a `file://`
+/// address (Dolphin, Nautilus) of a file that exists. Anything else — a sentence, a path someone
+/// typed, an address of something that is not there — is text, and empty comes back.
+fn files_in_text(text: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some(path) = line.strip_prefix("file://").map(percent_decoded) else { return Vec::new() };
+        // `file://host/path` names another machine's file.
+        let path = PathBuf::from(path);
+        if !path.is_absolute() || !path.exists() {
+            return Vec::new();
+        }
+        files.push(path);
+    }
+    files
+}
+
+/// `%20` and the like in a file address, as the bytes they stand for.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = (bytes[at] == b'%').then(|| text.get(at + 1..at + 3)).flatten().and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match hex {
+            Some(byte) => {
+                out.push(byte);
+                at += 3;
+            }
+            None => {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether `paths` is a copied image that was written out for this paste (not files the user
@@ -136,6 +181,25 @@ mod tests {
         let plain = dir.join("plain.txt");
         std::fs::write(&plain, b"x").unwrap();
         assert_eq!(terminal_safe(&plain), plain);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn copied_files_are_read_from_their_addresses() {
+        let dir = std::env::temp_dir().join(format!("agentty-uri-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("my report.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let address = format!("file://{}", file.display().to_string().replace(' ', "%20"));
+        assert_eq!(files_in_text(&format!("{address}\r\n")), vec![file.clone()]);
+        assert_eq!(files_in_text(&format!("{address}\n{address}\n")).len(), 2);
+        // Text, a typed path, a file that is not there, a mix: all text.
+        assert!(files_in_text("see file:///etc/hosts for it").is_empty());
+        assert!(files_in_text(&file.display().to_string()).is_empty());
+        assert!(files_in_text("file:///no/such/file-agentty").is_empty());
+        assert!(files_in_text(&format!("{address}\nand a note")).is_empty());
+        assert!(files_in_text("").is_empty());
+        assert_eq!(percent_decoded("a%20b%2Fc%zz%4"), "a b/c%zz%4");
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -1,5 +1,6 @@
 //! AI usage dashboard built from local Claude Code / Codex transcripts.
 
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -256,6 +257,7 @@ impl Render for UsageView {
                     .bg(hex(0x2a2a2a))
                     .t_small()
                     .text_color(hex(Chrome::MUTED))
+                    .copyable(root_of(self.agent, self.accounts.of_agent(self.agent)).display().to_string())
                     .child(crate::ui::tilde(&root_of(self.agent, self.accounts.of_agent(self.agent)))),
             )
             .child(

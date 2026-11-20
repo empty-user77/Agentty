@@ -418,6 +418,9 @@ pub struct TerminalView {
     pub search: Option<(std::rc::Rc<Vec<Match>>, usize)>,
     /// A mouse press was reported to the program; its drag and release go there too.
     mouse_reporting: bool,
+    /// The right (2) or middle (1) button, pressed while a program reads the mouse: it was told
+    /// of the press and is owed the release.
+    other_button_reported: Option<u8>,
     last_mouse_cell: Option<(usize, usize)>,
     /// Link under the pointer: (grid line, start column, end column).
     hover_link: Option<(i32, usize, usize)>,
@@ -621,6 +624,7 @@ impl TerminalView {
             kept_selection: None,
             search: None,
             mouse_reporting: false,
+            other_button_reported: None,
             last_mouse_cell: None,
             hover_link: None,
             hover_target: None,
@@ -2545,6 +2549,11 @@ impl TerminalView {
         use crate::context_menu::Item;
         window.focus(&self.focus_handle, cx);
         self.activate(cx);
+        // A program that reads the mouse itself (vim, tmux, a full-screen agent) has its own use
+        // for the button; Shift brings this menu up over it.
+        if self.report_other_button(2, event) {
+            return cx.stop_propagation();
+        }
         self.restore_selection();
         let selected = self.backend.as_ref().and_then(|b| b.term.lock().selection_to_string()).is_some_and(|text| !text.is_empty());
         let view = cx.entity().downgrade();
@@ -2570,8 +2579,8 @@ impl TerminalView {
     /// Middle click (Linux): pastes what the pointer selected last, wherever that was. A program
     /// that reads the mouse itself (vim, a pager) keeps the click unless Shift is held.
     fn on_middle_click(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mouse_captured(event.modifiers.shift) {
-            return;
+        if self.report_other_button(1, event) {
+            return cx.stop_propagation();
         }
         let Some(text) = crate::platform::primary::get(cx) else { return };
         window.focus(&self.focus_handle, cx);
@@ -2579,6 +2588,27 @@ impl TerminalView {
         self.paste_text(&text);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    /// Tells a program that reads the mouse of a right (2) or middle (1) press; false when none
+    /// does, or Shift is held, and the press is Agentty's.
+    fn report_other_button(&mut self, button: u8, event: &MouseDownEvent) -> bool {
+        if !self.mouse_captured(event.modifiers.shift) {
+            return false;
+        }
+        if let Some(cell) = self.viewport_cell(event.position) {
+            self.other_button_reported = Some(button);
+            self.report_mouse(button, cell, true);
+        }
+        true
+    }
+
+    fn on_other_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(button) = self.other_button_reported.take() {
+            if let Some(cell) = self.viewport_cell(event.position) {
+                self.report_mouse(button, cell, false);
+            }
+        }
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -2722,6 +2752,10 @@ impl Render for TerminalView {
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up(MouseButton::Right, cx.listener(Self::on_other_mouse_up))
+            .on_mouse_up_out(MouseButton::Right, cx.listener(Self::on_other_mouse_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_other_mouse_up))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::on_other_mouse_up))
             .on_scroll(cx.listener(Self::on_scroll))
             .relative()
             .child(TerminalElement { view: cx.entity(), focus: self.focus_handle.clone() })

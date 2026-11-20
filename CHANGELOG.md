@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows
 - Text that cannot be selected is copied with a right-click → Copy: errors and notices, run log lines, the in-app
   browser's network details, commit messages and Git errors, a past session's messages, subagent output, database
   results, plugin logs, paths and command lines across the pages.
+- ⌘A / Ctrl+A in a chat's text selects all of it that has been shown, and a Word document's paragraphs and tables
+  have Copy in their right-click menu (a file that cannot be edited too).
+- A program that reads the mouse itself (vim, tmux) gets the right and middle buttons in a terminal; Shift keeps
+  them for Agentty's menu and paste.
 - A copied file or image pasted into a chat's message box, the idea chat or the orchestrator's goal is attached.
 - Windows and Linux: Ctrl+Insert copies and Shift+Insert pastes everywhere, and text fields also take the terminal's
   Ctrl+Shift+C / Ctrl+Shift+V.

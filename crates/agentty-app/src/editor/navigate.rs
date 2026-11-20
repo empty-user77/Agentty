@@ -13,6 +13,7 @@ use super::lsp;
 use super::project_index::{self, Location, Usage};
 use super::symbols;
 use super::{CodeEditor, Content, EditorEvent};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -1037,6 +1038,7 @@ impl CodeEditor {
             list = list.child(
                 div()
                     .id(("editor-picker-row", index))
+                    .copyable(if row.detail.is_empty() { row.label.clone() } else { format!("{} {}", row.label, row.detail).into() })
                     .flex()
                     .items_center()
                     .gap_2()

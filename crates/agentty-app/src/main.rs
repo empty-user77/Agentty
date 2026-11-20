@@ -571,6 +571,7 @@ fn bind_keys(cx: &mut App) {
             key("cmd-c", terminal::Copy, Some("Terminal")),
             key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
             key("cmd-v", workbench::PasteIntoChat, Some("ChatReading")),
+            key("cmd-a", workbench::SelectAllChat, Some("ChatReading")),
             key("cmd-c", workbench::diff_body::DiffCopy, Some(workbench::diff_body::CONTEXT)),
             key("cmd-a", workbench::diff_body::DiffSelectAll, Some(workbench::diff_body::CONTEXT)),
             key("cmd-k", workbench::diff_body::DiffAsk, Some(workbench::diff_body::CONTEXT)),

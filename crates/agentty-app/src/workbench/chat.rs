@@ -989,6 +989,15 @@ impl Workbench {
         }
     }
 
+    /// ⌘A while the chat's text has the keyboard: all of it that has been drawn is selected, for
+    /// ⌘C (the bar over a selection belongs to one made with the pointer).
+    fn select_all_chat(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        if selectable::select_all(id.as_u64()) {
+            self.chat_select = None;
+            cx.notify();
+        }
+    }
+
     /// A paste while the chat's text has the keyboard (after a click or a selection there): it
     /// goes into the message being written, as typing does.
     fn paste_into_chat(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
@@ -2132,6 +2141,7 @@ impl Workbench {
                 }
             }))
             .on_action(cx.listener(move |this, _: &crate::workbench::PasteIntoChat, window, cx| this.paste_into_chat(id, window, cx)))
+            .on_action(cx.listener(move |this, _: &crate::workbench::SelectAllChat, _, cx| this.select_all_chat(id, cx)))
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseUpEvent, window, cx| {

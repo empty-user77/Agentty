@@ -33,6 +33,7 @@ Text fields, the file editor and its table view, a chat's text and a diff use pl
 
 - On Windows and Linux, **Ctrl+Insert** copies and **Shift+Insert** pastes everywhere, and a text field also takes the terminal's Ctrl+Shift+C / Ctrl+Shift+V.
 - **Right-click** a terminal, the file editor's text or a diff for Copy, Paste and Select All (what applies there). Text that cannot be selected (an error, a log line, a path, a commit message, a query result) is copied with a right-click → **Copy**.
+- **⌘A / Ctrl+A** in a chat's text selects all of it that has been shown so far. In a program that reads the mouse itself (vim, tmux), the right and middle buttons go to the program; hold **Shift** for Agentty's menu and paste.
 - **Linux**: text selected with the pointer is pasted with a middle click, in a terminal, a text field or the file editor.
 - A copied file or image pasted into a terminal goes in as its path; pasted into a chat's message box it is attached.
 

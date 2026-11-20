@@ -4,6 +4,7 @@
 //! peek's ⤢ button (or the expand button) brings the full window back.
 
 use super::{status_label, Workbench};
+use crate::context_menu::Copyable as _;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::native;
@@ -400,7 +401,7 @@ impl Render for MiniView {
                             )
                             .child(div().text_color(hex(Chrome::MUTED)).child(ago)),
                     )
-                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(bubble.text))
+                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).copyable(bubble.text.clone()).child(bubble.text))
                     .children(answers)
                     // Tail pointing down at the panel.
                     .child(
@@ -553,7 +554,16 @@ impl Render for MiniView {
             )
             .child(rows);
 
-        div().size_full().flex().flex_col().gap_2().p(px(4.)).child(bubbles).child(panel).into_any_element()
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p(px(4.))
+            .child(bubbles)
+            .child(panel)
+            .children(crate::context_menu::render(window, cx))
+            .into_any_element()
     }
 }
 

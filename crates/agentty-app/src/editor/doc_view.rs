@@ -4,6 +4,7 @@
 
 use super::docx::{self, Block, Kind};
 use super::{CodeEditor, Content};
+use crate::context_menu::Copyable as _;
 use crate::i18n::t;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -46,6 +47,8 @@ pub(crate) struct ParagraphEdit {
 pub(crate) struct ParagraphMenu {
     at: Point<Pixels>,
     index: usize,
+    /// The paragraph's text (a table's rows, their cells apart by tabs), for Copy.
+    text: String,
 }
 
 impl CodeEditor {
@@ -273,6 +276,8 @@ impl CodeEditor {
             }
             at = end;
         }
+        let copied = text.clone();
+        let for_menu = text.clone();
         let body = match input {
             // A column stretches the field to the page's width (it has none of its own).
             Some(input) => div().w_full().flex().flex_col().child(input).into_any_element(),
@@ -317,17 +322,20 @@ impl CodeEditor {
                         MouseButton::Right,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             this.commit_paragraph(cx);
-                            this.paragraph_menu = Some(ParagraphMenu { at: event.position, index });
+                            this.paragraph_menu = Some(ParagraphMenu { at: event.position, index, text: for_menu.clone() });
                             cx.notify();
                         }),
                     )
             })
+            // A file that cannot be edited has no paragraph menu: its text is still copied.
+            .when(!editable, |d| d.copyable(copied))
             .child(body)
     }
 
     fn render_paragraph_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.paragraph_menu.as_ref()?;
         let index = menu.index;
+        let text = menu.text.clone();
         let item = |id: &'static str, label: &'static str, action: MenuAction| {
             crate::ui::menu_item(
                 id,
@@ -341,6 +349,18 @@ impl CodeEditor {
                 this.paragraph_menu = None;
                 cx.notify();
             }))
+            .when(!text.is_empty(), |list| {
+                list.child(crate::ui::menu_item(
+                    "doc-copy",
+                    t(cx, "input.copy"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+                        this.paragraph_menu = None;
+                        cx.notify();
+                    }),
+                ))
+                .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            })
             .child(item("doc-above", "doc.insert_above", MenuAction::Above))
             .child(item("doc-below", "doc.insert_below", MenuAction::Below))
             .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
@@ -358,6 +378,8 @@ enum MenuAction {
 
 fn render_table(index: usize, rows: &[Vec<String>], editable: bool, cx: &mut Context<CodeEditor>) -> impl IntoElement {
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    // What Copy takes: the rows a line each, their cells apart by tabs (a spreadsheet's form).
+    let table_text = rows.iter().map(|row| row.join("\t")).collect::<Vec<_>>().join("\n");
     div()
         .id(("doc-table", index))
         .my_2()
@@ -368,15 +390,17 @@ fn render_table(index: usize, rows: &[Vec<String>], editable: bool, cx: &mut Con
         .rounded_sm()
         .t_small()
         .when(editable, |d| {
+            let text = table_text.clone();
             d.on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     this.commit_paragraph(cx);
-                    this.paragraph_menu = Some(ParagraphMenu { at: event.position, index });
+                    this.paragraph_menu = Some(ParagraphMenu { at: event.position, index, text: text.clone() });
                     cx.notify();
                 }),
             )
         })
+        .when(!editable, |d| d.copyable(table_text.clone()))
         .children(rows.iter().enumerate().map(|(r, row)| {
             div()
                 .flex()

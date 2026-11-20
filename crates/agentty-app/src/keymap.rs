@@ -535,6 +535,7 @@ mod tests {
         ("cmd-a", Some("DiffBody")),
         ("cmd-k", Some("DiffBody")),
         ("cmd-v", Some("ChatReading")),
+        ("cmd-a", Some("ChatReading")),
         ("cmd-v", Some("Terminal")),
         ("cmd-k", Some("Terminal")),
         ("cmd-a", Some("Terminal")),
