@@ -215,6 +215,7 @@ pub fn recorded() {
 }
 
 /// Whether a signal handler already left this run's record (it removes the file itself).
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn note_recorded_by_signal() {
     RECORDED.store(true, Ordering::Relaxed);
 }

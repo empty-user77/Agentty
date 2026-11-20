@@ -63,6 +63,7 @@ pub fn measured_at() -> i64 {
 
 /// Copies the ready text into `out` and says how much of it there is. Nothing here locks or
 /// allocates: this is what a signal handler calls.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn copy_into(out: &mut [u8; ROOM]) -> usize {
     let length = LENGTH.load(Ordering::Acquire).min(ROOM);
     for (byte, slot) in out.iter_mut().zip(&TEXT[..length]) {
@@ -71,6 +72,7 @@ pub fn copy_into(out: &mut [u8; ROOM]) -> usize {
     length
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub const fn room() -> usize {
     ROOM
 }
@@ -116,6 +118,8 @@ fn group_megabytes(text: &str) -> Option<u64> {
 }
 
 pub fn measure() -> Measured {
+    // Filled in by the systems that say more (nothing more on Windows).
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut measured = Measured { uptime_secs: STARTED.get().map_or(0, |started| started.elapsed().as_secs()), ..Measured::default() };
     #[cfg(target_os = "linux")]
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
@@ -204,6 +208,7 @@ pub fn render(measured: &Measured, notes: &BTreeMap<&'static str, String>) -> St
 
 /// Where the app runs: the system and its version, and on Linux the kind of session.
 fn system_notes() -> Vec<(&'static str, String)> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut notes = Vec::new();
     #[cfg(target_os = "linux")]
     {
