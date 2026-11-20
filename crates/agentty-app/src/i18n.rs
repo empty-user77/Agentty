@@ -447,6 +447,13 @@ strings! {
     "orch.page_title" => ["Orchestrator", "오케스트레이터", "オーケストレーター", "编排器", "Orchestrator"],
     "orch.list" => ["ORCHESTRATIONS", "오케스트레이션", "オーケストレーション", "编排", "ORCHESTRIERUNGEN"],
     "orch.stage_planning" => ["Planning", "계획 세우는 중", "計画中", "规划中", "Plant"],
+    "orch.stage_asks" => [
+        "Waiting for your answer in its pane",
+        "오케스트레이터 창에서 답을 기다리는 중",
+        "オーケストレーターのペインで回答待ち",
+        "正在其窗格中等待你的回答",
+        "Wartet in seinem Bereich auf deine Antwort"
+    ],
     "orch.stage_running" => ["Running · {running} agents at work · {done}/{all} done", "실행 중 · 에이전트 {running}개 작업 중 · {done}/{all} 완료", "実行中 · エージェント {running} 件が作業中 · {done}/{all} 完了", "运行中 · {running} 个智能体工作中 · 已完成 {done}/{all}", "Läuft · {running} Agenten arbeiten · {done}/{all} fertig"],
     "orch.stage_running_lead" => ["Running · {done}/{all} done", "실행 중 · {done}/{all} 완료", "実行中 · {done}/{all} 完了", "运行中 · 已完成 {done}/{all}", "Läuft · {done}/{all} fertig"],
     "orch.stage_running_short" => ["Running", "실행 중", "実行中", "运行中", "Läuft"],

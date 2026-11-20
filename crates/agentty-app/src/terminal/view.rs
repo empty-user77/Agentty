@@ -42,6 +42,18 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a turn seen on screen still counts as shown: a read can land mid-repaint, and what
 /// follows from it (a row, the stop button) must not blink with it.
 const SCREEN_BUSY_HOLD: Duration = Duration::from_secs(3);
+/// How long after its Stop hook an agent's screen may still show the spinner of the turn that
+/// just ended (it stays up while the hook itself runs, and the hook is what tells us).
+const STOP_SETTLES: Duration = Duration::from_secs(4);
+
+/// Whether a busy screen means work is going on. Not right after the agent said its turn was
+/// over: the spinner still there is that turn's (the Stop hook runs under it). Read as new work,
+/// it took a finished turn back to "working", and with no further hook to end it the pane said
+/// "thinking" for a minute and a half and then "waiting" — never "finished", which an
+/// orchestration waits for to show its plan or its result.
+fn busy_screen_is_work(finished: bool, since_stop: Option<Duration>) -> bool {
+    !(finished && since_stop.is_some_and(|since| since < STOP_SETTLES))
+}
 /// Shortest gap between repaints caused by program output. A TUI that redraws itself hundreds of
 /// times a second (Codex) would otherwise redraw the whole window that often — burning CPU and
 /// making the mouse pointer flicker, because every frame re-applies the platform cursor.
@@ -209,6 +221,9 @@ pub struct ScreenState {
     pub interrupted: bool,
     /// Claude Code holds a message from another session until the user decides (also a `question`).
     pub held_message: bool,
+    /// The agent asks whether to trust the folder before it starts (also a `question`): no turn
+    /// has begun, so no hook says it waits.
+    pub trust: bool,
 }
 
 /// A screen row as text. A wide character (Korean, say) takes two cells, the second one blank: that
@@ -341,6 +356,11 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
         if lower.contains("enter to select") && (lower.contains("esc to cancel") || lower.contains("to navigate")) {
             state.question = true;
         }
+        // Claude Code's and Codex's first question in a folder they have not been in.
+        if lower.contains("yes, i trust this folder") || lower.contains("do you trust the contents of this directory") {
+            state.question = true;
+            state.trust = true;
+        }
     }
     if state.permission.is_some() {
         state.question = false;
@@ -441,6 +461,8 @@ pub struct TerminalView {
     live_tool_pid: Option<u32>,
     /// When Esc was last pressed while the agent worked (interrupt detection).
     esc_at: Option<Instant>,
+    /// When the agent's Stop hook last said its turn was over (see `busy_screen_is_work`).
+    stopped_at: Option<Instant>,
     /// Consecutive probes without the busy hint while marked as working.
     quiet_ticks: u8,
     /// When a status check last saw a running turn on screen.
@@ -636,6 +658,7 @@ impl TerminalView {
             live_tool: None,
             live_tool_pid: None,
             esc_at: None,
+            stopped_at: None,
             quiet_ticks: 0,
             screen_busy_at: None,
             ask_gate: AskGate::default(),
@@ -1163,7 +1186,9 @@ impl TerminalView {
                 let label = self.last_tool.as_ref().map(|(tool, target)| tool_label(tool, target.as_deref())).or(Some(prompt));
                 self.enter_waiting(AgentStatus::Permission(label.clone()), NoticeKind::Permission, label, cx);
             }
-        } else if screen.busy {
+        } else if screen.busy
+            && busy_screen_is_work(matches!(self.status, AgentStatus::Finished(_)), self.stopped_at.map(|at| at.elapsed()))
+        {
             self.screen_busy_at = Some(Instant::now());
             self.quiet_ticks = 0;
             self.ask_gate.resume();
@@ -1175,7 +1200,11 @@ impl TerminalView {
         // pause: it has to count here too, or the pane waits on the user with nothing said.
         // A hook-reported request shown as a selection (Claude Code's `AskUserQuestion` comes with
         // a `PermissionRequest`) is still waiting: it must not go quiet and come back as a new question.
-        } else if screen.question && (matches!(self.status, AgentStatus::Working | AgentStatus::Thinking) || self.status.needs_user()) {
+        } else if screen.question
+            && (matches!(self.status, AgentStatus::Working | AgentStatus::Thinking)
+                || self.status.needs_user()
+                || (screen.trust && self.status == AgentStatus::Idle))
+        {
             self.quiet_ticks = 0;
             if !self.status.needs_user() {
                 self.enter_waiting(AgentStatus::Question(None), NoticeKind::Question, None, cx);
@@ -1767,6 +1796,7 @@ impl TerminalView {
             }
             SignalKind::Stop => {
                 self.ask_gate.resume();
+                self.stopped_at = Some(Instant::now());
                 self.status = AgentStatus::Finished(message.clone());
                 self.attention = true;
                 // Codex says what it answered; Claude Code's Stop hook does not, so the notice waits
@@ -3665,6 +3695,21 @@ mod screen_tests {
         assert_eq!(super::row_text(cells.into_iter()), "한글 a");
     }
 
+    /// The question an agent asks before its first turn in a folder it does not know: it waits
+    /// for an answer, and no hook says so.
+    #[test]
+    fn the_folder_trust_question_is_a_question() {
+        let claude = lines(
+            "Accessing workspace:\n\n/tmp/project\n\nQuick safety check: Is this a project you created or one you trust?\n\n❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm · Esc to cancel",
+        );
+        let seen = classify_screen(&claude);
+        assert!(seen.question && seen.trust && !seen.busy && seen.permission.is_none());
+        let codex = lines("> Do you trust the contents of this directory?\n\n› 1. Yes, continue\n  2. No, quit");
+        assert!(classify_screen(&codex).trust);
+        // An ordinary prompt is not that question.
+        assert!(!classify_screen(&lines("> fix the bug\n\n─────\n>")).trust);
+    }
+
     #[test]
     fn detects_busy_and_prompts() {
         let claude = lines("> fix the bug\n\n✽ Pondering… (12s · ↑ 1.2k tokens · esc to interrupt)\n\n─────\n>");
@@ -3889,6 +3934,23 @@ fn mouse_report(button: u8, (column, row): (usize, usize), pressed: bool, sgr: b
     let code = if pressed { button } else { 3 };
     let (x, y) = (column + 1 + 32, row + 1 + 32);
     (x <= 255 && y <= 255).then(|| vec![0x1b, b'[', b'M', 32 + code, x as u8, y as u8])
+}
+
+#[cfg(test)]
+mod stop_settles_tests {
+    use super::{busy_screen_is_work, STOP_SETTLES};
+    use std::time::Duration;
+
+    /// The spinner still on screen a moment after the Stop hook is the turn that just ended.
+    #[test]
+    fn a_spinner_right_after_the_stop_hook_is_not_new_work() {
+        assert!(!busy_screen_is_work(true, Some(Duration::from_millis(600))));
+        // Still there later, or seen while the pane does not say finished: work.
+        assert!(busy_screen_is_work(true, Some(STOP_SETTLES + Duration::from_secs(1))));
+        assert!(busy_screen_is_work(false, Some(Duration::from_millis(600))));
+        // An agent started by hand never sent a Stop hook.
+        assert!(busy_screen_is_work(true, None));
+    }
 }
 
 #[cfg(test)]

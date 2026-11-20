@@ -822,7 +822,27 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
             Some(_) => None,
             // A pane reports for itself only.
-            None => parse_line(&line).filter(|signal| pane == Some(signal.pane_id)).map(SocketMessage::Signal),
+            None => {
+                let signal = parse_line(&line);
+                let heard = signal.as_ref().is_some_and(|signal| pane == Some(signal.pane_id));
+                if !heard {
+                    // A signal nobody hears leaves a pane saying something that is no longer
+                    // true (a turn that ended, still shown as going): say that one was dropped,
+                    // and why, where a report can pick it up. Never the line's contents.
+                    let kind = line.split('\t').nth(1).unwrap_or("").chars().take(24).collect::<String>();
+                    let named = line.split('\t').next().unwrap_or("").chars().take(12).collect::<String>();
+                    let why = match (&signal, pane) {
+                        (None, _) => "it could not be read",
+                        (Some(_), None) => "its sender is not a pane's process (gone before it was looked at?)",
+                        (Some(_), Some(_)) => "it names another pane than its sender's",
+                    };
+                    eprintln!("agentty: a `{kind}` signal for pane {named} was dropped: {why} ({} bytes)", line.len());
+                } else if debug {
+                    let kind = line.split('\t').nth(1).unwrap_or("");
+                    eprintln!("signal: {kind} pane={pane:?} bytes={}", line.len());
+                }
+                signal.filter(|_| heard).map(SocketMessage::Signal)
+            }
         };
         if let Some(message) = message {
             if tx.unbounded_send(message).is_err() {
