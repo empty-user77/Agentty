@@ -60,9 +60,14 @@ pub struct Backend {
     notifier: Notifier,
     size: GridSize,
     pub child_pid: u32,
-    /// PTY controller descriptor, owned by the event loop and valid while this backend lives
-    /// (`-1` on Windows, where ConPTY has no such descriptor).
+    /// PTY controller descriptor (`-1` on Windows, where ConPTY has no such descriptor). A copy
+    /// of its own, kept open while this backend lives: the event loop closes the one it holds when
+    /// the program ends, the number is handed out again (to the next pane's terminal, most
+    /// likely), and asking it who is in front — or signalling that group when this pane closes —
+    /// would then be about another pane.
     pub tty_fd: crate::procinfo::TtyFd,
+    #[cfg(unix)]
+    _tty: Option<std::os::fd::OwnedFd>,
     /// Windows: this pane's socket token (`$AGENTTY_SOCKET_TOKEN`), forgotten when the pane closes.
     socket_token: Option<String>,
 }
@@ -176,17 +181,37 @@ impl Backend {
             }
         };
         #[cfg(unix)]
-        let (child_pid, tty_fd) = (pty.child().id(), std::os::fd::AsRawFd::as_raw_fd(pty.file()));
+        let (child_pid, tty_fd, tty) = {
+            use std::os::fd::{AsFd, AsRawFd};
+            // Where the copy cannot be made (out of descriptors), there is none to ask: `-1`.
+            let own = pty.file().as_fd().try_clone_to_owned().ok();
+            (pty.child().id(), own.as_ref().map_or(-1, |own| own.as_raw_fd()), own)
+        };
         #[cfg(not(unix))]
         let (child_pid, tty_fd) = (pty.child_watcher().pid().map_or(0, |pid| pid.get()), -1);
         // Only this process and what it starts may speak for the pane on the signal socket.
         crate::agent_signal::register_pane(child_pid, pane_id);
+        // Linux: a control group of its own for the pane, so memory running short ends one agent
+        // and not the app with all of them.
+        crate::platform::pane_scope::give(child_pid);
         let event_loop =
             EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false).context("failed to start PTY event loop")?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
 
-        Ok((Self { term, notifier, size, child_pid, tty_fd, socket_token }, rx))
+        Ok((
+            Self {
+                term,
+                notifier,
+                size,
+                child_pid,
+                tty_fd,
+                #[cfg(unix)]
+                _tty: tty,
+                socket_token,
+            },
+            rx,
+        ))
     }
 
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {

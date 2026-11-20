@@ -839,6 +839,12 @@ fn main() {
         // A voice model still loaded when the process exits makes whisper.cpp's Metal teardown
         // abort: every quit after using voice would end in a crash report.
         cx.on_app_quit(|_| async { agentty_bridge::voice::unload() }).detach();
+        // Quitting is not a crash: the next start has nothing to record of this run.
+        cx.on_app_quit(|cx| {
+            let windows_open = !cx.windows().is_empty();
+            async move { crash_log::quit(windows_open) }
+        })
+        .detach();
         // Servers started in the run log have process groups of their own: no hangup ends them.
         cx.on_app_quit(|_| async { run_log::stop_all() }).detach();
         // The code editor's language servers also stop once their input closes; this ends them now.
@@ -1272,6 +1278,7 @@ pub fn request_quit(cx: &mut App) {
     // The sleep lock is held by a child process, which outlives Agentty unless it is let go of
     // here: quitting with "Prevent sleep" on would otherwise keep the machine awake for good.
     platform::wakelock::set(false);
+    crash_log::quit_asked();
     cx.quit();
 }
 
@@ -1356,6 +1363,11 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
         window.set_app_id(APP_ID);
         if let Some(ns) = native::ns_window(window) {
             file_drop::install(ns);
+        }
+        // For crash records: which graphics device and driver draw the window.
+        if let Some(gpu) = window.gpu_specs() {
+            let software = if gpu.is_software_emulated { ", software" } else { "" };
+            crash_log::note("gpu", format!("{} ({} {}{software})", gpu.device_name, gpu.driver_name, gpu.driver_info));
         }
         cx.new(|cx| Workbench::new(slot, window, cx))
     })

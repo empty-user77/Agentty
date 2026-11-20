@@ -58,6 +58,22 @@ Links work with the installed application, not with a build started from a devel
 
 Updates are downloaded from GitHub and verified before use. If a download fails — a proxy, a blocked host — get the installer by hand from the [releases page](https://github.com/empty-user77/Agentty/releases).
 
+## The app closed by itself
+
+Agentty keeps a record of how it ended in its data folder (`~/.agentty`, or `%USERPROFILE%\.agentty` on Windows). Nothing in it is sent anywhere.
+
+- **`crash.log`**: one entry per crash, newest last. It holds an internal error with its place and stack; a fault in Agentty or in a library loaded into it (a graphics driver, for one); a signal that ended the app from outside; and, written at the next start, a run that ended without a word (killed, the system out of memory, the computer going down). Each entry says how long the app had run, its memory, open files and threads, the system, the kind of session and the graphics device.
+- **`stderr.log`** and **`stderr.prev.log`**: what the app and its libraries printed in this run and in the one before, when it was started from the desktop. A display server's or a graphics layer's reason for giving up is here.
+
+On Linux, these say more when `crash.log` shows a run that ended without a record:
+
+```sh
+journalctl -k -b | grep -i -E "oom|killed process"   # the system ran out of memory
+coredumpctl list agentty                              # a crash the system recorded
+```
+
+When you report it, attach `crash.log` (and `stderr.prev.log` if there is one). They hold paths on your computer; read them through before posting.
+
 ## Still stuck
 
 Report it on the [issue tracker](https://github.com/empty-user77/Agentty/issues). Include your Agentty version (**Settings → About**), your operating system, and what you expected. Redact any credentials before pasting logs or screenshots.

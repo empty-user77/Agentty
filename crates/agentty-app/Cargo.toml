@@ -39,6 +39,7 @@ futures = "0.3.34"
 gpui = { package = "agentty-gpui", version = "0.1.0", default-features = false, features = ["font-kit"] }
 gpui_platform = { package = "agentty-gpui-platform", version = "0.1.0", default-features = false, features = ["font-kit", "runtime_shaders"] }
 libc = "0.2.189"
+log = "0.4.34"
 plist = "1.10.1"
 # Remote access: the web password's PBKDF2 hash, its constant-time check and the session tokens'
 # randomness. Already in the build through agentty-bridge (same version), so nothing new is fetched.

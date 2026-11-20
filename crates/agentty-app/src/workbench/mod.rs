@@ -1290,6 +1290,7 @@ impl Workbench {
                 // handle to this workbench: by the time it runs the window is gone and nothing
                 // would be written. Save while there is still something to save.
                 let _ = entity.update(cx, |this, cx| this.persist(cx));
+                crate::crash_log::quit_asked();
                 return true;
             }
             if let Some(ns) = crate::native::ns_window(window) {
@@ -3333,6 +3334,10 @@ impl Workbench {
         if self.closed {
             return;
         }
+        // For crash records: how much was open (in the window that changed last).
+        let panes = self.all_panes();
+        let running = panes.iter().filter(|pane| pane.read(cx).is_running()).count();
+        crate::crash_log::note("open", format!("{} workspaces, {} panes ({running} running)", self.workspaces.len(), panes.len()));
         if let Err(err) = state.save(self.slot) {
             eprintln!("agentty: could not save workspaces: {err:#}");
         }
@@ -5809,7 +5814,10 @@ impl Workbench {
                     }
                 }
             }
-            "quit" => cx.quit(),
+            "quit" => {
+                crate::crash_log::quit_asked();
+                cx.quit()
+            }
             // Like ⌘Q: asks about unsaved files in the editor first.
             "request-quit" => cx.defer(crate::request_quit),
             "quit-ask" => cx.defer(crate::request_quit_asking),
