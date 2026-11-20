@@ -5,6 +5,7 @@
 //! Agentty itself.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::editor::highlight;
 use crate::editor::language::Language;
 use crate::i18n::t;
@@ -531,6 +532,7 @@ impl Workbench {
                         // Cut in a flex line of its own: a cut line measured straight in a column
                         // has no width and shows only its ellipsis.
                         return cut_line(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)), text.clone())
+                            .copyable(text.clone())
                             .into_any_element();
                     }
                     TextStyle::Muted => base.t_small().text_color(hex(Chrome::MUTED)),
@@ -549,6 +551,7 @@ impl Workbench {
                     TextStyle::Success => base.t_small().text_color(hex(Chrome::SUCCESS)),
                     TextStyle::Body => base.t_body().text_color(hex(Chrome::FOREGROUND)),
                 }
+                .copyable(text.clone())
                 .child(text.clone())
                 .into_any_element()
             }
@@ -1398,7 +1401,7 @@ impl Workbench {
                                 .when(first && row.tone != Tone::Neutral, |d| {
                                     d.child(div().flex_shrink_0().size(px(7.)).rounded_full().bg(hex(tone_color(row.tone))))
                                 })
-                                .child(div().truncate().child(text)),
+                                .child(div().truncate().copyable(text.clone()).child(text)),
                         );
                     }
                     table = table.child(line);
@@ -1432,6 +1435,7 @@ impl Workbench {
                                     .t_small()
                                     .when(item.mono, |d| d.font_family(MONO))
                                     .text_color(hex(if item.tone == Tone::Neutral { Chrome::BRIGHT } else { tone_color(item.tone) }))
+                                    .copyable(item.value.clone())
                                     .child(item.value.clone()),
                             ),
                     );
@@ -1525,7 +1529,14 @@ impl Workbench {
                             .children(title.clone().map(|title| {
                                 div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title)
                             }))
-                            .child(div().whitespace_normal().t_small().text_color(hex(Chrome::FOREGROUND)).child(text.clone())),
+                            .child(
+                                div()
+                                    .whitespace_normal()
+                                    .t_small()
+                                    .text_color(hex(Chrome::FOREGROUND))
+                                    .copyable(text.clone())
+                                    .child(text.clone()),
+                            ),
                     )
                     .into_any_element()
             }

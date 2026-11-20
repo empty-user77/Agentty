@@ -356,6 +356,7 @@ strings! {
     "input.copy" => ["Copy", "복사", "コピー", "复制", "Kopieren"],
     "input.paste" => ["Paste", "붙여넣기", "ペースト", "粘贴", "Einsetzen"],
     "input.select_all" => ["Select All", "모두 선택", "すべてを選択", "全选", "Alles auswählen"],
+    "input.copy_all" => ["Copy All", "모두 복사", "すべてコピー", "全部复制", "Alles kopieren"],
     "save" => ["Save", "저장", "保存", "保存", "Speichern"],
     "rename.workspace" => ["Rename workspace", "작업공간 이름 변경", "ワークスペース名を変更", "重命名工作区", "Arbeitsbereich umbenennen"],
     "rename.group" => ["Rename group", "그룹 이름 변경", "グループ名を変更", "重命名分组", "Gruppe umbenennen"],

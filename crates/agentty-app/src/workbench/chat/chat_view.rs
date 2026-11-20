@@ -442,6 +442,8 @@ impl Workbench {
                         this.show_toast(t(cx, "chat.copied"), cx);
                     }
                 }))
+                .on_action(cx.listener(move |this, _: &crate::workbench::PasteIntoChat, window, cx| this.paste_into_chat(id, window, cx)))
+                .on_action(cx.listener(move |this, _: &crate::workbench::SelectAllChat, _, cx| this.select_all_chat(id, cx)))
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {

@@ -4,6 +4,7 @@
 //! browser opens as asked.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -116,7 +117,8 @@ impl Workbench {
                         )
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "webview_setup.body").to_string()))
                         .children(setup.error.as_ref().map(|error| {
-                            div().t_small().text_color(hex(Chrome::ERROR)).child(tf(cx, "webview_setup.failed", &[("error", error)]))
+                            let message = tf(cx, "webview_setup.failed", &[("error", error)]);
+                            div().t_small().text_color(hex(Chrome::ERROR)).copyable(message.clone()).child(message)
                         }))
                         .child(
                             div()

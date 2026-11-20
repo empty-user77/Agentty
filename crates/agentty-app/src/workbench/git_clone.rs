@@ -5,6 +5,7 @@
 //! again: the dialog says where it is.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchSpec, PaneKind};
 use crate::text_input::{TextInput, TextInputEvent};
@@ -280,7 +281,8 @@ impl Workbench {
                             .min_w_0()
                             .t_small()
                             .text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS }))
-                            .child(text.clone()),
+                            .child(text.clone())
+                            .copyable(text.clone()),
                     )
                     .when_some(cloned, |d, path| {
                         d.child(button("clone-open", t(cx, "clone.open").to_string(), false).on_click(cx.listener(

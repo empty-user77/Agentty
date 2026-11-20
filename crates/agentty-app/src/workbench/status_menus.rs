@@ -2,6 +2,7 @@
 //! live connection state), each an icon that opens a menu upwards.
 
 use super::{Page, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::settings::{AdvisorChoice, SleepMode};
@@ -417,7 +418,7 @@ impl Workbench {
             }
             StatusMenu::Mcp => match self.inventory.mcp.as_ref().filter(|(k, _, _)| k == key).and_then(|(_, _, r)| r.as_ref()) {
                 None => list = list.child(crate::ui::loading_row(t(cx, "status.mcp_checking"))),
-                Some(Err(error)) => list = list.child(crate::ui::hint(error.clone())),
+                Some(Err(error)) => list = list.child(crate::ui::hint(error.clone()).copyable(error.clone())),
                 Some(Ok(servers)) if servers.is_empty() => list = list.child(crate::ui::hint(t(cx, "status.none"))),
                 Some(Ok(servers)) => {
                     for (index, server) in servers.iter().take(MAX_ROWS).enumerate() {
@@ -431,28 +432,28 @@ impl Workbench {
                         };
                         // Claude Code reconnects (and signs in to) a connector in its own `/mcp`.
                         let broken = matches!(server.health, McpHealth::Failed | McpHealth::NeedsAuth);
-                        list =
-                            list.child(
-                                row(SharedString::from(format!("status-mcp-{index}")), Some(color), server.name.clone(), label.into())
-                                    .when(broken && agent == Agent::Claude, |d| {
-                                        d.child(
-                                            div()
-                                                .id(("status-mcp-reconnect", index))
-                                                .flex_shrink_0()
-                                                .px_1p5()
-                                                .rounded_md()
-                                                .cursor_pointer()
-                                                .text_color(hex(Chrome::ORANGE))
-                                                .hover(|s| s.bg(hex(Chrome::HOVER)))
-                                                .child(t(cx, "chat.reconnect"))
-                                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.status_menu = None;
-                                                    this.reconnect_mcp_in_front(window, cx);
-                                                })),
-                                        )
-                                    }),
-                            );
+                        list = list.child(
+                            row(SharedString::from(format!("status-mcp-{index}")), Some(color), server.name.clone(), label.into())
+                                .copyable(server.name.clone())
+                                .when(broken && agent == Agent::Claude, |d| {
+                                    d.child(
+                                        div()
+                                            .id(("status-mcp-reconnect", index))
+                                            .flex_shrink_0()
+                                            .px_1p5()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .text_color(hex(Chrome::ORANGE))
+                                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                            .child(t(cx, "chat.reconnect"))
+                                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.status_menu = None;
+                                                this.reconnect_mcp_in_front(window, cx);
+                                            })),
+                                    )
+                                }),
+                        );
                     }
                 }
             },

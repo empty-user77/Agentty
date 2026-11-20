@@ -95,6 +95,7 @@ fn open(cx: &mut App) {
         is_minimizable: false,
         display_id: display.map(|d| d.id()),
         window_background: WindowBackgroundAppearance::Transparent,
+        app_id: Some(crate::APP_ID.into()),
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| cx.new(|cx| TrayPopover::new(window, cx))) {

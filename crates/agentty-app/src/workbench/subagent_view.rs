@@ -4,6 +4,7 @@
 
 use super::agent_panel::AgentPanel;
 use super::Workbench;
+use crate::context_menu::{Copyable, Item};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{compact_number, icon, now_ms, IconSize, TypeScale};
@@ -538,7 +539,8 @@ impl Workbench {
                         .t_small()
                         .text_color(hex(Chrome::FOREGROUND))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_step(TASK_KEY, cx)))
-                        .child(super::agent_speech::markdown(task, if open { usize::MAX } else { 3 })),
+                        .child(super::agent_speech::markdown(task, if open { usize::MAX } else { 3 }))
+                        .copyable(task.to_string()),
                 ),
             );
         }
@@ -582,7 +584,14 @@ impl Workbench {
                         .gap_1p5()
                         .t_caption()
                         .child(icon(if file.created { "file-plus" } else { "file-text" }, 11., hex(Chrome::MUTED)))
-                        .child(div().truncate().font_family(MONO).text_color(hex(Chrome::FOREGROUND)).child(file.path.clone()))
+                        .child(
+                            div()
+                                .truncate()
+                                .font_family(MONO)
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(file.path.clone())
+                                .copyable(file.path.clone()),
+                        )
                         .child(div().flex_1())
                         .child(div().flex_shrink_0().text_color(hex(Chrome::SUCCESS)).child(format!("+{}", file.added)))
                         .child(div().flex_shrink_0().text_color(hex(Chrome::ERROR)).child(format!("−{}", file.removed))),
@@ -687,6 +696,7 @@ impl Workbench {
                             },
                         )),
                 )
+                .copyable(step.target.to_string())
                 .into_any_element();
         };
         let kind = ToolKind::of(&tool);
@@ -726,7 +736,10 @@ impl Workbench {
                 .font_family(MONO)
                 .text_color(hex(Chrome::FOREGROUND));
             if !step.diff.is_empty() {
+                // Shared by the lines: each keeps a pointer to it, not a copy of it.
+                let all_diff: gpui::SharedString = step.diff.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n").into();
                 body = body.children(step.diff.iter().map(|line| {
+                    let all = all_diff.clone();
                     let (sign, color, bg) = match line.kind {
                         DiffKind::Added => ("+", Chrome::SUCCESS, Some(hex_alpha(Chrome::SUCCESS, 0.10))),
                         DiffKind::Removed => ("−", Chrome::ERROR, Some(hex_alpha(Chrome::ERROR, 0.10))),
@@ -738,17 +751,19 @@ impl Workbench {
                         .when_some(bg, |d, bg| d.bg(bg))
                         .child(div().flex_shrink_0().text_color(hex(color)).child(sign))
                         .child(div().min_w_0().child(line.text.clone()))
+                        .copyable_with(line.text.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.to_string())])
                 }));
             } else {
                 if failed && step.output_more > 0 {
                     body = body.child(more_lines(step.output_more, cx));
                 }
+                let all_output: gpui::SharedString = step.output.join("\n").into();
                 body = body.children(step.output.iter().map(|l| {
-                    div().text_color(hex(if failed { Chrome::ERROR } else { Chrome::FOREGROUND })).child(if l.is_empty() {
-                        " ".to_string()
-                    } else {
-                        l.clone()
-                    })
+                    let all = all_output.clone();
+                    div()
+                        .text_color(hex(if failed { Chrome::ERROR } else { Chrome::FOREGROUND }))
+                        .child(if l.is_empty() { " ".to_string() } else { l.clone() })
+                        .copyable_with(l.clone(), move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), all.to_string())])
                 }));
                 if !failed && step.output_more > 0 {
                     body = body.child(more_lines(step.output_more, cx));
@@ -767,18 +782,32 @@ impl Workbench {
             .when(failed, |d| d.bg(hex_alpha(Chrome::ERROR, 0.08)))
             .when(has_body, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER))).on_click(toggle))
             .child(row)
-            .child(div().ml(px(30.)).t_caption().truncate().font_family(MONO).text_color(hex(Chrome::MUTED)).child(match &step.detail {
-                // A Bash call's description is already the line above.
-                Some(detail) if !matches!(tool.as_str(), "Bash" | "PowerShell") => format!("{tool} · {} · {detail}", step.target),
-                _ => format!("{tool} · {}", step.target),
-            }))
+            .child(
+                div()
+                    .ml(px(30.))
+                    .t_caption()
+                    .truncate()
+                    .font_family(MONO)
+                    .text_color(hex(Chrome::MUTED))
+                    .child(match &step.detail {
+                        // A Bash call's description is already the line above.
+                        Some(detail) if !matches!(tool.as_str(), "Bash" | "PowerShell") => format!("{tool} · {} · {detail}", step.target),
+                        _ => format!("{tool} · {}", step.target),
+                    })
+                    .copyable(step.target.to_string()),
+            )
             // A failure shows its last line without opening it.
             .when(failed && !open, |d| {
-                d.children(
-                    step.output.last().map(|l| {
-                        div().ml(px(30.)).t_caption().truncate().font_family(MONO).text_color(hex(Chrome::ERROR)).child(l.clone())
-                    }),
-                )
+                d.children(step.output.last().map(|l| {
+                    div()
+                        .ml(px(30.))
+                        .t_caption()
+                        .truncate()
+                        .font_family(MONO)
+                        .text_color(hex(Chrome::ERROR))
+                        .child(l.clone())
+                        .copyable(l.clone())
+                }))
             })
             .children(body)
             .into_any_element()

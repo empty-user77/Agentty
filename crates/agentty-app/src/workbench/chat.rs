@@ -989,6 +989,29 @@ impl Workbench {
         }
     }
 
+    /// ⌘A while the chat's text has the keyboard: all of it that has been drawn is selected, for
+    /// ⌘C (the bar over a selection belongs to one made with the pointer).
+    fn select_all_chat(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        if selectable::select_all(id.as_u64()) {
+            self.chat_select = None;
+            cx.notify();
+        }
+    }
+
+    /// A paste while the chat's text has the keyboard (after a click or a selection there): it
+    /// goes into the message being written, as typing does.
+    fn paste_into_chat(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.chats.get(&id).and_then(|state| state.input.as_ref()).map(|(input, _)| input.clone()) else { return };
+        let focus = gpui::Focusable::focus_handle(&input, cx);
+        // The message box itself has the keyboard: it took this paste already (the Edit menu's
+        // Paste is offered to both).
+        if focus.is_focused(window) {
+            return;
+        }
+        window.focus(&focus, cx);
+        input.update(cx, |input, cx| input.paste_clipboard(window, cx));
+    }
+
     /// Forgets chats whose lead is gone, and gives new ones their composer.
     pub(super) fn prepare_chats(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.keyboard_to_composer(window, cx);
@@ -1036,7 +1059,8 @@ impl Workbench {
         for (id, plain) in missing {
             let placeholder = if plain { "chat.placeholder_plain" } else { "chat.placeholder" };
             let input = cx.new(|cx| {
-                let input = TextInput::localized("", placeholder, window, cx);
+                // Copied files and images paste as attachments, as a drop on the chat does.
+                let input = TextInput::localized("", placeholder, window, cx).take_pasted_files();
                 // Chat view's composer starts as one line and grows, as a chat app's does.
                 if plain {
                     input.composer(1).growing(8)
@@ -1050,6 +1074,7 @@ impl Workbench {
                 }
                 match event {
                     TextInputEvent::Confirmed => this.send_chat_message(id, window, cx),
+                    TextInputEvent::PastedFiles(paths) => this.attach_paths(id, paths, window, cx),
                     TextInputEvent::Changed => {
                         this.slash_text_changed(id, cx);
                         this.typed_over_selection(id, window, cx);
@@ -2115,6 +2140,8 @@ impl Workbench {
                     this.show_toast(t(cx, "chat.copied"), cx);
                 }
             }))
+            .on_action(cx.listener(move |this, _: &crate::workbench::PasteIntoChat, window, cx| this.paste_into_chat(id, window, cx)))
+            .on_action(cx.listener(move |this, _: &crate::workbench::SelectAllChat, _, cx| this.select_all_chat(id, cx)))
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseUpEvent, window, cx| {

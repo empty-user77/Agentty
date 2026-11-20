@@ -136,7 +136,7 @@ impl Workbench {
                     return;
                 }
                 TextInputEvent::Cancelled => return this.close_palette(window, cx),
-                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) => {}
+                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) | TextInputEvent::PastedFiles(_) => {}
             }
             cx.notify();
         });

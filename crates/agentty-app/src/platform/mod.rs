@@ -13,6 +13,7 @@ pub mod ime;
 pub mod mic;
 #[cfg(any(target_os = "macos", windows))]
 pub mod page_scripts;
+pub mod primary;
 pub mod system_proxy;
 pub mod tray;
 pub mod url;

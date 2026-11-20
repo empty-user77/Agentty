@@ -33,6 +33,7 @@ pub enum BrowserKey {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditCommand {
+    Cut,
     Copy,
     Paste,
     SelectAll,

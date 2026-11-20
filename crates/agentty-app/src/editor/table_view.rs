@@ -50,7 +50,7 @@ actions!(
     ]
 );
 
-const CONTEXT: &str = "TableGrid";
+pub(super) const CONTEXT: &str = "TableGrid";
 const ROW_HEIGHT: f32 = 26.;
 const NUMBER_WIDTH: f32 = 52.;
 /// A header's room besides its name: the cell's padding and border, and the sort arrow's place.
@@ -100,6 +100,16 @@ pub fn bind_keys(cx: &mut App) {
             key("escape", GridEscape, c),
         ],
     );
+    if !cfg!(target_os = "macos") {
+        crate::bind(
+            cx,
+            [
+                gpui::KeyBinding::new("ctrl-insert", GridCopy, c),
+                gpui::KeyBinding::new("shift-insert", GridPaste, c),
+                gpui::KeyBinding::new("shift-delete", GridCut, c),
+            ],
+        );
+    }
 }
 
 /// A cell of the grid as shown: (row among the shown rows, column).

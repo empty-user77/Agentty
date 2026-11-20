@@ -8,6 +8,7 @@
 //! every API call it made with its request and response.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::settings::settings;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -1355,8 +1356,10 @@ impl Workbench {
             .gap_2()
             .px_6()
             .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "browser.load_failed")))
-            .child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().child(error.url))
-            .when(!error.message.is_empty(), |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().child(error.message)))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().copyable(error.url.clone()).child(error.url))
+            .when(!error.message.is_empty(), |d| {
+                d.child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().copyable(error.message.clone()).child(error.message))
+            })
             .child(div().pt_2().child(crate::ui::action_button(
                 "browser-retry",
                 t(cx, "browser.retry"),
@@ -1524,6 +1527,7 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_browser_call(id, cx)))
+                    .copyable(call.url.clone())
                     .child(div().w(px(46.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(call.method.clone()))
                     .child(div().w(px(30.)).flex_shrink_0().text_color(hex(color)).child(status))
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(short_url(&call.url)))
@@ -1561,7 +1565,9 @@ impl Workbench {
             .child(t(cx, "browser.net_back"));
         let detail = match &net.detail {
             None => div().px_2().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "browser.net_loading")).into_any_element(),
-            Some(Err(error)) => div().px_2().py_2().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()).into_any_element(),
+            Some(Err(error)) => {
+                div().px_2().py_2().t_small().text_color(hex(Chrome::ERROR)).copyable(error.clone()).child(error.clone()).into_any_element()
+            }
             Some(Ok(detail)) => {
                 let mono = |text: String| {
                     div()
@@ -1571,6 +1577,7 @@ impl Workbench {
                         .t_caption()
                         .font_family("JetBrains Mono")
                         .text_color(hex(Chrome::FOREGROUND))
+                        .copyable(text.clone())
                         .child(text)
                 };
                 let section = |title: &str| {
@@ -1607,7 +1614,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).child(detail.url.clone()))
+                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).copyable(detail.url.clone()).child(detail.url.clone()))
                     .child(facts_row)
                     .when(!detail.req_headers.is_empty(), |d| {
                         d.child(section(t(cx, "browser.net_req_headers"))).child(mono(headers(&detail.req_headers)))

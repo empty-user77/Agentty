@@ -2,6 +2,7 @@
 //! documents, attached files). Starting creates a project folder (`agentty_bridge::idea`) and hands
 //! it to an agent that builds a demo, shows it live in the in-app browser, and points at Launch.
 
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -53,7 +54,7 @@ impl EventEmitter<IdeaEvent> for IdeaView {}
 
 impl IdeaView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextInput::localized("", "idea.input_placeholder", window, cx).keep_pasted_lines());
+        let input = cx.new(|cx| TextInput::localized("", "idea.input_placeholder", window, cx).keep_pasted_lines().take_pasted_files());
         let name = cx.new(|cx| TextInput::localized("", "idea.name_placeholder", window, cx));
         let subscriptions = vec![
             cx.subscribe(&input, |this, input, event: &TextInputEvent, cx| match event {
@@ -65,6 +66,7 @@ impl IdeaView {
                     }
                 }
                 TextInputEvent::PastedLines(text) => this.push_message(text.replace("\r\n", "\n").trim().to_string(), true, cx),
+                TextInputEvent::PastedFiles(paths) => this.add_files(paths, cx),
                 TextInputEvent::Changed => {
                     this.error = None;
                     cx.notify();
@@ -351,6 +353,7 @@ impl IdeaView {
                         .bg(hex_alpha(Chrome::ACCENT, if message.pasted { 0.12 } else { 0.28 }))
                         .border_1()
                         .border_color(hex_alpha(Chrome::ACCENT, 0.4))
+                        .copyable(message.text.clone())
                         .child(body)
                         .child(
                             div()
@@ -546,7 +549,16 @@ impl IdeaView {
                     .items_center()
                     .gap_2()
                     .child(label("idea.location", cx))
-                    .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(tilde(&self.root)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .t_small()
+                            .text_color(hex(Chrome::FOREGROUND))
+                            .copyable(self.root.display().to_string())
+                            .child(tilde(&self.root)),
+                    )
                     .child(
                         div()
                             .id("idea-location")
@@ -592,7 +604,11 @@ impl Render for IdeaView {
             .child(self.render_conversation(cx))
             .child(self.render_composer(cx))
             .child(self.render_options(cx))
-            .children(self.error.clone().map(|error| div().w_full().t_small().text_color(hex(Chrome::ERROR)).child(error)))
+            .children(
+                self.error
+                    .clone()
+                    .map(|error| div().w_full().t_small().text_color(hex(Chrome::ERROR)).copyable(error.clone()).child(error)),
+            )
             .when(no_agent, |d| d.child(div().w_full().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, "idea.no_agent"))))
             .child(
                 div()

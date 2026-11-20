@@ -9,4 +9,4 @@ Terminal=false
 Categories=Development;System;TerminalEmulator;
 Keywords=terminal;ai;claude;codex;agent;
 MimeType=x-scheme-handler/agentty;
-StartupWMClass=agentty
+StartupWMClass=run.agentty.Agentty

@@ -15,6 +15,7 @@
 //! workspace is the one of the window that started it.
 
 use super::{Group, Page, Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -1534,7 +1535,7 @@ impl Workbench {
                 .border_color(hex(Chrome::WARNING))
                 .bg(hex(Chrome::PANEL))
                 .child(icon("triangle-alert", IconSize::INLINE, hex(Chrome::WARNING)))
-                .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::FOREGROUND)).child(text))
+                .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::FOREGROUND)).child(text.clone()).copyable(text))
                 .when(matches!(problem, BoardProblem::MovedAside(_)), |d| {
                     d.child(
                         crate::ui::icon_only_sized(
@@ -1587,8 +1588,8 @@ impl Workbench {
         };
         let agent_logo = if ticket.agent == "codex" { Chrome::CODEX } else { Chrome::CLAUDE };
         let place = match (&ticket.branch, &ticket.project) {
-            (Some(branch), _) => Some(("git-branch", branch.clone())),
-            (None, Some(project)) => Some(("folder", project_name(project))),
+            (Some(branch), _) => Some(("git-branch", branch.clone(), branch.clone())),
+            (None, Some(project)) => Some(("folder", project_name(project), project.to_string_lossy().to_string())),
             _ => None,
         };
         let mut actions = div().flex().items_center().gap_1();
@@ -1656,10 +1657,20 @@ impl Workbench {
                     )
                     .child(actions),
             )
-            .when_some(place, |d, (glyph, text)| {
-                d.child(div().flex().items_center().gap_1p5().min_w_0().child(icon(glyph, IconSize::INLINE, hex(Chrome::MUTED))).child(
-                    div().flex_1().min_w_0().truncate().t_small().font_family("monospace").text_color(hex(Chrome::MUTED)).child(text),
-                ))
+            .when_some(place, |d, (glyph, text, full)| {
+                d.child(
+                    div().flex().items_center().gap_1p5().min_w_0().child(icon(glyph, IconSize::INLINE, hex(Chrome::MUTED))).child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .t_small()
+                            .font_family("monospace")
+                            .text_color(hex(Chrome::MUTED))
+                            .child(text)
+                            .copyable(full),
+                    ),
+                )
             })
             .child(div().h(px(1.)).bg(hex(Chrome::BORDER)))
             .child(
@@ -1795,13 +1806,16 @@ impl Workbench {
         let heading = if id.is_some() { t(cx, "board.edit_ticket") } else { t(cx, "board.new_ticket") };
         let details = ticket.as_ref().filter(|t| t.branch.is_some() || t.folder.is_some()).map(|t| {
             let mut parts = Vec::new();
+            let mut full = Vec::new();
             if let Some(branch) = &t.branch {
                 parts.push(branch.clone());
+                full.push(branch.clone());
             }
             if let Some(folder) = &t.folder {
                 parts.push(tilde(folder));
+                full.push(folder.to_string_lossy().to_string());
             }
-            div().t_small().font_family("monospace").text_color(hex(Chrome::MUTED)).child(parts.join("  ·  "))
+            div().t_small().font_family("monospace").text_color(hex(Chrome::MUTED)).child(parts.join("  ·  ")).copyable(full.join("\n"))
         });
         Some(dialog(
             "board-editor",
@@ -1851,20 +1865,29 @@ impl Workbench {
         let note = |color: u32, text: String| div().t_small().text_color(hex(color)).child(text);
         let mut list = div().flex().flex_col().gap_2();
         for tree in &trees {
-            let mut entry =
-                div()
-                    .p_2()
-                    .rounded_md()
-                    .bg(hex(0x1a1a1a))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div().flex().items_center().gap_1p5().child(icon("git-branch", IconSize::INLINE, hex(Chrome::MUTED))).child(
-                            div().t_body().text_color(hex(Chrome::BRIGHT)).child(tree.branch.clone().unwrap_or_else(|| "HEAD".into())),
-                        ),
-                    )
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tilde(&tree.path)));
+            let mut entry = div()
+                .p_2()
+                .rounded_md()
+                .bg(hex(0x1a1a1a))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div().flex().items_center().gap_1p5().child(icon("git-branch", IconSize::INLINE, hex(Chrome::MUTED))).child(
+                        div()
+                            .t_body()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(tree.branch.clone().unwrap_or_else(|| "HEAD".into()))
+                            .copyable(tree.branch.clone().unwrap_or_else(|| "HEAD".into())),
+                    ),
+                )
+                .child(
+                    div()
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .child(tilde(&tree.path))
+                        .copyable(tree.path.to_string_lossy().to_string()),
+                );
             if tree.changed > 0 {
                 entry = entry.child(note(Chrome::ERROR, tf(cx, "board.cleanup_changed", &[("n", &tree.changed.to_string())])));
             } else if tree.unmerged > 0 {
@@ -2003,7 +2026,7 @@ impl Workbench {
                 ))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "board.jira_add_hint")))
                 .child(super::board_settings::field_box(&input))
-                .when_some(error, |d, error| d.child(div().t_small().text_color(hex(Chrome::ERROR)).child(error)))
+                .when_some(error, |d, error| d.child(div().t_small().text_color(hex(Chrome::ERROR)).child(error.clone()).copyable(error)))
                 .child(
                     div()
                         .flex()

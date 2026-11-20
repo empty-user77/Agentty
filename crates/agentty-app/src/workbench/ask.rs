@@ -3,6 +3,7 @@
 //! dialog never carries a callback that could outlive the window it was opened from.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -226,8 +227,19 @@ impl Workbench {
                         .shadow_lg()
                         // Clicking the dialog itself must not count as clicking the backdrop.
                         .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(ask.title.clone()))
-                        .children(ask.body.clone().map(|body| div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body)))
+                        .child(
+                            div()
+                                .t_title()
+                                .font_weight(crate::theme::EMPHASIS)
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(ask.title.clone())
+                                .copyable(ask.title.to_string()),
+                        )
+                        .children(
+                            ask.body.clone().map(|body| {
+                                div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body.clone()).copyable(body.to_string())
+                            }),
+                        )
                         .child(buttons),
                 ),
         )

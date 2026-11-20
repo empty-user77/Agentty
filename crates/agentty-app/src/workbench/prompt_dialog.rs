@@ -3,6 +3,7 @@
 
 use super::{status_label, Workbench};
 use crate::agents::AgentPick;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -409,7 +410,7 @@ impl Workbench {
                                     .child(t(cx, "prompt.submit")),
                             )
                         })
-                        .children(dialog.error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).child(e)))
+                        .children(dialog.error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).copyable(e.clone()).child(e)))
                         .child(
                             div()
                                 .pt_1()

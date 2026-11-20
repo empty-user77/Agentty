@@ -8,6 +8,7 @@
 //! profile), work goes in waves, and a reviewer checks the result against the goal at the end.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -333,13 +334,21 @@ fn atlassian_host(cx: &gpui::App) -> Option<String> {
 impl Workbench {
     /// Opens the start dialog: a goal, a profile, a folder.
     pub(super) fn open_orchestrator_dialog(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
-        let goal = cx.new(|cx| TextInput::localized("", "orch.goal_placeholder", window, cx).multiline(4));
-        let events = cx.subscribe_in(&goal, window, |this, _, event: &TextInputEvent, window, cx| {
-            if matches!(event, TextInputEvent::Cancelled) {
+        let goal = cx.new(|cx| TextInput::localized("", "orch.goal_placeholder", window, cx).multiline(4).take_pasted_files());
+        let events = cx.subscribe_in(&goal, window, |this, _, event: &TextInputEvent, window, cx| match event {
+            TextInputEvent::Cancelled => {
                 this.orchestrator_dialog = None;
                 this.focus_active(window, cx);
                 cx.notify();
             }
+            // Copied files and images paste as attachments, as a drop on the dialog does.
+            TextInputEvent::PastedFiles(paths) => {
+                if let Some(dialog) = this.orchestrator_dialog.as_mut() {
+                    dialog.add_files(paths);
+                    cx.notify();
+                }
+            }
+            _ => {}
         });
         goal.update(cx, |input, cx| input.focus_and_select_all(window, cx));
         let folder = self.orchestration_folder(cx);
@@ -840,6 +849,7 @@ impl Workbench {
                                         .truncate()
                                         .t_small()
                                         .text_color(hex(Chrome::FOREGROUND))
+                                        .copyable(dialog.folder.display().to_string())
                                         .child(crate::ui::tilde(&dialog.folder)),
                                 )
                                 .child(

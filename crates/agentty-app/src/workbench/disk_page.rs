@@ -5,6 +5,7 @@
 
 use super::tree_manager::{badge, confirm_dialog, size_text};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, TypeScale};
@@ -447,7 +448,14 @@ impl Workbench {
                                 .child(div().t_body().truncate().text_color(hex(Chrome::BRIGHT)).child(name.clone()))
                                 .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(tools)),
                         )
-                        .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(crate::ui::tilde(&project))),
+                        .child(
+                            div()
+                                .t_caption()
+                                .truncate()
+                                .text_color(hex(Chrome::MUTED))
+                                .copyable(project.display().to_string())
+                                .child(crate::ui::tilde(&project)),
+                        ),
                 )
                 .child(div().w(px(80.)).flex().justify_end().t_body().text_color(hex(Chrome::FOREGROUND)).child(size_text(total(&items))));
             let mut actions = div().flex().gap_1p5().on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
@@ -585,6 +593,7 @@ impl Workbench {
                                     .t_caption()
                                     .truncate()
                                     .text_color(hex(Chrome::MUTED))
+                                    .copyable(group.iter().map(|i| i.path.display().to_string()).collect::<Vec<_>>().join("\n"))
                                     .child(group.iter().map(|i| crate::ui::tilde(&i.path)).collect::<Vec<_>>().join(" · ")),
                             ),
                     )
@@ -640,7 +649,16 @@ impl Workbench {
                 } else {
                     div().w(px(12.)).into_any_element()
                 })
-                .child(div().w(px(220.)).flex_shrink_0().t_body().truncate().text_color(hex(Chrome::BRIGHT)).child(name))
+                .child(
+                    div()
+                        .w(px(220.))
+                        .flex_shrink_0()
+                        .t_body()
+                        .truncate()
+                        .text_color(hex(Chrome::BRIGHT))
+                        .copyable(path.display().to_string())
+                        .child(name),
+                )
                 .child(
                     div().flex_1().min_w(px(40.)).h(px(6.)).rounded_full().bg(hex(0x2d2d30)).child(
                         div()

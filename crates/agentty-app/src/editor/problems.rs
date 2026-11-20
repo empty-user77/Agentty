@@ -7,6 +7,7 @@
 use super::buffer::Pos;
 use super::lsp::{self, Problem, Severity};
 use super::{CodeEditor, Content};
+use crate::context_menu::Copyable as _;
 use crate::i18n::tf;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
@@ -238,7 +239,7 @@ impl CodeEditor {
                         .flex_col()
                         .gap_0p5()
                         .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(tf(cx, "editor.build_error", &[("file", &file)])))
-                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(message)),
+                        .child(div().t_small().text_color(hex(Chrome::MUTED)).copyable(message.clone()).child(message)),
                 )
                 .when(elsewhere, |d| d.child(open))
                 .child(close)
@@ -534,6 +535,7 @@ impl CodeEditor {
                     .gap_0p5()
                     .t_small()
                     .text_color(hex(Chrome::FOREGROUND))
+                    .copyable(problem.message.clone())
                     .children(problem.message.lines().take(12).map(|line| div().child(line.to_string())))
                     .when_some(problem.origin.clone(), |d, origin| {
                         d.child(

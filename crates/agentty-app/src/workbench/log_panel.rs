@@ -8,6 +8,7 @@
 //! Hiding it keeps the runs going; the run panel in the status bar brings it back.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::procinfo::ServingProcess;
 use crate::run_log::{self, Event, Filter, Level, LogBuffer, LogLine, Matcher, Stream};
@@ -936,7 +937,16 @@ impl Workbench {
                 this.runs.log.wrap = !this.log().wrap;
                 cx.notify();
             })))
-            .child(div().flex_1().min_w_0().truncate().t_caption().text_color(hex(Chrome::ERROR)).children(log.filter_error.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .t_caption()
+                    .text_color(hex(Chrome::ERROR))
+                    .copyable(log.filter_error.clone().unwrap_or_default())
+                    .children(log.filter_error.clone()),
+            )
             .child(div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(count))
             .child(
                 div()
@@ -1009,10 +1019,17 @@ impl Workbench {
                         .flex()
                         .flex_col()
                         .gap_0p5()
-                        .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(message))
-                        .children(
-                            holders.into_iter().map(|line| div().t_caption().text_color(hex(Chrome::FOREGROUND)).truncate().child(line)),
+                        .child(
+                            div()
+                                .t_small()
+                                .font_weight(crate::theme::EMPHASIS)
+                                .text_color(hex(Chrome::BRIGHT))
+                                .copyable(message.clone())
+                                .child(message),
                         )
+                        .children(holders.into_iter().map(|line| {
+                            div().t_caption().text_color(hex(Chrome::FOREGROUND)).truncate().copyable(line.clone()).child(line)
+                        }))
                         .when(conflict.holders.as_ref().is_some_and(Vec::is_empty), |d| {
                             d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "run.log_conflict_unknown")))
                         })
@@ -1070,12 +1087,13 @@ impl Workbench {
         let font = SharedString::from(crate::settings::terminal_font(cx));
         let workbench = cx.entity().downgrade();
         let lines = list(tab.list.clone(), move |row, _, _| {
+            let all = store.clone();
             let store = store.borrow();
             let dropped = store.buffer.dropped();
             let Some((number, line)) = store.shown.get(row).and_then(|n| Some((n + 1, store.buffer.get(n - dropped)?))) else {
                 return div().into_any_element();
             };
-            render_line(number, line, &matcher, wrap, &font, workbench.clone())
+            render_line(number, line, &matcher, wrap, &font, workbench.clone(), all)
         })
         .size_full();
         let count = tab.store.borrow().shown.len();
@@ -1179,6 +1197,7 @@ fn render_line(
     wrap: bool,
     font: &SharedString,
     workbench: gpui::WeakEntity<Workbench>,
+    store: Rc<RefCell<Store>>,
 ) -> AnyElement {
     let note = line.stream == Stream::Note;
     let matches = matcher.find(&line.text).unwrap_or_default();
@@ -1201,6 +1220,7 @@ fn render_line(
         }
     });
     let color = if note { Chrome::MUTED } else { base.filter(|_| line.styles.is_empty()).unwrap_or(Chrome::FOREGROUND) };
+    let own = line.text.clone();
     div()
         .flex()
         .w_full()
@@ -1227,6 +1247,18 @@ fn render_line(
                 .child(if note { String::new() } else { number.to_string() }),
         )
         .child(div().flex_1().min_w_0().text_color(hex(color)).when(!wrap, |d| d.whitespace_nowrap().overflow_hidden()).child(text))
+        .copyable_with(own, move |cx| {
+            // Built when the menu opens, not for every line on every frame.
+            let store = store.borrow();
+            let dropped = store.buffer.dropped();
+            let all = store
+                .shown
+                .iter()
+                .filter_map(|n| store.buffer.get(n.checked_sub(dropped)?).map(|l| l.text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            vec![crate::context_menu::Item::copy_as(t(cx, "input.copy_all"), all)]
+        })
         .into_any_element()
 }
 
