@@ -36,6 +36,7 @@ impl gpui::Render for PluginWindow {
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
             .children(contents)
+            .children(crate::context_menu::render(window, cx))
             // Last, so the window's edges stay grabbable over the panel.
             .children(crate::platform::decorations::resize_edges(window))
     }
@@ -115,6 +116,7 @@ impl Workbench {
             window_decorations: crate::platform::decorations::requested(cx.compositor_name()),
             focus: true,
             show: true,
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         let weak = cx.entity().downgrade();
@@ -128,7 +130,10 @@ impl Workbench {
         cx.defer(move |cx| {
             let workbench = weak.clone();
             let plugin = owner.clone();
-            let handle = cx.open_window(options, |_, cx| cx.new(|_| PluginWindow { workbench, plugin }));
+            let handle = cx.open_window(options, |window, cx| {
+                window.set_app_id(crate::APP_ID);
+                cx.new(|_| PluginWindow { workbench, plugin })
+            });
             let Some(workbench) = weak.upgrade() else { return };
             match handle {
                 Ok(handle) => {

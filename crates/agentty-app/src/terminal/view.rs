@@ -29,7 +29,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-actions!(terminal, [Copy, Paste, Clear, SelectAll]);
+actions!(terminal, [Copy, Cut, Paste, Clear, SelectAll]);
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 /// Least time between repaints for output nobody is typing into (see `output_gap`).
@@ -2261,11 +2261,23 @@ impl TerminalView {
         if crate::webview::perform_in_page(crate::webview::EditCommand::Copy) {
             return;
         }
+        self.copy_selection(cx);
+    }
+
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
         self.restore_selection();
         let text = self.backend.as_ref().and_then(|b| b.term.lock().selection_to_string());
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// The Edit menu's Cut: a page cuts; a terminal's text cannot be taken out, so it is copied.
+    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::webview::perform_in_page(crate::webview::EditCommand::Cut) {
+            return;
+        }
+        self.copy(&Copy, window, cx);
     }
 
     /// Copies the selected text and clears the selection; false when nothing is selected.
@@ -2288,12 +2300,16 @@ impl TerminalView {
         }
         // Copied files, and copied images (written out as a file): paste the paths, the way a drop
         // does — an agent can read a path, not clipboard image data.
-        let paths = crate::file_drop::clipboard_paths();
+        let paths = crate::platform::drops::pasted_paths(cx);
         if !paths.is_empty() {
             self.drop_paths(&paths);
             return cx.notify();
         }
         let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
+        self.paste_text(&text);
+    }
+
+    fn paste_text(&mut self, text: &str) {
         let bytes = if self.mode().contains(TermMode::BRACKETED_PASTE) {
             format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
         } else {
@@ -2524,6 +2540,47 @@ impl TerminalView {
         Some((point.line.0, start, end))
     }
 
+    /// Right click: Copy, Paste and Select All, as every terminal has them under the pointer.
+    fn on_right_click(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::context_menu::Item;
+        window.focus(&self.focus_handle, cx);
+        self.activate(cx);
+        self.restore_selection();
+        let selected = self.backend.as_ref().and_then(|b| b.term.lock().selection_to_string()).is_some_and(|text| !text.is_empty());
+        let view = cx.entity().downgrade();
+        let item = |label: &'static str, run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            let view = view.clone();
+            Item::new(crate::i18n::t(cx, label), move |window, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    run(this, window, cx);
+                    window.focus(&this.focus_handle, cx);
+                    cx.notify();
+                });
+            })
+        };
+        let items = vec![
+            item("input.copy", |this, _, cx| this.copy_selection(cx)).enabled(selected),
+            item("input.paste", |this, window, cx| this.paste(&Paste, window, cx)),
+            item("input.select_all", |this, window, cx| this.select_all(&SelectAll, window, cx)),
+        ];
+        crate::context_menu::open(event.position, items, window, cx);
+        cx.stop_propagation();
+    }
+
+    /// Middle click (Linux): pastes what the pointer selected last, wherever that was. A program
+    /// that reads the mouse itself (vim, a pager) keeps the click unless Shift is held.
+    fn on_middle_click(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mouse_captured(event.modifiers.shift) {
+            return;
+        }
+        let Some(text) = crate::platform::primary::get(cx) else { return };
+        window.focus(&self.focus_handle, cx);
+        self.activate(cx);
+        self.paste_text(&text);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.last_mouse_up = Some((event.position, Instant::now()));
         if std::mem::take(&mut self.mouse_reporting) {
@@ -2548,6 +2605,7 @@ impl TerminalView {
             }
         }
         if let Some(text) = selected {
+            crate::platform::primary::set(text.clone(), cx);
             cx.emit(TerminalEvent::Selected { text, at: event.position });
         }
         if empty_selection {
@@ -2642,6 +2700,7 @@ impl Render for TerminalView {
 
         container
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::clear))
             .on_action(cx.listener(Self::select_all))
@@ -2651,6 +2710,8 @@ impl Render for TerminalView {
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_click))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_click))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {

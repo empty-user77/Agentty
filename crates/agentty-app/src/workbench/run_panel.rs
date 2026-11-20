@@ -9,6 +9,7 @@
 //! started here or anywhere else — each with a button that stops it.
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::procinfo::ServingProcess;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -932,7 +933,12 @@ impl Workbench {
             .gap_1()
             .t_caption()
             .text_color(hex(Chrome::MUTED))
-            .child(div().text_color(hex(color)).child(failed_label.clone().unwrap_or_else(|| t(cx, state_key).to_string())))
+            .child(
+                div()
+                    .text_color(hex(color))
+                    .copyable(failed_label.clone().unwrap_or_default())
+                    .child(failed_label.clone().unwrap_or_else(|| t(cx, state_key).to_string())),
+            )
             .child(div().min_w_0().max_w(px(220.)).truncate().child(format!("· {}", kind_label(config))));
         for port in ports.iter().filter(|_| alive.is_some()) {
             let port = *port;
@@ -1027,7 +1033,15 @@ impl Workbench {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().w_full().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(process.command.clone()))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .t_small()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .copyable(process.command.clone())
+                            .child(process.command.clone()),
+                    )
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("PID {pid}"))),
             )
             .child(

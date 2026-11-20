@@ -18,7 +18,22 @@ Bindings are written once for macOS and translated, so Ctrl+letter always reache
 | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | ⌘-click | Ctrl-click |
 
-Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, Ctrl+Y, Ctrl+←/→ by word, Ctrl+Home / End).
+Text fields, the file editor and its table view, a chat's text and a diff use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, Ctrl+Y, Ctrl+←/→ by word, Ctrl+Home / End).
+
+### Copy and paste
+
+| Where | Copy | Paste |
+|---|---|---|
+| Terminal (macOS) | ⌘C | ⌘V |
+| Terminal (Windows) | Ctrl+Shift+C, or Ctrl+C while text is selected | Ctrl+Shift+V or Ctrl+V |
+| Terminal (Linux) | Ctrl+Shift+C | Ctrl+Shift+V |
+| Text fields, the file editor, tables | ⌘C / Ctrl+C | ⌘V / Ctrl+V |
+| A chat's text, a diff | ⌘C / Ctrl+C (Ctrl+Shift+C works too) | |
+
+- On Windows and Linux, **Ctrl+Insert** copies and **Shift+Insert** pastes everywhere, and a text field also takes the terminal's Ctrl+Shift+C / Ctrl+Shift+V.
+- **Right-click** a terminal for Copy, Paste and Select All. Text that cannot be selected (an error, a log line, a path, a commit message, a query result) is copied with a right-click → **Copy**.
+- **Linux**: text selected with the pointer is pasted with a middle click, in a terminal, a text field or the file editor.
+- A copied file or image pasted into a terminal goes in as its path; pasted into a chat's message box it is attached.
 
 ## Keyboard layouts other than US
 

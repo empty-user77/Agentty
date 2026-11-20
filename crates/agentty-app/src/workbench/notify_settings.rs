@@ -7,6 +7,7 @@
 
 use super::settings_page::{row_with_hint, section, toggle};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::settings::{settings, update_settings};
 use crate::terminal::NoticeKind;
@@ -603,7 +604,13 @@ impl Workbench {
         if busy {
             card = card.child(crate::ui::loading_row(t(cx, "chat.working")));
         } else if let Some((text, error)) = self.chat_notify.status.get(&channel) {
-            card = card.child(div().t_small().text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS })).child(text.clone()));
+            card = card.child(
+                div()
+                    .t_small()
+                    .text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS }))
+                    .copyable(text.clone())
+                    .child(text.clone()),
+            );
         }
         card
     }

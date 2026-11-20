@@ -2,6 +2,7 @@
 //! list with checkboxes, diff, commit box) and a History tab (commits, files, diff).
 //! All git work runs on background threads through `agentty_bridge::git`.
 
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -892,7 +893,14 @@ impl GitView {
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
                             )
-                            .child(div().t_small().truncate().text_color(hex(Chrome::MUTED)).child(tilde(repo))),
+                            .child(
+                                div()
+                                    .t_small()
+                                    .truncate()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(tilde(repo))
+                                    .copyable(repo.to_string_lossy().to_string()),
+                            ),
                     )
                     .when(selected, |d| d.child(icon("check", IconSize::INLINE, hex(Chrome::ACCENT))))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_repo(Some(target.clone()), cx))),
@@ -1228,7 +1236,7 @@ impl GitView {
             .cursor_pointer()
             .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
             .when(!selected, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
-            .child(div().t_body().truncate().text_color(hex(Chrome::BRIGHT)).child(commit.summary.clone()))
+            .child(div().t_body().truncate().text_color(hex(Chrome::BRIGHT)).child(commit.summary.clone()).copyable(commit.summary.clone()))
             .child(div().t_small().truncate().text_color(hex(Chrome::MUTED)).child(format!(
                 "{} · {}",
                 commit.author,
@@ -1277,7 +1285,7 @@ impl GitView {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .t_body()
-            .child(path_label(path))
+            .child(path_label(path).copyable(path.rsplit_once(" → ").map_or(path, |(_, new)| new).to_string()))
             .when_some(extra, |d, extra| d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(extra)))
             .into_any_element()
     }
@@ -1287,6 +1295,7 @@ impl GitView {
             return div().flex_1().h_full().bg(hex(Chrome::EDITOR)).child(crate::ui::hint(t(cx, "git.select_commit")));
         };
         let sha = commit.sha.clone();
+        let full_message = if commit.body.is_empty() { commit.summary.clone() } else { format!("{}\n\n{}", commit.summary, commit.body) };
         let header = div()
             .flex_shrink_0()
             .px_4()
@@ -1297,8 +1306,20 @@ impl GitView {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
-            .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(commit.summary.clone()))
-            .when(!commit.body.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(commit.body.clone())))
+            .child({
+                let all = full_message.clone();
+                div()
+                    .t_title()
+                    .font_weight(crate::theme::EMPHASIS)
+                    .text_color(hex(Chrome::BRIGHT))
+                    .child(commit.summary.clone())
+                    .copyable_with(commit.summary.clone(), move |cx| {
+                        vec![crate::context_menu::Item::copy_as(t(cx, "input.copy_all"), all.clone())]
+                    })
+            })
+            .when(!commit.body.is_empty(), |d| {
+                d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(commit.body.clone()).copyable(full_message.clone()))
+            })
             .child(
                 div()
                     .flex()
@@ -1306,7 +1327,7 @@ impl GitView {
                     .gap_3()
                     .t_small()
                     .text_color(hex(Chrome::MUTED))
-                    .child(commit.author.clone())
+                    .child(div().child(commit.author.clone()).copyable(commit.author.clone()))
                     .child(
                         div()
                             .id("git-copy-sha")
@@ -1339,7 +1360,7 @@ impl GitView {
                     .cursor_pointer()
                     .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
                     .when(!selected, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
-                    .child(path_label(&file.path))
+                    .child(path_label(&file.path).copyable(file.path.clone()))
                     .child(kind_badge(file.kind))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_commit_file(path.clone(), cx))),
             );
@@ -1446,7 +1467,7 @@ impl Render for GitView {
                 .border_color(hex_alpha(if error { Chrome::ERROR } else { Chrome::SUCCESS }, 0.5))
                 .t_body()
                 .text_color(hex(Chrome::BRIGHT))
-                .child(div().flex_1().min_w_0().child(text))
+                .child(div().flex_1().min_w_0().child(text.clone()).copyable(text))
                 .children(resolve)
                 .when(self.message.is_some(), |d| {
                     d.child(crate::ui::icon_only(

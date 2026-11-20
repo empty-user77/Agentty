@@ -200,6 +200,7 @@ actions!(
         ToggleZoom,
         ToggleChatView,
         CopyChatSelection,
+        PasteIntoChat,
         ToggleVoiceInput,
     ]
 );
@@ -3877,16 +3878,20 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
             .on_action(cx.listener(|this, _: &RunDiagnostics, _, cx| this.open_diagnostics(cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
-            // The Edit menu's ⌘C / ⌘V / ⌘A land here when no terminal is focused; a page in the
-            // in-app browser still needs them, since a menu key equivalent never reaches it.
-            .on_action(cx.listener(|_, _: &crate::terminal::Copy, _, _| {
-                crate::webview::perform_in_page(crate::webview::EditCommand::Copy);
+            // The Edit menu's ⌘X / ⌘C / ⌘V / ⌘A land here when no terminal is focused: a page in
+            // the in-app browser needs them (a menu key equivalent never reaches it), and so does
+            // whatever else has the keyboard, when the menu is used with the pointer.
+            .on_action(cx.listener(|_, _: &crate::terminal::Cut, window, cx| {
+                crate::edit_menu::perform(crate::webview::EditCommand::Cut, window, cx)
             }))
-            .on_action(cx.listener(|_, _: &crate::terminal::Paste, _, _| {
-                crate::webview::perform_in_page(crate::webview::EditCommand::Paste);
+            .on_action(cx.listener(|_, _: &crate::terminal::Copy, window, cx| {
+                crate::edit_menu::perform(crate::webview::EditCommand::Copy, window, cx)
             }))
-            .on_action(cx.listener(|_, _: &crate::terminal::SelectAll, _, _| {
-                crate::webview::perform_in_page(crate::webview::EditCommand::SelectAll);
+            .on_action(cx.listener(|_, _: &crate::terminal::Paste, window, cx| {
+                crate::edit_menu::perform(crate::webview::EditCommand::Paste, window, cx)
+            }))
+            .on_action(cx.listener(|_, _: &crate::terminal::SelectAll, window, cx| {
+                crate::edit_menu::perform(crate::webview::EditCommand::SelectAll, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
             // ⌘⇧R inside the page is caught by the web view itself; here it works from the terminals too.
@@ -4120,6 +4125,7 @@ impl Render for Workbench {
             .children(self.render_file_tab_menu(window, cx))
             .children(self.render_todo_menu(window, cx))
             .children(self.render_pane_menu(cx))
+            .children(crate::context_menu::render(window, cx))
             .children(self.render_run_menu(window, cx))
             .children(self.render_run_panel(window, cx))
             .children(self.render_tree_menu(cx))
@@ -4228,6 +4234,7 @@ impl Workbench {
     }
 
     fn render_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use crate::context_menu::Copyable as _;
         let (text, id) = self.toast.clone()?;
         let docked = self.overlay_right_inset(cx);
         Some(
@@ -4261,7 +4268,7 @@ impl Workbench {
                         .text_color(hex(Chrome::BRIGHT))
                         .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
                         // A long message (a translation, a path) wraps instead of running off the window.
-                        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
+                        .child(div().flex_1().min_w_0().whitespace_normal().copyable(text.clone()).child(text))
                         // Closes it now instead of waiting out its timer.
                         .child(
                             div()

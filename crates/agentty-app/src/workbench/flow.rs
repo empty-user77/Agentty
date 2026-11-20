@@ -3,6 +3,7 @@
 //! agent is asked to read it).
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{hint, kind_color, tilde};
@@ -1132,7 +1133,10 @@ impl Workbench {
                                 .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(label)),
                         )
                     })
-                    .child(div().truncate().text_color(hex(Chrome::MUTED)).child(tilde(&view.display_cwd()))),
+                    .child({
+                        let cwd = view.display_cwd();
+                        div().truncate().text_color(hex(Chrome::MUTED)).copyable(cwd.display().to_string()).child(tilde(&cwd))
+                    }),
             )
             // Output handle: drag from here onto another node to connect.
             .child(

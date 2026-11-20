@@ -784,6 +784,7 @@ impl Workbench {
             is_minimizable: false,
             display_id: display.as_ref().map(|d| d.id()),
             window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         let workbench = cx.entity();
@@ -836,6 +837,7 @@ impl Workbench {
             is_minimizable: false,
             display_id: display.as_ref().map(|d| d.id()),
             window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         let workbench = cx.entity();

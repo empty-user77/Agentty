@@ -4,6 +4,7 @@
 
 use super::settings_page::{note_for_search, row_with_hint, section_card, section_with_hint, toggle};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, action_button_with_icon, icon, icon_only, IconSize, TypeScale};
@@ -402,7 +403,13 @@ impl Workbench {
                             .children(version.map(|v| div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("v{v}")))),
                     )
                     .child(
-                        div().truncate().t_small().font_family(crate::settings::BUNDLED_FONT).text_color(hex(Chrome::MUTED)).child(command),
+                        div()
+                            .truncate()
+                            .t_small()
+                            .font_family(crate::settings::BUNDLED_FONT)
+                            .text_color(hex(Chrome::MUTED))
+                            .copyable(command.clone())
+                            .child(command),
                     ),
             )
             .child(
@@ -440,7 +447,9 @@ impl Workbench {
         let mut details = details_box().child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "agents.claude_features_hint")));
         match &self.settings_ui.claude_features {
             None => details = details.child(crate::ui::loading_row(t(cx, "agents.reading"))),
-            Some(Err(err)) => details = details.child(div().t_small().text_color(hex(Chrome::ERROR)).child(err.clone())),
+            Some(Err(err)) => {
+                details = details.child(div().t_small().text_color(hex(Chrome::ERROR)).copyable(err.clone()).child(err.clone()))
+            }
             Some(Ok(features)) => {
                 for (feature, on) in features.clone() {
                     let (label, hint) = feature_label(feature);
@@ -485,7 +494,7 @@ fn file_line(path: std::path::PathBuf, id: &'static str, cx: &mut Context<Workbe
         .flex()
         .items_center()
         .gap_2()
-        .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(tf(
+        .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).copyable(path.display().to_string()).child(tf(
             cx,
             "agents.config_file",
             &[("path", &shown)],

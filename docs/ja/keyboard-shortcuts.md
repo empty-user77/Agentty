@@ -18,7 +18,22 @@ description: 既定のショートカット一覧と、Windows・Linux での対
 | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | ⌘-クリック | Ctrl-クリック |
 
-テキスト入力欄とファイルエディタは通常の Ctrl を使います（Ctrl+C / V / X / A / Z、Ctrl+S、Ctrl+Y、単語単位の Ctrl+←/→、Ctrl+Home / End）。
+テキスト入力欄、ファイルエディタとその表ビュー、チャットの文章、diff は通常の Ctrl を使います（Ctrl+C / V / X / A / Z、Ctrl+S、Ctrl+Y、単語単位の Ctrl+←/→、Ctrl+Home / End）。
+
+### コピーと貼り付け
+
+| 場所 | コピー | 貼り付け |
+|---|---|---|
+| ターミナル（macOS） | ⌘C | ⌘V |
+| ターミナル（Windows） | Ctrl+Shift+C、または文字を選択した状態で Ctrl+C | Ctrl+Shift+V または Ctrl+V |
+| ターミナル（Linux） | Ctrl+Shift+C | Ctrl+Shift+V |
+| テキスト入力欄、ファイルエディタ、表 | ⌘C / Ctrl+C | ⌘V / Ctrl+V |
+| チャットの文章、diff | ⌘C / Ctrl+C（Ctrl+Shift+C も可） | |
+
+- Windows と Linux では、どこでも **Ctrl+Insert** でコピー、**Shift+Insert** で貼り付けできます。テキスト入力欄はターミナルの Ctrl+Shift+C / Ctrl+Shift+V も受け付けます。
+- ターミナルを**右クリック**すると、コピー、ペースト、すべてを選択が出ます。選択できない文章（エラー、ログの行、パス、コミットメッセージ、クエリ結果）は右クリック → **コピー**でコピーします。
+- **Linux**: ポインタで選択した文章は、ターミナル、テキスト入力欄、ファイルエディタで中クリックして貼り付けます。
+- コピーしたファイルや画像をターミナルに貼り付けるとパスが入り、チャットのメッセージ欄に貼り付けると添付されます。
 
 ## US 以外のキーボード配列
 

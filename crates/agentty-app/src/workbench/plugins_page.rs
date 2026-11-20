@@ -3,6 +3,7 @@
 //! from the catalog, a folder or Git, and creating a new plugin with an AI agent.
 
 use super::{LaunchTarget, Page, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::plugins::{self, RunState};
 use crate::settings::settings;
@@ -733,11 +734,13 @@ impl Workbench {
         list = list.child(section(t(cx, "plugins.market").to_string()));
         match &page.market {
             Market::Loading | Market::Idle => list = list.child(hint(t(cx, "plugins.market_loading"))),
-            Market::Stale(_, note) => list = list.child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(note.clone())),
+            Market::Stale(_, note) => {
+                list = list.child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).copyable(note.clone()).child(note.clone()))
+            }
             Market::Failed(error) => {
                 list = list
                     .child(hint(t(cx, "plugins.market_failed")))
-                    .child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(error.clone()))
+                    .child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).copyable(error.clone()).child(error.clone()))
             }
             Market::Ready(_) if market_rows.is_empty() => {
                 list = list.child(hint(t(cx, if search.is_empty() { "plugins.market_empty" } else { "plugins.no_matches" })))
@@ -1162,9 +1165,24 @@ impl Workbench {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
-                .child(div().t_small().text_color(hex(Chrome::ERROR)).child(plugin.error.clone().unwrap_or_default()))
-                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
+                .child(
+                    div()
+                        .t_title()
+                        .font_weight(crate::theme::EMPHASIS)
+                        .text_color(hex(Chrome::BRIGHT))
+                        .copyable(plugin.id.clone())
+                        .child(plugin.id.clone()),
+                )
+                .child(
+                    div()
+                        .t_small()
+                        .text_color(hex(Chrome::ERROR))
+                        .copyable(plugin.error.clone().unwrap_or_default())
+                        .child(plugin.error.clone().unwrap_or_default()),
+                )
+                .child(
+                    div().t_caption().text_color(hex(Chrome::MUTED)).copyable(plugin.dir.display().to_string()).child(tilde(&plugin.dir)),
+                )
                 .child(div().flex().gap_2().child(action_button(
                     SharedString::from(format!("plugin-remove-{}", plugin.id)),
                     t(cx, "plugins.uninstall"),
@@ -1179,7 +1197,9 @@ impl Workbench {
             badges.insert(0, (t(cx, "plugins.manual").to_string(), Chrome::ORANGE));
         }
         let failure = match plugins::runtime(cx, &plugin.id).map(|r| r.state.clone()) {
-            Some(RunState::Failed(error)) if plugin.enabled => Some(div().t_small().text_color(hex(Chrome::ERROR)).child(error)),
+            Some(RunState::Failed(error)) if plugin.enabled => {
+                Some(div().t_small().text_color(hex(Chrome::ERROR)).copyable(error.clone()).child(error))
+            }
             _ => None,
         };
         div()
@@ -1415,7 +1435,7 @@ impl Workbench {
                     .flex()
                     .gap_3()
                     .child(div().w(px(130.)).flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(label))
-                    .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::FOREGROUND)).child(value)),
+                    .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::FOREGROUND)).copyable(value.clone()).child(value)),
             );
         }
         grid
@@ -1750,6 +1770,7 @@ impl Workbench {
                 .t_caption()
                 .font_family("JetBrains Mono")
                 .text_color(hex(Chrome::FOREGROUND))
+                .copyable(lines.join("\n"))
                 .child(if lines.is_empty() { t(cx, "plugins.no_logs").to_string() } else { lines.join("\n") }),
         )
     }

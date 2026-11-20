@@ -5,6 +5,7 @@
 
 use super::settings_page::{note_for_search, section_card};
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, Chrome};
 use crate::ui::{action_button, icon_only, TypeScale};
@@ -148,6 +149,7 @@ impl Workbench {
                                     .t_small()
                                     .font_family(crate::settings::BUNDLED_FONT)
                                     .text_color(hex(Chrome::MUTED))
+                                    .copyable(server.program.to_string())
                                     .child(server.program),
                             )
                             .when(name == "jdtls" && trusted_builds > 0, |d| {

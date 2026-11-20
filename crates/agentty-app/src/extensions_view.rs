@@ -1,6 +1,7 @@
 //! Extensions page: what Claude Code and Codex can use (skills, subagents, commands, plugins, MCP
 //! servers), one-click use in the workspace, MCP management and secure API connectors.
 
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::run_in_login_shell;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -162,6 +163,7 @@ impl ExtensionsView {
                         .font_family(crate::settings::BUNDLED_FONT)
                         .text_size(px(12.))
                         .text_color(hex(Chrome::FOREGROUND))
+                        .copyable(text.clone())
                         .child(text),
                 )
                 .group(crate::ui::SCROLL_GROUP)
@@ -226,12 +228,19 @@ impl ExtensionsView {
                         .when(!item.description.is_empty(), |d| {
                             d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(item.description.clone()))
                         })
-                        .children(item.detail.clone().map(|detail| div().t_small().text_color(hex(Chrome::MUTED)).child(detail)))
                         .children(
-                            item.path
-                                .as_ref()
-                                .map(|p| div().t_small().truncate().text_color(hex(Chrome::MUTED)).child(crate::ui::tilde(p))),
+                            item.detail
+                                .clone()
+                                .map(|detail| div().t_small().text_color(hex(Chrome::MUTED)).copyable(detail.clone()).child(detail)),
                         )
+                        .children(item.path.as_ref().map(|p| {
+                            div()
+                                .t_small()
+                                .truncate()
+                                .text_color(hex(Chrome::MUTED))
+                                .copyable(p.display().to_string())
+                                .child(crate::ui::tilde(p))
+                        }))
                         .child(actions)
                         .child(body),
                 ),
@@ -549,11 +558,17 @@ impl Render for ExtensionsView {
             .gap_3()
             .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.extensions")))
             .child(agents)
-            .children(
-                self.project.as_ref().map(|p| {
-                    div().px_1p5().py_0p5().rounded_sm().bg(hex(0x2a2a2a)).t_small().text_color(hex(Chrome::MUTED)).child(tilde(p))
-                }),
-            )
+            .children(self.project.as_ref().map(|p| {
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(hex(0x2a2a2a))
+                    .t_small()
+                    .text_color(hex(Chrome::MUTED))
+                    .copyable(p.display().to_string())
+                    .child(tilde(p))
+            }))
             .child(action_button("ext-reload", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))))
             .child(div().flex_1());
 
@@ -1081,7 +1096,14 @@ impl ExtensionsView {
                                         &[("n", &(connector.endpoints.len() + connector.allow_any_path as usize).to_string())],
                                     ))),
                             )
-                            .child(div().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(connector.base_url.clone())),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .t_small()
+                                    .text_color(hex(Chrome::FOREGROUND))
+                                    .copyable(connector.base_url.clone())
+                                    .child(connector.base_url.clone()),
+                            ),
                     )
                     .child(actions),
             );

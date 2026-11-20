@@ -19,11 +19,13 @@ mod browser_mcp;
 mod browser_profiles;
 mod build_info;
 mod caret_blink;
+mod context_menu;
 mod crash_log;
 mod db_cli;
 mod debug;
 mod default_app;
 mod diagnostics;
+mod edit_menu;
 mod editor;
 mod extensions_view;
 mod tasks_cli;
@@ -110,6 +112,11 @@ pub fn guide_url(language: &str, page: &str) -> String {
         false => format!("{website}{prefix}/docs/{page}"),
     }
 }
+
+/// What a window says it belongs to on Linux (Wayland's app id, X11's WM_CLASS): the name of the
+/// desktop entry (`packaging/linux/run.agentty.Agentty.desktop`, and its `StartupWMClass`), so the
+/// dock and the window switcher show Agentty's icon and name instead of a generic one.
+pub const APP_ID: &str = "run.agentty.Agentty";
 
 /// Where to report a problem or ask for help.
 const SUPPORT_URL: &str = "https://github.com/empty-user77/Agentty/issues";
@@ -334,7 +341,7 @@ pub fn set_app_menus(cx: &mut App) {
             disabled: false,
             name: t(cx, "menu.edit").into(),
             items: vec![
-                MenuItem::os_action(t(cx, "menu.cut"), terminal::Copy, gpui::OsAction::Cut),
+                MenuItem::os_action(t(cx, "menu.cut"), terminal::Cut, gpui::OsAction::Cut),
                 MenuItem::os_action(t(cx, "menu.copy"), terminal::Copy, gpui::OsAction::Copy),
                 MenuItem::os_action(t(cx, "menu.paste"), terminal::Paste, gpui::OsAction::Paste),
                 MenuItem::os_action(t(cx, "menu.select_all"), terminal::SelectAll, gpui::OsAction::SelectAll),
@@ -563,6 +570,7 @@ fn bind_keys(cx: &mut App) {
             key("cmd-r", git_view::Refresh, Some("GitView")),
             key("cmd-c", terminal::Copy, Some("Terminal")),
             key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
+            key("cmd-v", workbench::PasteIntoChat, Some("ChatReading")),
             key("cmd-c", workbench::diff_body::DiffCopy, Some(workbench::diff_body::CONTEXT)),
             key("cmd-a", workbench::diff_body::DiffSelectAll, Some(workbench::diff_body::CONTEXT)),
             key("cmd-k", workbench::diff_body::DiffAsk, Some(workbench::diff_body::CONTEXT)),
@@ -572,6 +580,28 @@ fn bind_keys(cx: &mut App) {
             key("cmd-a", terminal::SelectAll, Some("Terminal")),
         ],
     );
+    if cfg!(target_os = "macos") {
+        // The Edit menu's Cut shows ⌘X (a terminal copies: its text cannot be taken out).
+        crate::bind(cx, [key("cmd-x", terminal::Cut, Some("Terminal"))]);
+    } else {
+        // Windows and Linux: the Insert keys copy and paste everywhere, and text to read also
+        // copies with the terminal's Ctrl+Shift+C, the key in the hand beside a terminal.
+        let chat = Some("ChatReading");
+        let diff = Some(workbench::diff_body::CONTEXT);
+        crate::bind(
+            cx,
+            [
+                KeyBinding::new("ctrl-insert", terminal::Copy, Some("Terminal")),
+                KeyBinding::new("shift-insert", terminal::Paste, Some("Terminal")),
+                KeyBinding::new("ctrl-insert", workbench::CopyChatSelection, chat),
+                KeyBinding::new("ctrl-shift-c", workbench::CopyChatSelection, chat),
+                KeyBinding::new("shift-insert", workbench::PasteIntoChat, chat),
+                KeyBinding::new("ctrl-shift-v", workbench::PasteIntoChat, chat),
+                KeyBinding::new("ctrl-insert", workbench::diff_body::DiffCopy, diff),
+                KeyBinding::new("ctrl-shift-c", workbench::diff_body::DiffCopy, diff),
+            ],
+        );
+    }
     // Voice input records on macOS only; elsewhere ⇧⌘M would translate onto mini mode's chord.
     if workbench::voice_input_available() {
         crate::bind(cx, [key("cmd-shift-m", ToggleVoiceInput, None)]);
@@ -1317,9 +1347,12 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
         }),
         window_decorations: platform::decorations::requested(cx.compositor_name()),
         window_min_size: Some(min_size),
+        app_id: Some(APP_ID.into()),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
+        // X11 takes it from here only (the option above is Wayland's).
+        window.set_app_id(APP_ID);
         if let Some(ns) = native::ns_window(window) {
             file_drop::install(ns);
         }

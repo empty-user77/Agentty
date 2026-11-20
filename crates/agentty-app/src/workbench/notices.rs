@@ -2,6 +2,7 @@
 //! with a panel, "jump to latest unread" and macOS notifications while Agentty is in the background.
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::terminal::NoticeKind;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -309,7 +310,14 @@ impl Workbench {
                                     .gap_1p5()
                                     .t_small()
                                     .children(tool.map(|tool| crate::brand::avatar(tool, 16.)))
-                                    .child(div().flex_1().truncate().text_color(hex(Chrome::MUTED)).child(notice.source.clone()))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .truncate()
+                                            .text_color(hex(Chrome::MUTED))
+                                            .child(notice.source.clone())
+                                            .copyable(notice.source.clone()),
+                                    )
                                     .child(div().text_color(hex(Chrome::MUTED)).child(relative_time(now, notice.at_ms))),
                             )
                             .child(
@@ -318,7 +326,8 @@ impl Workbench {
                                     .truncate()
                                     .text_color(if notice.read { hex(Chrome::MUTED) } else { hex(Chrome::BRIGHT) })
                                     .when(!notice.read, |d| d.font_weight(FontWeight::MEDIUM))
-                                    .child(notice.text.clone()),
+                                    .child(notice.text.clone())
+                                    .copyable(notice.text.clone()),
                             ),
                     ),
             );
@@ -465,9 +474,9 @@ impl Workbench {
                                     .child(div().font_weight(FontWeight::MEDIUM).text_color(hex(Chrome::FAVORITE)).child(label))
                                     .child(div().flex_1().truncate().child(first.who.clone())),
                             )
-                            .children(
-                                first.what.clone().map(|what| div().t_body().text_color(hex(Chrome::BRIGHT)).line_clamp(2).child(what)),
-                            )
+                            .children(first.what.clone().map(|what| {
+                                div().t_body().text_color(hex(Chrome::BRIGHT)).line_clamp(2).child(what.clone()).copyable(what)
+                            }))
                             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(if more > 0 {
                                 tf(cx, "waiting.go_more", &[("n", &more.to_string())])
                             } else {

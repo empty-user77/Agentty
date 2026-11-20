@@ -1,6 +1,7 @@
 //! Settings page: language, folder prompt, terminal theme, font, cursor and misc options.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::settings::{
     default_terminal_font, korean_font_installed, reload_themes, settings, update_settings, CommandAlias, CursorShapeSetting, HarnessAgent,
@@ -1118,7 +1119,7 @@ impl Workbench {
                     .when(matches!(self.updates.state, UpdateState::Checking), |d| {
                         d.child(crate::ui::spinner(crate::ui::IconSize::INLINE, hex(Chrome::MUTED)))
                     })
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(status)),
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).copyable(status.clone()).child(status)),
             )
             .child(build_info_section(cx))
             .child(

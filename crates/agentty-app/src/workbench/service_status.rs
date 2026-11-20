@@ -2,6 +2,7 @@
 //! link to its status page. Checked every five minutes, only for agents that are running.
 
 use super::Workbench;
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -94,7 +95,7 @@ impl Workbench {
                 .t_small()
                 .text_color(hex(Chrome::BRIGHT))
                 .child(icon("bell-dot", IconSize::INLINE, hex(Chrome::WARNING)))
-                .child(div().flex_1().min_w_0().truncate().child(message))
+                .child(div().flex_1().min_w_0().truncate().copyable(message.clone()).child(message))
                 .child(
                     div()
                         .id("service-status-page")

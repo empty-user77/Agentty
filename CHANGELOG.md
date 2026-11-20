@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A right-click on a terminal gives Copy, Paste and Select All.
+- Text that cannot be selected is copied with a right-click → Copy: errors and notices, run log lines, the in-app
+  browser's network details, commit messages and Git errors, a past session's messages, subagent output, database
+  results, plugin logs, paths and command lines across the pages.
+- A copied file or image pasted into a chat's message box, the idea chat or the orchestrator's goal is attached.
+- Windows and Linux: Ctrl+Insert copies and Shift+Insert pastes everywhere, and text fields also take the terminal's
+  Ctrl+Shift+C / Ctrl+Shift+V.
+- Linux: text selected with the pointer is pasted with a middle click (terminal, text fields, file editor), and a
+  copied image pastes into a terminal as a file.
+
+### Fixed
+- Linux: Agentty's windows show its icon in the dock and the window switcher instead of a generic one.
+- Windows and Linux: Ctrl+C copies a selection in a chat, a diff and the file editor's table view (it took
+  Ctrl+Shift+C), and the table view's cut, paste and select all use plain Ctrl as well.
+- The Edit menu's Cut, Copy, Paste and Select All work in text fields, the file editor, tables, chats and diffs when
+  chosen with the pointer, and Cut cuts in an in-app browser page.
+
 ## [0.4.8] - 2026-11-18
 
 ### Added

@@ -2,6 +2,7 @@
 //! to continue it in a new workspace or as a new tab.
 
 use super::Workbench;
+use crate::context_menu::{Copyable, Item};
 use crate::i18n::{t, tf};
 use crate::launch::{home_dir, LaunchSpec};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -114,7 +115,8 @@ impl Workbench {
                             .font_weight(crate::theme::EMPHASIS)
                             .truncate()
                             .text_color(hex(Chrome::BRIGHT))
-                            .child(session.title.clone()),
+                            .child(session.title.clone())
+                            .copyable(session.title.to_string()),
                     )
                     .child(
                         div()
@@ -125,12 +127,9 @@ impl Workbench {
                             .child(session.agent.display_name())
                             .child("·")
                             .child(relative_time(now, session.updated_at))
-                            .children(
-                                session
-                                    .cwd
-                                    .as_ref()
-                                    .map(|c| div().min_w_0().truncate().child(format!("· {}", tilde(std::path::Path::new(c))))),
-                            ),
+                            .children(session.cwd.as_ref().map(|c| {
+                                div().min_w_0().truncate().child(format!("· {}", tilde(std::path::Path::new(c)))).copyable(c.to_string())
+                            })),
                     ),
             )
             .child(button("viewer-resume-workspace", t(cx, "viewer.resume_workspace").into(), true).on_click(cx.listener(
@@ -157,12 +156,17 @@ impl Workbench {
 
         let body: AnyElement = match &viewer.turns {
             None => crate::ui::loading_row(t(cx, "viewer.loading")).into_any_element(),
-            Some(Err(error)) => div().p_5().t_body().text_color(hex(Chrome::ERROR)).child(error.clone()).into_any_element(),
+            Some(Err(error)) => {
+                div().p_5().t_body().text_color(hex(Chrome::ERROR)).child(error.clone()).copyable(error.clone()).into_any_element()
+            }
             Some(Ok(turns)) if turns.is_empty() => {
                 div().p_5().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "viewer.empty")).into_any_element()
             }
             Some(Ok(turns)) => {
                 let (turns, skipped, agent) = (turns.clone(), viewer.skipped, session.agent);
+                // The whole transcript as shown, built once per render for every turn's "Copy All".
+                let transcript: SharedString =
+                    turns.iter().filter(|t| t.role != Role::Summary).map(|t| t.text.as_str()).collect::<Vec<_>>().join("\n\n").into();
                 let notice = (skipped > 0).then(|| tf(cx, "viewer.skipped", &[("n", &skipped.to_string())]));
                 let rows = list(viewer.list.clone(), move |row, _, cx| {
                     // Each row is laid out only while on screen; spacing is padding, not a gap.
@@ -172,7 +176,7 @@ impl Workbench {
                         _ => {
                             let index = row - usize::from(notice.is_some());
                             match turns.get(index) {
-                                Some(turn) => item.child(render_turn(index, turn, agent, cx)).into_any_element(),
+                                Some(turn) => item.child(render_turn(index, turn, agent, &transcript, cx)).into_any_element(),
                                 None => item.into_any_element(),
                             }
                         }
@@ -194,7 +198,7 @@ impl Workbench {
     }
 }
 
-fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, cx: &App) -> AnyElement {
+fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, transcript: &SharedString, cx: &App) -> AnyElement {
     // Nobody wrote it, and it repeats the conversation: a line that says what stands here.
     if turn.role == Role::Summary {
         return div()
@@ -262,5 +266,9 @@ fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, c
                 .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(label))
                 .child(text),
         )
+        .copyable_with(turn.text.clone(), {
+            let transcript = transcript.clone();
+            move |cx| vec![Item::copy_as(t(cx, "input.copy_all"), transcript.to_string())]
+        })
         .into_any_element()
 }

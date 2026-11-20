@@ -7,6 +7,7 @@
 //! latest steps. The connection map the page always had is one click away in its header.
 
 use super::{Pane, Workbench};
+use crate::context_menu::Copyable;
 use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -963,8 +964,22 @@ impl Workbench {
                     .gap_1()
                     .border_b_1()
                     .border_color(hex(Chrome::BORDER))
-                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).truncate().child(format!("$ {}", first_line(&record.goal, 120))))
-                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(record.folder.display().to_string())),
+                    .child(
+                        div()
+                            .t_body()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .truncate()
+                            .child(format!("$ {}", first_line(&record.goal, 120)))
+                            .copyable(record.goal.clone()),
+                    )
+                    .child(
+                        div()
+                            .t_caption()
+                            .text_color(hex(Chrome::MUTED))
+                            .truncate()
+                            .child(record.folder.display().to_string())
+                            .copyable(record.folder.display().to_string()),
+                    ),
             )
             .child(
                 div()
@@ -976,7 +991,7 @@ impl Workbench {
                     .gap_3()
                     .t_small()
                     .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(color)))
-                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(said))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(said.clone()).copyable(said))
                     .children(buttons)
                     .child(
                         self.board_action(
@@ -1425,6 +1440,10 @@ impl Workbench {
             .map(|r| first_line(&r.goal, 120))
             .or_else(|| view.last_prompt.clone().map(|p| first_line(p.strip_prefix("Goal: ").unwrap_or(&p), 120)));
         // An orchestration says its stage in the words of its pane's strip; another session, its state.
+        let asked_full = record
+            .as_ref()
+            .map(|r| r.goal.clone())
+            .or_else(|| view.last_prompt.clone().map(|p| p.strip_prefix("Goal: ").unwrap_or(&p).to_string()));
         let (said, said_color) = match &record {
             Some(r) if r.stage == Stage::Ready => (t(cx, "orch.plan_ready").to_string(), RUNNING),
             Some(r) => {
@@ -1445,7 +1464,14 @@ impl Workbench {
             .gap_1()
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
-            .child(div().t_body().text_color(hex(Chrome::BRIGHT)).truncate().child(format!("$ {}", asked.unwrap_or_else(|| title.clone()))))
+            .child(
+                div()
+                    .t_body()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .truncate()
+                    .child(format!("$ {}", asked.unwrap_or_else(|| title.clone())))
+                    .copyable(asked_full.unwrap_or_else(|| title.clone())),
+            )
             .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tf(cx, "sessions.workflow_of", &[("title", &title)])));
         let status = div()
             .flex_shrink_0()
@@ -1465,7 +1491,7 @@ impl Workbench {
                     .items_center()
                     .gap_3()
                     .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(said_color)))
-                    .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(said))
+                    .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(said.clone()).copyable(said))
                     // No subagent yet: "wave 0 · 0/0 done" would say nothing.
                     .when(all > 0, |d| {
                         d.child(div().min_w_0().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(tf(

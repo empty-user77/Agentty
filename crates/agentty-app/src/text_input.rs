@@ -120,6 +120,13 @@ pub fn bind_keys(cx: &mut App) {
                 gpui::KeyBinding::new("ctrl-shift-end", SelectDocEnd, Some(CONTEXT)),
                 gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, Some(CONTEXT)),
                 gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, Some(CONTEXT)),
+                // The Insert keys, and the terminal's own copy and paste keys: a field sits beside
+                // terminals here, and the hand keeps pressing theirs.
+                gpui::KeyBinding::new("ctrl-insert", Copy, Some(CONTEXT)),
+                gpui::KeyBinding::new("shift-insert", Paste, Some(CONTEXT)),
+                gpui::KeyBinding::new("shift-delete", Cut, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-c", Copy, Some(CONTEXT)),
+                gpui::KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
             ],
         );
     }
@@ -138,6 +145,9 @@ pub enum TextInputEvent {
     /// Multi-line text pasted into a field made with [`TextInput::keep_pasted_lines`]; the field
     /// itself is left unchanged.
     PastedLines(String),
+    /// Copied files, or a copied image written out as a file, pasted into a field made with
+    /// [`TextInput::take_pasted_files`]; the field itself is left unchanged.
+    PastedFiles(Vec<std::path::PathBuf>),
 }
 
 pub struct TextInput {
@@ -172,6 +182,8 @@ pub struct TextInput {
     peek_generation: u64,
     /// Multi-line pastes are handed to the owner (`PastedLines`) instead of being joined.
     keep_pasted_lines: bool,
+    /// Pasted files and images are handed to the owner (`PastedFiles`), which attaches them.
+    take_pasted_files: bool,
     /// Rows shown when the field holds many lines; 0 is the usual one-line field.
     rows: usize,
     /// A message composer: Enter sends (Confirmed) and Shift+Enter adds a line.
@@ -234,6 +246,7 @@ impl TextInput {
             peek: None,
             peek_generation: 0,
             keep_pasted_lines: false,
+            take_pasted_files: false,
             rows: 0,
             enter_sends: false,
             arrows_to_owner: false,
@@ -260,6 +273,13 @@ impl TextInput {
 
     pub fn keep_pasted_lines(mut self) -> Self {
         self.keep_pasted_lines = true;
+        self
+    }
+
+    /// A field whose owner attaches files: a paste of copied files or of an image is handed to
+    /// it (`PastedFiles`) instead of doing nothing.
+    pub fn take_pasted_files(mut self) -> Self {
+        self.take_pasted_files = true;
         self
     }
 
@@ -579,7 +599,19 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
+    /// Pastes the clipboard at the caret, as ⌘V in the field does.
+    pub fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste(&Paste, window, cx);
+    }
+
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if self.take_pasted_files {
+            let files = crate::platform::drops::pasted_paths(cx);
+            if !files.is_empty() {
+                cx.emit(TextInputEvent::PastedFiles(files));
+                return;
+            }
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             // A field of many lines takes the lines; a one-line field joins them, unless its
             // owner asked for them (`keep_pasted_lines`).
@@ -635,8 +667,21 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.is_selecting = false;
+        // Linux: what the pointer selected is what a middle click pastes, here or in a terminal.
+        if !self.selected_range.is_empty() && !self.masked {
+            crate::platform::primary::set(self.content[self.selected_range.clone()].to_string(), cx);
+        }
+    }
+
+    /// Middle click (Linux): the text the pointer selected last goes in where the click is.
+    fn on_middle_click(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = crate::platform::primary::get(cx) else { return };
+        window.focus(&self.focus_handle, cx);
+        self.move_to(self.index_for_mouse_position(event.position), cx);
+        let text = if self.is_multiline() { text } else { text.replace('\n', " ") };
+        self.replace_text_in_range(None, &text, window, cx);
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1483,6 +1528,7 @@ impl Render for TextInput {
                     cx.notify();
                 }),
             )
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_click))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))

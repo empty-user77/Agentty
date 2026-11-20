@@ -18,7 +18,22 @@ description: 全部默认快捷键，以及它们在 Windows 与 Linux 上的对
 | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | ⌘-点击 | Ctrl-点击 |
 
-文本输入框和文件编辑器使用普通的 Ctrl（Ctrl+C / V / X / A / Z、Ctrl+S、Ctrl+Y、按词移动的 Ctrl+←/→、Ctrl+Home / End）。
+文本输入框、文件编辑器及其表格视图、聊天中的文字和 diff 使用普通的 Ctrl（Ctrl+C / V / X / A / Z、Ctrl+S、Ctrl+Y、按词移动的 Ctrl+←/→、Ctrl+Home / End）。
+
+### 复制与粘贴
+
+| 位置 | 复制 | 粘贴 |
+|---|---|---|
+| 终端（macOS） | ⌘C | ⌘V |
+| 终端（Windows） | Ctrl+Shift+C，或在选中文字时按 Ctrl+C | Ctrl+Shift+V 或 Ctrl+V |
+| 终端（Linux） | Ctrl+Shift+C | Ctrl+Shift+V |
+| 文本输入框、文件编辑器、表格 | ⌘C / Ctrl+C | ⌘V / Ctrl+V |
+| 聊天中的文字、diff | ⌘C / Ctrl+C（Ctrl+Shift+C 也可以） | |
+
+- 在 Windows 和 Linux 上，任何地方都可以用 **Ctrl+Insert** 复制、**Shift+Insert** 粘贴。文本输入框也接受终端的 Ctrl+Shift+C / Ctrl+Shift+V。
+- **右键点击**终端会出现复制、粘贴和全选。无法选中的文字（错误、日志行、路径、提交信息、查询结果）用右键 → **复制**。
+- **Linux**：用指针选中的文字，可在终端、文本输入框和文件编辑器中用鼠标中键粘贴。
+- 把复制的文件或图片粘贴到终端会输入其路径，粘贴到聊天的消息框则作为附件。
 
 ## 美式以外的键盘布局
 

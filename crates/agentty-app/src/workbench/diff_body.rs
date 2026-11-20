@@ -504,6 +504,10 @@ impl DiffBody {
         self.side_by = 0.;
         self.scrolling = None;
         self.bar_x = position.x;
+        // Linux: what the pointer selected is what a middle click pastes.
+        if let Some((from, to)) = self.range() {
+            crate::platform::primary::set(selected_text(&self.lines, from, to), cx);
+        }
         cx.notify();
     }
 

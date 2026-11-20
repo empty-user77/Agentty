@@ -133,6 +133,18 @@ const DISK_CHECK: Duration = Duration::from_secs(2);
 /// How often the markdown preview catches up with edits and looks for clicked links.
 const PREVIEW_TICK: Duration = Duration::from_millis(150);
 
+/// The file editor's and its table view's actions for a command of the Edit menu
+/// (see `crate::edit_menu`).
+pub fn edit_menu_actions(command: crate::webview::EditCommand) -> Vec<Box<dyn gpui::Action>> {
+    use crate::webview::EditCommand;
+    match command {
+        EditCommand::Cut => vec![Box::new(Cut), Box::new(table_view::GridCut)],
+        EditCommand::Copy => vec![Box::new(Copy), Box::new(table_view::GridCopy)],
+        EditCommand::Paste => vec![Box::new(Paste), Box::new(table_view::GridPaste)],
+        EditCommand::SelectAll => vec![Box::new(SelectAll), Box::new(table_view::GridSelectAll)],
+    }
+}
+
 pub fn bind_keys(cx: &mut App) {
     use crate::key;
     let c = Some(CONTEXT);
@@ -250,6 +262,9 @@ pub fn bind_keys(cx: &mut App) {
                 gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, c),
                 gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, c),
                 gpui::KeyBinding::new("ctrl-y", Redo, c),
+                gpui::KeyBinding::new("ctrl-insert", Copy, c),
+                gpui::KeyBinding::new("shift-insert", Paste, c),
+                gpui::KeyBinding::new("shift-delete", Cut, c),
             ],
         );
     }
@@ -1655,10 +1670,28 @@ impl CodeEditor {
     fn mouse_up(&mut self, _: &gpui::MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         // The selection bar shows once the drag is over.
         if self.drag.take().is_some() {
+            // Linux: what the pointer selected is what a middle click pastes.
+            if let Some(doc) = self.docs.get(self.active).filter(|d| !d.buffer.selection.is_empty()) {
+                crate::platform::primary::set(doc.buffer.selected_text(), cx);
+            }
             cx.notify();
         }
         self.scrollbar_drag = None;
         self.scrollbar_drag_x = None;
+    }
+
+    /// Middle click (Linux): the text the pointer selected last goes in where the click is.
+    fn middle_click(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = crate::platform::primary::get(cx) else { return };
+        let Some(pos) = self.text_position(event.position) else { return };
+        if !self.docs.get(self.active).is_some_and(|d| d.editable()) {
+            return;
+        }
+        window.focus(&self.focus_handle, cx);
+        self.edit(cx, |b| {
+            b.move_to(pos, false);
+            b.paste(&text);
+        });
     }
 
     /// The text position under a point in the text (not in the gutter or on the scrollbar).
@@ -3007,6 +3040,7 @@ impl Render for CodeEditor {
                     gpui::CursorStyle::IBeam
                 })
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::mouse_down))
+                .on_mouse_down(gpui::MouseButton::Middle, cx.listener(Self::middle_click))
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
