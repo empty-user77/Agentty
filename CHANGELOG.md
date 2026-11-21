@@ -31,6 +31,9 @@ All notable changes to this project are documented here. The format follows
   copied image pastes into a terminal as a file.
 
 ### Fixed
+- Linux, X11 (agentty-gpui 0.1.2): typing a Cyrillic, Greek or accented letter through an input method (IBus, Fcitx)
+  no longer closes the app. Text an input method sends in a character set of its own (ISO 8859, KS C 5601,
+  GB 2312, JIS) is read, and text that cannot be read never ends the app.
 - Linux (agentty-gpui 0.1.1): a paste no longer ends the app when it runs out of file descriptors or the display
   server does not take the request, nor does a keymap that cannot be read; on X11, text copied together with a
   picture of it (a spreadsheet's cells) pastes as the text, as on Wayland.
