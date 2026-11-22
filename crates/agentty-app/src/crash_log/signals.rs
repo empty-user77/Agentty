@@ -41,6 +41,8 @@ static UTC_OFFSET: AtomicI64 = AtomicI64::new(0);
 /// A panic wrote its record and is aborting: the abort is not a second crash.
 pub static PANICKED: AtomicBool = AtomicBool::new(false);
 static WRITING: AtomicBool = AtomicBool::new(false);
+/// The pipe [`expect_the_end`] writes a fault's number to.
+static SENT_FAULT: AtomicI32 = AtomicI32::new(-1);
 
 const SIGNALS: usize = 32;
 /// What handled each signal before this did, to hand it on to.
@@ -72,6 +74,7 @@ pub fn install() {
     }
     UTC_OFFSET.store(i64::from(chrono::Local::now().offset().local_minus_utc()), Ordering::Relaxed);
     load_the_unwinder();
+    end_after_a_sent_fault();
 
     for (signal, _) in FAULTS.iter().chain(ENDED) {
         // SAFETY: installs a handler that keeps to what a signal handler may do, and keeps what
@@ -105,6 +108,63 @@ fn load_the_unwinder() {
         let mut frames = [std::ptr::null_mut::<c_void>(); 2];
         // SAFETY: `frames` is as long as the count passed.
         unsafe { backtrace(frames.as_mut_ptr(), frames.len() as c_int) };
+    }
+}
+
+/// How long a fault handed back to the system has to end the process before it is taken as sent.
+const A_FAULT_ENDS_WITHIN: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// A fault is handed back to the system's default and the handler returns: the faulting
+/// instruction runs again and ends the process. A fault signal that was sent (`kill -SEGV`) has no
+/// such instruction, and macOS does not say which it was (its record reads the same for both), so
+/// the app ran on after its record said it crashed, with no handler left for a real crash. The
+/// handler names the signal on a pipe; a thread that waits on it (asleep until then) sends the
+/// signal again if the process is still there a moment later.
+fn end_after_a_sent_fault() {
+    let mut ends = [0 as c_int; 2];
+    // SAFETY: `ends` holds the two descriptors `pipe` fills in; they stay open for the life of
+    // the process, are not inherited, and the handler's end never blocks.
+    unsafe {
+        if libc::pipe(ends.as_mut_ptr()) != 0 {
+            return;
+        }
+        for end in ends {
+            libc::fcntl(end, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        libc::fcntl(ends[1], libc::F_SETFL, libc::O_NONBLOCK);
+    }
+    let [reading, writing] = ends;
+    let waiting = std::thread::Builder::new().name("sent-fault".into()).spawn(move || {
+        let mut signal = [0u8; 1];
+        loop {
+            // SAFETY: one byte into a buffer of one.
+            let read = unsafe { libc::read(reading, signal.as_mut_ptr().cast(), 1) };
+            if read == 1 {
+                break;
+            }
+            if read == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                return;
+            }
+        }
+        std::thread::sleep(A_FAULT_ENDS_WITHIN);
+        // SAFETY: the default for a fault signal ends the process.
+        unsafe {
+            libc::signal(c_int::from(signal[0]), libc::SIG_DFL);
+            libc::raise(c_int::from(signal[0]));
+        }
+    });
+    if waiting.is_ok() {
+        SENT_FAULT.store(writing, Ordering::Relaxed);
+    }
+}
+
+/// From the handler: `signal` was handed back to the system and should have ended the process.
+fn expect_the_end(signal: c_int) {
+    let pipe = SENT_FAULT.load(Ordering::Relaxed);
+    if pipe >= 0 {
+        let byte = [signal as u8];
+        // SAFETY: one byte from a buffer of one, to a descriptor that never blocks.
+        unsafe { libc::write(pipe, byte.as_ptr().cast(), 1) };
     }
 }
 
@@ -232,7 +292,8 @@ fn fault_address(info: *mut libc::siginfo_t) -> usize {
 /// Whether a process sent the signal (`kill`), rather than the processor raising it for a fault.
 fn sent_by_a_process(info: *mut libc::siginfo_t) -> bool {
     // SAFETY: the system hands the handler a valid record.
-    // `SI_USER`, which the libc crate does not name on every system.
+    // `SI_USER`, which the libc crate does not name on every system. macOS has the name and does
+    // not use it: a sent fault signal reads as a fault there (see `end_after_a_sent_fault`).
     const SENT_BY_KILL: c_int = if cfg!(target_os = "macos") { 0x10001 } else { 0 };
     !info.is_null() && unsafe { (*info).si_code } == SENT_BY_KILL
 }
@@ -313,6 +374,8 @@ extern "C" fn on_signal(signal: c_int, info: *mut libc::siginfo_t, context: *mut
                 if fault.is_some() && sent_by_a_process(info) {
                     libc::signal(signal, libc::SIG_DFL);
                     libc::raise(signal);
+                } else if fault.is_some() {
+                    expect_the_end(signal);
                 }
             }
         }
@@ -324,6 +387,8 @@ extern "C" fn on_signal(signal: c_int, info: *mut libc::siginfo_t, context: *mut
                 libc::signal(signal, libc::SIG_DFL);
                 if fault.is_none() || signal == libc::SIGABRT || sent_by_a_process(info) {
                     libc::raise(signal);
+                } else {
+                    expect_the_end(signal);
                 }
             }
         }
@@ -333,6 +398,54 @@ extern "C" fn on_signal(signal: c_int, info: *mut libc::siginfo_t, context: *mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The process the test below sends a fault signal to: this handler installed, then idle.
+    #[test]
+    fn a_process_that_waits_for_a_sent_fault() {
+        if std::env::var_os("AGENTTY_TEST_SENT_FAULT").is_none() {
+            return;
+        }
+        install();
+        println!("waiting");
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    /// `kill -SEGV` ends the app and leaves a record (it ran on after the record on macOS, which
+    /// reports a sent fault signal as a fault).
+    #[test]
+    fn a_sent_fault_signal_ends_the_process() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::ExitStatusExt;
+        let data = std::env::temp_dir().join(format!("agentty-sent-fault-test-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "crash_log::signals::tests::a_process_that_waits_for_a_sent_fault", "--nocapture", "--test-threads=1"])
+            .env("AGENTTY_TEST_SENT_FAULT", "1")
+            .env("AGENTTY_DATA_DIR", &data)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        assert!(lines.any(|line| line.is_ok_and(|line| line.contains("waiting"))), "the process never got ready");
+        // SAFETY: a signal to a process this test started.
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGSEGV) };
+        let started = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if started.elapsed() > std::time::Duration::from_secs(10) {
+                child.kill().ok();
+                panic!("the process ran on after the fault signal");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.signal(), Some(libc::SIGSEGV));
+        let record = std::fs::read_to_string(data.join("crash.log")).unwrap_or_default();
+        assert!(record.contains("crashed: SIGSEGV"), "{record}");
+        std::fs::remove_dir_all(data).ok();
+    }
 
     #[test]
     fn numbers_are_written_without_formatting() {
