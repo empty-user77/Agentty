@@ -108,7 +108,7 @@ fn login_environment(shell: &str) -> Option<HashMap<String, String>> {
     }
     const MARKER: &str = "__agentty_diagnose_env__";
     let mut command = std::process::Command::new(shell);
-    command.args(["-l", "-i", "-c", &format!("echo {MARKER}; env")]);
+    agentty_bridge::process::without_terminal(&mut command).args(["-l", "-i", "-c", &format!("echo {MARKER}; env")]);
     // Only what the startup files set counts, not what reached this process.
     for name in LEAKED_VARIABLES {
         command.env_remove(name);

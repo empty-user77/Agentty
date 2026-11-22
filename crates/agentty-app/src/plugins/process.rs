@@ -334,7 +334,7 @@ pub(crate) fn login_shell_path() -> Option<String> {
     }
     // Interactive as well as login: `.zshrc` is where many installs put themselves on PATH.
     // `printenv` rather than `$PATH`: it prints the colon-separated form in every shell.
-    Command::new(crate::launch::LaunchSpec::shell_program())
+    agentty_bridge::process::without_terminal(&mut Command::new(crate::launch::LaunchSpec::shell_program()))
         .args(["-l", "-i", "-c", &format!("echo {PATH_MARKER}; printenv PATH")])
         .stdin(Stdio::null())
         .stderr(Stdio::null())

@@ -819,11 +819,10 @@ pub fn start(command: &str, dir: &std::path::Path) -> std::io::Result<(u32, futu
         .env("PYTHONUNBUFFERED", "1")
         .env("TERM", "xterm-256color")
         .env_remove("CLAUDECODE");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        process.process_group(0);
-    }
+    // A session of its own, not only a group (the watchdog's pid is still its group's): a group in
+    // the session of a terminal Agentty was started from is a background job there, and the
+    // interactive shell running the command was stopped touching the terminal, the run hanging.
+    agentty_bridge::process::without_terminal(&mut process);
     let mut child = process.spawn()?;
     let pid = child.id();
     remember(pid);

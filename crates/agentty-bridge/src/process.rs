@@ -33,6 +33,23 @@ pub fn hide_window(command: &mut Command) -> &mut Command {
     command
 }
 
+/// Starts `command` in a session of its own, away from any terminal Agentty was started from.
+/// An interactive shell (`-i`) in that terminal's session takes the terminal for its own group
+/// and gives it back on exit: two at once, or one in a group of its own, left the shell or
+/// Agentty stopped (SIGTTOU/SIGTTIN) for good. The new session's group has the child's pid, so
+/// signalling the child's group works as before. Nothing on Windows.
+pub fn without_terminal(command: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `setsid` is async-signal-safe and touches nothing of this process.
+        unsafe {
+            command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+        }
+    }
+    command
+}
+
 /// Extensions tried for a bare program name: `PATHEXT` on Windows (`.exe`, `.cmd`, …).
 fn extensions() -> Vec<String> {
     if cfg!(windows) {
