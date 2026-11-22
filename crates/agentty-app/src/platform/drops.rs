@@ -284,7 +284,7 @@ mod tests {
         // A folder left open is closed.
         let open = dir.join("open");
         std::fs::create_dir(&open).unwrap();
-        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(private_dir(&open, uid));
         assert_eq!(std::fs::metadata(&open).unwrap().mode() & 0o777, 0o700);
         // A link under the name, a file under the name and someone else's folder are refused.
