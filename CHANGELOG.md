@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-23
+
 ### Added
 - Crash records say more, and more kinds of endings leave one (`crash.log` in the data folder; nothing is sent).
   Linux and macOS: a fault outside Rust's own errors (in a graphics driver, for one) is recorded with its address and
