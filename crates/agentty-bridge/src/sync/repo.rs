@@ -199,7 +199,9 @@ fn login_shell_path() -> Option<String> {
     const MARKER: &str = "__agentty_sync_path__";
     let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
     let mut command = Command::new(shell);
-    command.args(["-l", "-i", "-c", &format!("echo {MARKER}; printenv PATH")]).stdin(std::process::Stdio::null());
+    process::without_terminal(&mut command)
+        .args(["-l", "-i", "-c", &format!("echo {MARKER}; printenv PATH")])
+        .stdin(std::process::Stdio::null());
     let (_, stdout, _) = run(command, Duration::from_secs(5)).ok()?;
     let mut lines = stdout.lines().skip_while(|line| line.trim() != MARKER);
     lines.nth(1).map(|path| path.trim().to_string()).filter(|path| path.contains('/'))

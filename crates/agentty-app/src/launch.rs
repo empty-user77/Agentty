@@ -783,7 +783,7 @@ pub fn login_shell_command(argv: &[String]) -> anyhow::Result<std::process::Comm
         let line = argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
         // Interactive as well as login: `.zshrc` is where many installs put themselves on PATH.
         let mut command = std::process::Command::new(LaunchSpec::shell_program());
-        command.args(["-l", "-i", "-c", &line]);
+        agentty_bridge::process::without_terminal(&mut command).args(["-l", "-i", "-c", &line]);
         Ok(command)
     }
     #[cfg(windows)]

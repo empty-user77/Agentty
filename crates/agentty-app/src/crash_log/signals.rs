@@ -71,6 +71,7 @@ pub fn install() {
         STATE_PATH.store(state.into_raw(), Ordering::Relaxed);
     }
     UTC_OFFSET.store(i64::from(chrono::Local::now().offset().local_minus_utc()), Ordering::Relaxed);
+    load_the_unwinder();
 
     for (signal, _) in FAULTS.iter().chain(ENDED) {
         // SAFETY: installs a handler that keeps to what a signal handler may do, and keeps what
@@ -90,6 +91,20 @@ pub fn install() {
                 }
             }
         }
+    }
+}
+
+/// glibc's `backtrace` loads `libgcc_s` the first time it runs. Done first inside the handler,
+/// that load ran on the thread's small alternate signal stack, overflowed it, and the process
+/// died there: the record stopped at its stack line, and the run's state file was left behind,
+/// so the next start reported a run that "ended without a record". One call now loads it, as
+/// glibc's documentation asks of a program that calls `backtrace` from a signal handler.
+fn load_the_unwinder() {
+    #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+    {
+        let mut frames = [std::ptr::null_mut::<c_void>(); 2];
+        // SAFETY: `frames` is as long as the count passed.
+        unsafe { backtrace(frames.as_mut_ptr(), frames.len() as c_int) };
     }
 }
 
@@ -290,6 +305,14 @@ extern "C" fn on_signal(signal: c_int, info: *mut libc::siginfo_t, context: *mut
                 } else {
                     let handler: extern "C" fn(c_int) = std::mem::transmute(before.sa_sigaction);
                     handler(signal);
+                }
+                // Rust's handler (and others like it) hands a fault back to the default and returns,
+                // for the faulting instruction to run again and end the process. A fault signal sent
+                // by `kill` has no instruction to run again: without this the app ran on after its
+                // record said it crashed, with no handler left for a real crash.
+                if fault.is_some() && sent_by_a_process(info) {
+                    libc::signal(signal, libc::SIG_DFL);
+                    libc::raise(signal);
                 }
             }
         }

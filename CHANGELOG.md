@@ -47,6 +47,10 @@ All notable changes to this project are documented here. The format follows
   Ctrl+Shift+C), and the table view's cut, paste and select all use plain Ctrl as well.
 - The Edit menu's Cut, Copy, Paste and Select All work in text fields, the file editor, tables, chats and diffs when
   chosen with the pointer, and Cut cuts in an in-app browser page.
+- Linux: a copied image pasted into a terminal, and a file dropped with an odd name, are written to a folder of your
+  own that only you can open (`/tmp/agentty-drops-<your user id>`), not to one shared by every user of the computer.
+- macOS and Linux: with Agentty started from a terminal, a project's run command no longer hangs before it starts, and
+  reading the login shell's PATH no longer stops Agentty.
 
 ## [0.4.8] - 2026-11-18
 

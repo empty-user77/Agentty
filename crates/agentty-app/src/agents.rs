@@ -197,7 +197,7 @@ fn remember_auto_mode(supported: bool) {
 fn probe() -> String {
     // Interactive login shell: many installs (e.g. `~/.local/bin` for Claude Code, nvm) only reach
     // PATH through `.zshrc`, which a login-only shell started from Finder never reads.
-    std::process::Command::new(crate::launch::LaunchSpec::shell_program())
+    agentty_bridge::process::without_terminal(&mut std::process::Command::new(crate::launch::LaunchSpec::shell_program()))
         .args(["-l", "-i", "-c", &probe_script()])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

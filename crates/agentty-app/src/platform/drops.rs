@@ -148,8 +148,18 @@ fn write_image(format: gpui::ImageFormat, bytes: &[u8]) -> Option<PathBuf> {
     }
     let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let path = drop_dir().join(format!("pasted-{millis}.{extension}"));
-    std::fs::write(&path, bytes).ok()?;
+    write_private(&path, bytes).ok()?;
     Some(path)
+}
+
+/// A pasted image may be a screenshot of anything: readable by this user only.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(bytes)
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // the macOS drop hook queues here
@@ -159,10 +169,43 @@ pub(crate) fn push(drop: Dropped) {
     }
 }
 
+/// Where dropped and pasted files are written. macOS and Windows give each user a temporary
+/// folder of their own; Linux's `/tmp` is everyone's, so there the folder carries the user's id,
+/// is open to that user only, and is used only when it is really theirs.
 pub(crate) fn drop_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("agentty-drops");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    #[cfg(unix)]
+    {
+        // SAFETY: `getuid` has no preconditions and cannot fail.
+        let uid = unsafe { libc::getuid() };
+        let shared = std::env::temp_dir().join(format!("agentty-drops-{uid}"));
+        if private_dir(&shared, uid) {
+            return shared;
+        }
+        // Another user's folder (or a link) took the name: Agentty's own data folder instead.
+        let own = agentty_bridge::fsutil::data_dir().join("drops");
+        let _ = private_dir(&own, uid);
+        own
+    }
+    #[cfg(not(unix))]
+    {
+        let dir = std::env::temp_dir().join("agentty-drops");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}
+
+/// Makes `dir` (`0700`) if it is not there, and says whether it is a real folder of `uid`'s that
+/// nobody else can open. One with looser permissions is closed first.
+#[cfg(unix)]
+fn private_dir(dir: &std::path::Path, uid: u32) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+    // Not followed: a link planted under this name points somewhere else.
+    let Ok(meta) = std::fs::symlink_metadata(dir) else { return false };
+    if !meta.is_dir() || meta.uid() != uid {
+        return false;
+    }
+    meta.mode() & 0o077 == 0 || std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok()
 }
 
 #[cfg(test)]
@@ -218,5 +261,40 @@ mod tests {
         assert!(!is_written_image(&[written.clone(), PathBuf::from("/tmp/report.pdf")]));
         assert!(!is_written_image(&[]));
         std::fs::remove_file(written).ok();
+    }
+
+    /// A screenshot pasted on a shared Linux machine is the user's alone: the folder is theirs and
+    /// closed, the file too, and a folder of the same name that is not theirs is never used.
+    #[cfg(unix)]
+    #[test]
+    fn pasted_files_are_private() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let written = write_image(gpui::ImageFormat::Png, b"private").unwrap();
+        let folder = written.parent().unwrap();
+        // SAFETY: no preconditions.
+        let uid = unsafe { libc::getuid() };
+        let meta = std::fs::symlink_metadata(folder).unwrap();
+        assert!(meta.is_dir() && meta.uid() == uid);
+        assert_eq!(meta.mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&written).unwrap().mode() & 0o777, 0o600);
+        std::fs::remove_file(written).ok();
+
+        let dir = std::env::temp_dir().join(format!("agentty-private-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A folder left open is closed.
+        let open = dir.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(private_dir(&open, uid));
+        assert_eq!(std::fs::metadata(&open).unwrap().mode() & 0o777, 0o700);
+        // A link under the name, a file under the name and someone else's folder are refused.
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&open, &link).unwrap();
+        assert!(!private_dir(&link, uid));
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!private_dir(&file, uid));
+        assert!(!private_dir(&open, uid.wrapping_add(1)));
+        std::fs::remove_dir_all(dir).ok();
     }
 }
