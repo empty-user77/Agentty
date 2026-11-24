@@ -129,6 +129,7 @@ dependencies = [
  "dirs 7.0.0",
  "embed-resource",
  "futures",
+ "image",
  "libc",
  "log",
  "objc",

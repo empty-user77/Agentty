@@ -24,6 +24,8 @@ path = "src/main.rs"
 [dependencies]
 # SVG a plugin wrote, turned into PNG (`media/svgToPng`); already in the tree through gpui.
 resvg = "0.45"
+# X11 window icon (`_NET_WM_ICON`); already in the tree through gpui.
+image = { version = "0.25", default-features = false, features = ["png"] }
 alacritty_terminal = "0.26"
 anyhow.workspace = true
 base64 = "0.23"

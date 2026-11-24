@@ -652,6 +652,7 @@ impl Workbench {
             titlebar: Some(gpui::TitlebarOptions { title: Some(t(cx, "collab.agents").into()), ..Default::default() }),
             window_min_size: Some(gpui::size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))),
             app_id: Some(crate::APP_ID.into()),
+            icon: crate::window_icon(),
             ..Default::default()
         };
         // Opened after this update: the window draws its first frame from the workbench at once.

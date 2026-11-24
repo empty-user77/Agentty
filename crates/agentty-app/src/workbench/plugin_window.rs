@@ -118,6 +118,7 @@ impl Workbench {
             focus: true,
             show: true,
             app_id: Some(crate::APP_ID.into()),
+            icon: crate::window_icon(),
             ..Default::default()
         };
         let weak = cx.entity().downgrade();
