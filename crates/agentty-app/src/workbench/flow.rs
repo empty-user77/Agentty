@@ -69,7 +69,7 @@ const NODE_WIDTH: f32 = 260.;
 const WORKSPACE_COLORS: [u32; 8] = [0x4daafc, 0xb180d7, 0x89d185, 0xe8a33d, 0xf14c4c, 0x4ec9b0, 0xd7ba7d, 0xc586c0];
 const NODE_HEIGHT: f32 = 128.;
 /// Node width plus the gap that holds edge labels.
-const COLUMN_STEP: f32 = 470.;
+const COLUMN_STEP: f32 = 520.;
 /// How far the chart zooms out and in, and the step of its buttons (as the other diagrams).
 const ZOOM_RANGE: (f32, f32) = (0.3, 2.);
 const ZOOM_STEP: f32 = 1.2;
@@ -81,44 +81,127 @@ const SMALL_CARD_ZOOM: f32 = 0.7;
 /// resuming) before a link between them settles for a one-way document.
 const DIRECT_WAIT_STEP: std::time::Duration = std::time::Duration::from_secs(1);
 const DIRECT_WAIT_TRIES: u32 = 10;
-/// Where along its own line a link's buttons sit when the two sessions are linked both ways:
-/// towards the card the line leaves, so each set is beside the session it sends from. (The middle
-/// is the one point both lines of a pair pass through.)
-const PAIR_LABEL_AT: f32 = 0.3;
-/// Room a link's buttons take on the canvas, whatever the zoom, and the gap kept to a card.
+/// Room a set of link buttons takes on the canvas, whatever the zoom, and the gap kept around it.
 const LABEL_SIZE: (f32, f32) = (220., 28.);
 const LABEL_GAP: f32 = 6.;
+/// How far from a card's right side an arrowhead stops: the handle links are dragged from sits in
+/// the middle of that side, and the arrow points at it instead of sliding under it (at 100%).
+const HANDLE_REACH: f32 = 10.;
+/// Two sessions linked both ways have two lines: how far each leaves and arrives from the middle
+/// of the card's side, and how far it bows away from the other one (at 100%).
+const LANE: f32 = 18.;
+const BOW: f32 = 16.;
 
-/// How far a link's line leaves its source and enters its target sideways.
-fn curve_bend(start: Point<Pixels>, end: Point<Pixels>, zoom: f32) -> Pixels {
-    px(((f32::from(end.x) - f32::from(start.x)).abs() / 2.).max(60. * zoom))
+fn xy(p: Point<Pixels>) -> (f32, f32) {
+    (f32::from(p.x), f32::from(p.y))
 }
 
-/// The point `t` (0 at the source, 1 at the target) along a link's line as it is drawn.
-fn curve_point(start: Point<Pixels>, end: Point<Pixels>, zoom: f32, t: f32) -> Point<Pixels> {
-    let bend = curve_bend(start, end, zoom);
-    let u = 1. - t;
-    let (a, b, c, d) = (u * u * u, 3. * u * u * t, 3. * u * t * t, t * t * t);
-    point(start.x * a + (start.x + bend) * b + (end.x - bend) * c + end.x * d, start.y * (a + b) + end.y * (c + d))
+fn moved(p: Point<Pixels>, by: (f32, f32), far: f32) -> Point<Pixels> {
+    point(p.x + px(by.0 * far), p.y + px(by.1 * far))
 }
 
-/// A link's buttons centred at `at`, moved above or below every card they would cover, whichever
-/// is nearer. Never sideways: beside a card is where the lines leave and arrive.
-fn clear_of_cards(mut at: Point<Pixels>, cards: &[Bounds<Pixels>]) -> Point<Pixels> {
-    let (half_w, half_h) = (px(LABEL_SIZE.0 / 2. + LABEL_GAP), px(LABEL_SIZE.1 / 2. + LABEL_GAP));
-    for card in cards {
-        let (up, down) = (at.y + half_h - card.top(), card.bottom() - (at.y - half_h));
-        let zero = px(0.);
-        if at.x + half_w <= card.left() || at.x - half_w >= card.right() || up <= zero || down <= zero {
-            continue;
-        }
-        if down <= up {
-            at.y += down;
-        } else {
-            at.y -= up;
+/// The way from `start` to `end` as a unit step, and the step to its right-hand side.
+fn heading(start: Point<Pixels>, end: Point<Pixels>) -> Option<((f32, f32), (f32, f32))> {
+    let ((sx, sy), (ex, ey)) = (xy(start), xy(end));
+    let (dx, dy) = (ex - sx, ey - sy);
+    let length = dx.hypot(dy);
+    (length > 0.5).then(|| ((dx / length, dy / length), (-dy / length, dx / length)))
+}
+
+fn status_color(status: &EdgeStatus) -> u32 {
+    match status {
+        EdgeStatus::Sharing => Chrome::ORANGE,
+        EdgeStatus::Shared(_) => Chrome::ATTENTION,
+        EdgeStatus::Failed(_) => Chrome::ERROR,
+    }
+}
+
+/// The line of a link: a curve from `start` to `end`, pulled towards `c1` and `c2`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LinkCurve {
+    start: Point<Pixels>,
+    c1: Point<Pixels>,
+    c2: Point<Pixels>,
+    end: Point<Pixels>,
+    /// The side the line bows to, when it runs beside the line of the link back.
+    bow: Option<(f32, f32)>,
+}
+
+impl LinkCurve {
+    /// The point `t` of the way along (0 at the source, 1 at the target).
+    fn at(&self, t: f32) -> Point<Pixels> {
+        let u = 1. - t;
+        let (a, b, c, d) = (u * u * u, 3. * u * u * t, 3. * u * t * t, t * t * t);
+        point(
+            self.start.x * a + self.c1.x * b + self.c2.x * c + self.end.x * d,
+            self.start.y * a + self.c1.y * b + self.c2.y * c + self.end.y * d,
+        )
+    }
+
+    /// The middle of the link's buttons: on its line, half way. Side by side the two sets of a
+    /// two-way link have room on their own lines; one above the other they do not (they are wide),
+    /// so the more upright the link is, the further each set moves out beside its own line.
+    fn label(&self) -> Point<Pixels> {
+        let mid = self.at(0.5);
+        match self.bow {
+            Some(side) => moved(mid, side, side.0.abs() * (LABEL_SIZE.0 / 2. + LABEL_GAP)),
+            None => mid,
         }
     }
-    at
+
+    /// The way the line is heading where it arrives.
+    fn arriving(&self) -> Option<((f32, f32), (f32, f32))> {
+        heading(self.c2, self.end).or_else(|| heading(self.start, self.end))
+    }
+}
+
+/// The line of a link from card `a` to card `b`: it leaves the side of `a` that faces `b` and
+/// arrives on the side of `b` that faces `a`, straight out of one and straight into the other, so
+/// it never runs round a card. With a link back (`two_way`) the two lines leave and arrive beside
+/// each other and bow apart — each on the right of the middle as it goes — so they never cross.
+fn link_curve(a: Bounds<Pixels>, b: Bounds<Pixels>, two_way: bool, zoom: f32) -> Option<LinkCurve> {
+    let (ac, bc) = (a.center(), b.center());
+    let (_, side) = heading(ac, bc)?;
+    let gap_x = f32::from((b.left() - a.right()).max(a.left() - b.right()));
+    let gap_y = f32::from((b.top() - a.bottom()).max(a.top() - b.bottom()));
+    // The sides that face each other, the step out of `a` towards `b`, the step along the sides,
+    // and how far apart they are.
+    let (mut start, mut end, out, along, apart) = if gap_x >= gap_y {
+        let right = bc.x >= ac.x;
+        let (from, to) = if right { (a.right(), b.left()) } else { (a.left(), b.right()) };
+        (point(from, ac.y), point(to, bc.y), (if right { 1. } else { -1. }, 0.), (0., 1.), f32::from(to - from).abs())
+    } else {
+        let down = bc.y >= ac.y;
+        let (from, to) = if down { (a.bottom(), b.top()) } else { (a.top(), b.bottom()) };
+        (point(ac.x, from), point(bc.x, to), (0., if down { 1. } else { -1. }), (1., 0.), f32::from(to - from).abs())
+    };
+    let mut bow = 0.;
+    if two_way {
+        // Each line on its own side of the middle, clear of the handle there.
+        let turn = if side.0 * along.0 + side.1 * along.1 >= 0. { 1. } else { -1. };
+        let lane = (LANE * zoom).max(6.);
+        (start, end) = (moved(start, along, turn * lane), moved(end, along, turn * lane));
+        // Far enough apart for both sets of buttons, however far out the chart is zoomed.
+        bow = (BOW * zoom).max(LABEL_SIZE.1 / 2. + LABEL_GAP - lane) / 0.75;
+    } else if out.0 < 0. {
+        // An arrowhead in the middle of a card's right side points at the handle there.
+        end = moved(end, out, -HANDLE_REACH * zoom);
+    }
+    let reach = (apart / 2.).max(30. * zoom);
+    Some(LinkCurve {
+        start,
+        c1: moved(moved(start, out, reach), side, bow),
+        c2: moved(moved(end, out, -reach), side, bow),
+        end,
+        bow: two_way.then_some(side),
+    })
+}
+
+/// A line as it is drawn: its color, and whether its buttons are under the pointer.
+struct LinkLine {
+    curve: LinkCurve,
+    color: u32,
+    pointed: bool,
 }
 
 fn clamp_zoom(zoom: f32) -> f32 {
@@ -840,34 +923,18 @@ impl Workbench {
         }
         let position_of = |id: u64| nodes.iter().find(|(_, n, _)| *n == id).map(|(_, _, p)| *p);
 
-        // Edge geometry relative to the canvas: from the source's right handle to the target's left side.
+        // Edge geometry relative to the canvas: between the sides of the two cards that face each other.
         let zoom = self.flow.view.zoom;
         let hovered = self.flow.hovered_edge;
-        let cards: Vec<Bounds<Pixels>> = nodes
-            .iter()
-            .map(|(_, _, p)| Bounds::new(self.flow.to_canvas(*p), size(px(NODE_WIDTH * zoom), px(NODE_HEIGHT * zoom))))
-            .collect();
-        // (start, end, color, the one whose buttons are under the pointer)
-        let mut curves: Vec<(Point<Pixels>, Point<Pixels>, u32, bool)> = Vec::new();
+        let card = |p: Point<Pixels>| Bounds::new(self.flow.to_canvas(p), size(px(NODE_WIDTH * zoom), px(NODE_HEIGHT * zoom)));
+        let mut lines: Vec<LinkLine> = Vec::new();
         let mut labels: Vec<(FlowEdge, Point<Pixels>)> = Vec::new();
         for edge in &self.flow.edges {
             let (Some(a), Some(b)) = (position_of(edge.from), position_of(edge.to)) else { continue };
-            let start = self.flow.to_canvas(point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.)));
-            let end = self.flow.to_canvas(point(b.x, b.y + px(NODE_HEIGHT / 2.)));
-            let color = match edge.status {
-                EdgeStatus::Sharing => Chrome::ORANGE,
-                EdgeStatus::Shared(_) => Chrome::ATTENTION,
-                EdgeStatus::Failed(_) => Chrome::ERROR,
-            };
-            curves.push((start, end, color, hovered == Some((edge.from, edge.to))));
-            // The two lines of a two-way pair cross in the middle, where nothing told their
-            // buttons apart: each set sits on its own line instead, beside the card it leaves.
-            let reverse = self.flow.edges.iter().any(|e| e.from == edge.to && e.to == edge.from);
-            let mut at = if reverse {
-                clear_of_cards(curve_point(start, end, zoom, PAIR_LABEL_AT), &cards)
-            } else {
-                point((start.x + end.x) / 2., (start.y + end.y) / 2.)
-            };
+            let two_way = self.flow.edges.iter().any(|e| e.from == edge.to && e.to == edge.from);
+            let Some(curve) = link_curve(card(a), card(b), two_way, zoom) else { continue };
+            lines.push(LinkLine { curve, color: status_color(&edge.status), pointed: hovered == Some((edge.from, edge.to)) });
+            let mut at = curve.label();
             // Never one set on top of another.
             while labels.iter().any(|(_, o)| (o.x - at.x).abs() < px(LABEL_SIZE.0) && (o.y - at.y).abs() < px(LABEL_SIZE.1)) {
                 at.y += px(LABEL_SIZE.1 + LABEL_GAP);
@@ -875,14 +942,16 @@ impl Workbench {
             labels.push((edge.clone(), at));
         }
         // The line pointed at is drawn last, over the others.
-        curves.sort_by_key(|c| c.3);
+        lines.sort_by_key(|line| line.pointed);
+        // A link being dragged: out of the handle, and level into the pointer.
         let pending = match &self.flow.drag {
             Some(FlowDrag::Connect { from }) => position_of(*from).map(|a| {
                 let origin = self.flow.canvas.get().origin;
-                (
-                    self.flow.to_canvas(point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.))),
-                    point(self.flow.pointer.x - origin.x, self.flow.pointer.y - origin.y),
-                )
+                let start = self.flow.to_canvas(point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.)));
+                let end = point(self.flow.pointer.x - origin.x, self.flow.pointer.y - origin.y);
+                let reach = (f32::from(end.x - start.x).abs() / 2.).max(60. * zoom);
+                let curve = LinkCurve { start, c1: moved(start, (1., 0.), reach), c2: moved(end, (-1., 0.), reach), end, bow: None };
+                LinkLine { curve, color: Chrome::BLUE, pointed: false }
             }),
             _ => None,
         };
@@ -932,38 +1001,41 @@ impl Workbench {
                             cx.stop_propagation();
                         });
                         let o = bounds.origin;
-                        // `strength`: 1 as usual, above for the line pointed at, below for the rest then.
-                        let mut draw = |start: Point<Pixels>, end: Point<Pixels>, color: u32, strength: f32| {
-                            let (s, e) = (point(o.x + start.x, o.y + start.y), point(o.x + end.x, o.y + end.y));
-                            let bend = curve_bend(s, e, zoom);
-                            let color = hex_alpha(color, strength.min(1.));
-                            let wide = strength.max(1.);
+                        let on = |p: Point<Pixels>| point(o.x + p.x, o.y + p.y);
+                        // The line pointed at is drawn stronger, and the others fainter then.
+                        let mut draw = |line: &LinkLine, pointing: bool| {
+                            let curve = line.curve;
+                            let Some((ahead, side)) = curve.arriving() else { return };
+                            let (wide, alpha) = match (pointing, line.pointed) {
+                                (false, _) => (1., 1.),
+                                (true, true) => (1.75, 1.),
+                                (true, false) => (1., 0.3),
+                            };
+                            let color = hex_alpha(line.color, alpha);
+                            let (long, half) = (9. * wide, 5. * wide);
+                            let back = moved(curve.end, ahead, -long);
                             let mut path = PathBuilder::stroke(px((2. * zoom).max(1.) * wide));
-                            path.move_to(s);
-                            path.cubic_bezier_to(e, point(s.x + bend, s.y), point(e.x - bend, e.y));
+                            path.move_to(on(curve.start));
+                            // Up to the arrowhead's base, so a thick line doesn't blunt its tip.
+                            path.cubic_bezier_to(on(back), on(curve.c1), on(moved(curve.c2, ahead, -long)));
                             if let Ok(path) = path.build() {
                                 window.paint_path(path, color);
                             }
                             let mut arrow = PathBuilder::fill();
-                            arrow.move_to(e);
-                            arrow.line_to(point(e.x - px(9. * wide), e.y - px(5. * wide)));
-                            arrow.line_to(point(e.x - px(9. * wide), e.y + px(5. * wide)));
+                            arrow.move_to(on(curve.end));
+                            arrow.line_to(on(moved(back, side, half)));
+                            arrow.line_to(on(moved(back, side, -half)));
                             arrow.close();
                             if let Ok(arrow) = arrow.build() {
                                 window.paint_path(arrow, color);
                             }
                         };
-                        let pointing = curves.iter().any(|c| c.3);
-                        for (start, end, color, pointed) in &curves {
-                            let strength = match (pointing, *pointed) {
-                                (false, _) => 1.,
-                                (true, true) => 1.75,
-                                (true, false) => 0.3,
-                            };
-                            draw(*start, *end, *color, strength);
+                        let pointing = lines.iter().any(|line| line.pointed);
+                        for line in &lines {
+                            draw(line, pointing);
                         }
-                        if let Some((start, end)) = pending {
-                            draw(start, end, Chrome::BLUE, 1.);
+                        if let Some(line) = &pending {
+                            draw(line, false);
                         }
                     },
                 )
@@ -1233,8 +1305,6 @@ impl Workbench {
                         }),
                     ),
             )
-            // Input side marker.
-            .child(div().absolute().left(s(-5.)).top(s(NODE_HEIGHT / 2. - 5.)).size(s(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)))
     }
 
     fn render_edge_label(&self, edge: FlowEdge, mid: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1324,8 +1394,8 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_of_cards, cluster_links, curve_point, grid_slot, lead_intro, partner_intro, registered_peer, FlowState, FlowView,
-        PeerSession, LABEL_SIZE, NODE_HEIGHT, NODE_WIDTH, PAIR_LABEL_AT, ZOOM_RANGE,
+        cluster_links, grid_slot, lead_intro, link_curve, partner_intro, registered_peer, xy, FlowState, FlowView, PeerSession, LABEL_SIZE,
+        NODE_HEIGHT, NODE_WIDTH, ZOOM_RANGE,
     };
     use gpui::{point, px, size, Bounds};
 
@@ -1368,48 +1438,74 @@ mod tests {
         assert!(partner.contains("report back") && partner.contains("\"agentty-be\""));
     }
 
-    /// The reported problem: the two sets of buttons of a two-way link sat one above the other in
-    /// the middle, where the two lines cross, so neither said which direction it was for. Each is
-    /// now on its own line, on the side of the card that line leaves, and off the cards.
+    /// The reported problems: the two lines of a two-way link crossed (each left its card on the
+    /// right and came in on the left, whatever lay between), and their two sets of buttons sat one
+    /// above the other where they crossed, so neither said which direction it was for. The lines
+    /// now join the sides that face each other and bow apart, each with its buttons.
     #[test]
-    fn the_buttons_of_a_two_way_link_sit_by_their_own_source() {
+    fn a_two_way_link_is_two_lines_that_never_cross_with_their_own_buttons() {
         let node = size(px(NODE_WIDTH), px(NODE_HEIGHT));
-        for (a, b) in [((40., 60.), (510., 280.)), ((40., 60.), (510., 60.)), ((510., 500.), (40., 60.)), ((40., 60.), (40., 280.))] {
-            let (a, b) = (point(px(a.0), px(a.1)), point(px(b.0), px(b.1)));
-            let cards = [Bounds::new(a, node), Bounds::new(b, node)];
-            let out = |p: gpui::Point<gpui::Pixels>| point(p.x + px(NODE_WIDTH), p.y + px(NODE_HEIGHT / 2.));
-            let into = |p: gpui::Point<gpui::Pixels>| point(p.x, p.y + px(NODE_HEIGHT / 2.));
-            // Both lines pass through the same middle: that is why the middle can't hold the buttons.
-            let (there, back) = (curve_point(out(a), into(b), 1., 0.5), curve_point(out(b), into(a), 1., 0.5));
-            assert!((f32::from(there.x) - f32::from(back.x)).abs() < 0.01 && (f32::from(there.y) - f32::from(back.y)).abs() < 0.01);
-
-            let there = clear_of_cards(curve_point(out(a), into(b), 1., PAIR_LABEL_AT), &cards);
-            let back = clear_of_cards(curve_point(out(b), into(a), 1., PAIR_LABEL_AT), &cards);
-            let far = |p: gpui::Point<gpui::Pixels>, q: gpui::Point<gpui::Pixels>| {
-                (f32::from(p.x) - f32::from(q.x)).hypot(f32::from(p.y) - f32::from(q.y))
-            };
-            // Each set is nearer the handle its line leaves than the other set is.
-            assert!(far(there, out(a)) < far(back, out(a)), "{there:?} {back:?}");
-            assert!(far(back, out(b)) < far(there, out(b)), "{there:?} {back:?}");
-            // Apart from each other, and covering neither card.
-            let apart = (there.x - back.x).abs() >= px(LABEL_SIZE.0) || (there.y - back.y).abs() >= px(LABEL_SIZE.1);
-            assert!(apart, "{there:?} {back:?}");
-            for at in [there, back] {
-                let label = Bounds::new(
-                    point(at.x - px(LABEL_SIZE.0 / 2.), at.y - px(LABEL_SIZE.1 / 2.)),
-                    size(px(LABEL_SIZE.0), px(LABEL_SIZE.1)),
-                );
-                assert!(cards.iter().all(|c| !c.intersects(&label)), "{label:?} covers a card");
+        let far = |p: gpui::Point<gpui::Pixels>, q: gpui::Point<gpui::Pixels>| (xy(p).0 - xy(q).0).hypot(xy(p).1 - xy(q).1);
+        let layouts = [
+            ((40., 60.), (560., 280.)),
+            ((40., 60.), (560., 60.)),
+            ((560., 500.), (40., 60.)),
+            ((40., 60.), (40., 280.)),
+            ((40., 60.), (120., 280.)),
+            ((40., 500.), (1080., 60.)),
+        ];
+        for (a, b) in layouts {
+            for zoom in [1., 0.3_f32] {
+                let at = |p: (f32, f32)| Bounds::new(point(px(p.0 * zoom), px(p.1 * zoom)), size(node.width * zoom, node.height * zoom));
+                let (a, b) = (at(a), at(b));
+                let there = link_curve(a, b, true, zoom).expect("a line");
+                let back = link_curve(b, a, true, zoom).expect("a line back");
+                // Never crossing, never touching: no point of one is near any point of the other.
+                let steps = || (0..=60).map(|i| i as f32 / 60.);
+                let nearest =
+                    steps().flat_map(|t| steps().map(move |u| (t, u))).map(|(t, u)| far(there.at(t), back.at(u))).fold(f32::MAX, f32::min);
+                assert!(nearest > 8., "{nearest} {there:?} {back:?}");
+                let touches = |c: Bounds<gpui::Pixels>, p: gpui::Point<gpui::Pixels>| {
+                    let (x, y) = xy(p);
+                    let (l, r, t, bm) = (f32::from(c.left()), f32::from(c.right()), f32::from(c.top()), f32::from(c.bottom()));
+                    let on_x = ((x - l).abs() < 0.01 || (x - r).abs() < 0.01) && y > t && y < bm;
+                    let on_y = ((y - t).abs() < 0.01 || (y - bm).abs() < 0.01) && x > l && x < r;
+                    on_x || on_y
+                };
+                for (line, from, to) in [(there, a, b), (back, b, a)] {
+                    // Each leaves its own card and arrives on the other.
+                    assert!(touches(from, line.start) && touches(to, line.end), "{line:?}");
+                    // No way round: the line is hardly longer than the straight way.
+                    let length: f32 = (0..60).map(|i| far(line.at(i as f32 / 60.), line.at((i + 1) as f32 / 60.))).sum();
+                    assert!(length < far(line.start, line.end) * 1.6 + 40., "{length} {line:?}");
+                }
+                // Each set of buttons is nearer its own line than the other, and clear of the other set.
+                let (mine, theirs) = (there.label(), back.label());
+                let to_line =
+                    |p: gpui::Point<gpui::Pixels>, line: super::LinkCurve| steps().map(|t| far(p, line.at(t))).fold(f32::MAX, f32::min);
+                assert!(to_line(mine, there) < to_line(mine, back) && to_line(theirs, back) < to_line(theirs, there));
+                let apart = (mine.x - theirs.x).abs() >= px(LABEL_SIZE.0) || (mine.y - theirs.y).abs() >= px(LABEL_SIZE.1);
+                assert!(apart, "{mine:?} {theirs:?}");
             }
         }
     }
 
-    /// The line starts at its source and ends at its target.
+    /// A one-way link between two cards in a row is the straight way between them, its buttons in
+    /// the middle; an arrowhead on a card's right side stops at the handle there.
     #[test]
-    fn a_line_runs_from_its_source_to_its_target() {
-        let (s, e) = (point(px(300.), px(124.)), point(px(510.), px(344.)));
-        assert_eq!(curve_point(s, e, 1., 0.), s);
-        assert_eq!(curve_point(s, e, 1., 1.), e);
+    fn a_one_way_link_takes_the_sides_that_face_each_other() {
+        let node = size(px(NODE_WIDTH), px(NODE_HEIGHT));
+        let (a, b) = (Bounds::new(point(px(40.), px(60.)), node), Bounds::new(point(px(560.), px(60.)), node));
+        let line = link_curve(a, b, false, 1.).expect("a line");
+        assert_eq!((line.start, line.end), (point(px(300.), px(124.)), point(px(560.), px(124.))));
+        assert_eq!(line.label(), point(px(430.), px(124.)));
+        let back = link_curve(b, a, false, 1.).expect("a line");
+        assert_eq!((back.start, back.end), (point(px(560.), px(124.)), point(px(310.), px(124.))));
+        // Below: out of the bottom, into the top.
+        let below = Bounds::new(point(px(40.), px(280.)), node);
+        let down = link_curve(a, below, false, 1.).expect("a line");
+        assert_eq!((down.start, down.end), (point(px(170.), px(188.)), point(px(170.), px(280.))));
+        assert!(link_curve(a, a, false, 1.).is_none());
     }
 
     /// A chart shown in a canvas at (100, 50), 800 × 600 on the window.
@@ -1532,7 +1628,7 @@ mod tests {
     #[test]
     fn an_empty_chart_uses_the_preferred_cell() {
         assert_eq!(grid_slot(&[], 0, 2), point(px(40.), px(60.)));
-        assert_eq!(grid_slot(&[], 1, 2), point(px(510.), px(60.)));
+        assert_eq!(grid_slot(&[], 1, 2), point(px(560.), px(60.)));
         assert_eq!(grid_slot(&[], 2, 2), point(px(40.), px(280.)));
     }
 
