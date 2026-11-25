@@ -46,7 +46,7 @@ pub struct PortInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TabInfo {
-    /// As the tab bar titles it: its focused pane's title.
+    /// As the tab bar titles it: the name it was given, else its focused pane's title.
     pub title: String,
     /// The pane focused in it.
     pub active_pane: u64,

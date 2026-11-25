@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A tab can be given a name of its own: **Rename** in its right-click menu, or a double-click on the tab. The name
+  is kept with the layout, in the recently closed tabs and in TODO, and remote access shows it. An empty name goes
+  back to the automatic one.
+
 ### Fixed
 - Linux, X11: Agentty's windows set `_NET_WM_ICON`, so the window switcher (Alt+Tab) and title bar show Agentty's icon
   instead of a generic one.
