@@ -230,6 +230,24 @@ impl Workbench {
                 return self.remote_chat_message(*pane, text.clone(), cx);
             }
             Command::Orchestration(asked) => return self.remote_orchestration(asked, cx),
+            // Taken by the window that runs the bots; the others leave it.
+            Command::Bot { handle, text } => {
+                if !self.hosts_bots() || !self.remote_reaches_bot(handle, cx) {
+                    return false;
+                }
+                if let Err(why) = self.bot_post(handle, super::bots::Origin::User, text.clone(), 0, cx) {
+                    eprintln!("agentty: a message for bot @{handle} from the remote page was not taken: {why}");
+                }
+                return true;
+            }
+            Command::BotSwitch { handle, on } => {
+                if !self.hosts_bots() || !self.remote_reaches_bot(handle, cx) {
+                    return false;
+                }
+                let on = *on;
+                self.change_bot(handle, |bot| bot.enabled = on, cx);
+                return true;
+            }
             Command::Stop { pane } => {
                 let Some((_, found)) = self.remote_panes().find(|(_, p)| p.read(cx).pane_id == *pane) else { return false };
                 self.remote_stop_turn(&found, cx);
@@ -271,6 +289,8 @@ impl Workbench {
             | Command::CloseTab { .. }
             | Command::OpenFolder { .. }
             | Command::Chat { .. }
+            | Command::Bot { .. }
+            | Command::BotSwitch { .. }
             | Command::OpenPort { .. }
             | Command::Stop { .. }
             | Command::Choice { .. }

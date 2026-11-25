@@ -5,6 +5,7 @@ pub mod agent_auth;
 pub mod agy;
 pub mod amp;
 pub mod backup;
+pub mod bots;
 pub mod chat_log;
 pub mod chrome_cookies;
 pub mod claude;

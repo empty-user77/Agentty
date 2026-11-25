@@ -191,6 +191,7 @@ pub enum SocketMessage {
     /// `tasksctl\t{"action":"status"|"send",…}` from `agentty tasks status|send`: a chat's lead
     /// asks about its workers or sends one a message; answered on `reply`.
     TasksCtl(TasksCtlRequest),
+    Bot(BotRequest),
     /// `plan\t{"agents":[…]}` from `agentty plan`: an orchestrator hands over its plan, for the
     /// Orchestration page to draw every agent before it starts; answered on `reply`.
     Plan(PlanRequest),
@@ -378,6 +379,50 @@ pub struct PlanRequest {
     pub plan: serde_json::Value,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// What a pane asks of the bots (`agentty bot list|send|result|status`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotCtl {
+    pub action: String,
+    /// The bot's handle (every action but `list`; optional for `status`).
+    pub to: String,
+    /// The message (`send`).
+    pub prompt: String,
+}
+
+/// A [`BotCtl`] from a pane, answered on `reply`.
+#[derive(Debug, Clone)]
+pub struct BotRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    pub ctl: BotCtl,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// Parses a `bot` request and checks it: a known action, a handle that can be one, bounded sizes.
+/// There is no action that makes, changes or deletes a bot: those belong to the user, in the app.
+pub fn parse_bot_ctl(value: &serde_json::Value) -> Result<BotCtl, String> {
+    let action = value["action"].as_str().unwrap_or_default().to_string();
+    let to = value["to"].as_str().unwrap_or_default().trim().trim_start_matches('@').to_string();
+    let prompt = value["prompt"].as_str().unwrap_or_default().to_string();
+    if prompt.chars().count() > MAX_PROMPT {
+        return Err(format!("the prompt is at most {MAX_PROMPT} characters"));
+    }
+    if !to.is_empty() && agentty_bridge::bots::check_handle(&to).is_err() {
+        return Err("a bot's handle is lowercase letters, digits and hyphens".into());
+    }
+    match action.as_str() {
+        "list" | "status" => {}
+        "send" if to.is_empty() || prompt.trim().is_empty() => {
+            return Err("send needs a handle and --prompt <text> or --prompt-file <file>".into())
+        }
+        "result" if to.is_empty() => return Err("result needs a handle".into()),
+        "send" | "result" => {}
+        _ => return Err("unknown action (list, send, result or status)".into()),
+    }
+    Ok(BotCtl { action, to, prompt })
 }
 
 /// A [`TasksCtl`] from a pane, answered on `reply`.
@@ -727,6 +772,25 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                         .unwrap_or_else(|_| browser_reply(Err("no answer from the user in time".into())))
                 }
                 Ok(_) => browser_reply(Err("bad request".into())),
+                Err(error) => browser_reply(Err(error)),
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        // `agentty bot …`: only from inside a pane, like every request that acts for an agent.
+        if let (Some(json), Some(pane)) = (line.strip_prefix("bot\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = match parse_bot_ctl(&request) {
+                Ok(ctl) => {
+                    let (reply, answer) = std::sync::mpsc::channel();
+                    if tx.unbounded_send(SocketMessage::Bot(BotRequest { pane, ctl, reply })).is_err() {
+                        return;
+                    }
+                    answer.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
+                }
                 Err(error) => browser_reply(Err(error)),
             };
             if let Some(writer) = writer.as_mut() {

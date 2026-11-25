@@ -22,6 +22,9 @@ pub struct PaneSnapshot {
     /// An agent pane shown as a chat (true) or as its terminal (false), so a restart keeps it so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_view: Option<bool>,
+    /// The bot (its handle) the pane is a conversation of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,6 +545,9 @@ impl PaneSnapshot {
         };
         spec.missing_cwd = missing;
         spec.chat_view = self.chat_view;
+        if let Some(handle) = &self.bot {
+            crate::bots::restore(&mut spec, handle);
+        }
         spec
     }
 }
@@ -673,8 +679,15 @@ mod tests {
     #[test]
     fn a_missing_folder_is_remembered_not_replaced() {
         let gone = PathBuf::from("/nonexistent/agentty-test-folder");
-        let pane =
-            PaneSnapshot { kind: PaneKind::Shell, cwd: gone.clone(), title: "t".into(), session_id: None, tool: None, chat_view: None };
+        let pane = PaneSnapshot {
+            kind: PaneKind::Shell,
+            cwd: gone.clone(),
+            title: "t".into(),
+            session_id: None,
+            tool: None,
+            chat_view: None,
+            bot: None,
+        };
         let spec = pane.launch_spec();
         assert_eq!(spec.cwd, home_dir());
         assert_eq!(spec.missing_cwd, Some(gone));
@@ -691,6 +704,7 @@ mod tests {
             session_id: None,
             tool: Some("claude".into()),
             chat_view: Some(true),
+            bot: None,
         };
         let json = serde_json::to_string(&pane).unwrap();
         let back: PaneSnapshot = serde_json::from_str(&json).unwrap();
@@ -740,6 +754,7 @@ mod tests {
                     session_id: None,
                     tool: Some("claude".into()),
                     chat_view: None,
+                    bot: None,
                 }),
                 active_pane: 0,
                 zoomed_pane: None,
@@ -771,6 +786,7 @@ mod tests {
                 session_id: None,
                 tool: None,
                 chat_view: None,
+                bot: None,
             }),
             active_pane: 0,
             zoomed_pane: None,
@@ -816,6 +832,7 @@ mod tests {
             session_id: None,
             tool: None,
             chat_view: None,
+            bot: None,
         };
         let data = Path::new("/data/plugin-data");
         let mut tree = PaneNode::Leaf(pane(PaneKind::Shell, "/data/plugin-data/x-feed"));
@@ -845,6 +862,7 @@ mod tests {
             session_id: None,
             tool: None,
             chat_view: None,
+            bot: None,
         };
         let mut tree = PaneNode::Leaf(pane("a"));
         tree.split(&pane("a"), pane("b"), Axis::Vertical);

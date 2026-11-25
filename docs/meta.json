@@ -118,6 +118,15 @@
           }
         },
         {
+          "slug": "bots",
+          "title": {
+            "en": "Bots",
+            "ko": "봇",
+            "ja": "ボット",
+            "zh": "机器人"
+          }
+        },
+        {
           "slug": "session-flow",
           "title": {
             "en": "Orchestration",

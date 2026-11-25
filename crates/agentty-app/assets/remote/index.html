@@ -148,6 +148,23 @@
     </header>
     <div id="viewer-body" class="viewer-body"></div>
   </div>
+  <!-- A bot: its chat, its switch and a box to give it work, over the page. -->
+  <div id="bot-view" class="bot-view" role="dialog" aria-modal="true" hidden>
+    <header class="bot-bar">
+      <button id="bot-back" type="button" class="icon-button bot-back">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
+      <div id="bot-head" class="bot-head"></div>
+    </header>
+    <div id="bot-needs" class="bot-needs" hidden></div>
+    <div id="bot-log" class="chat-log bot-log"></div>
+    <form id="bot-form" class="prompt">
+      <textarea id="bot-message" rows="1" autocomplete="off"></textarea>
+      <button id="bot-send" type="submit" class="primary"></button>
+    </form>
+  </div>
   <!-- What to start in a new tab. -->
   <div id="new-sheet" class="sheet" role="dialog" aria-modal="true" hidden>
     <div id="new-title" class="sheet-title"></div>

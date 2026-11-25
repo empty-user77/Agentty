@@ -12,6 +12,17 @@ mod ask;
 mod backup;
 mod board;
 mod board_settings;
+mod bot_channels;
+mod bot_face;
+mod bot_profile;
+mod bot_reading;
+mod bot_rooms;
+mod bot_schedule;
+mod bot_skills;
+mod bot_templates;
+mod bot_views;
+mod bot_watch;
+mod bots;
 mod browser;
 mod browser_budget;
 mod browser_control;
@@ -231,6 +242,7 @@ pub fn next_free_window_slot() -> usize {
 pub(crate) use account_menu::prepare_window as prepare_account_window;
 pub(crate) use account_menu::tidy_account_folders;
 pub use account_usage::AccountUsage;
+pub(crate) use bots::{remote_bot_chat, remote_bot_chat_rev};
 pub(crate) use chat::{prompt_words, user_parts};
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
@@ -371,6 +383,8 @@ pub enum Page {
     Settings,
     Extensions,
     Plugins,
+    /// Bots: named agents that keep their instructions and memory, and the rooms they share.
+    Bots,
     /// "Build my idea": describe an idea, an agent builds and previews it.
     Idea,
     /// The active project's databases (only offered when it has some).
@@ -673,6 +687,7 @@ pub struct Workbench {
     diagnostics: Option<diagnostics::Diagnostics>,
     launcher_more: bool,
     service_status: HashMap<&'static str, agentty_bridge::service_status::ServiceStatus>,
+    pub(crate) bots: bots::BotsState,
     status_dismissed: std::collections::HashSet<String>,
     resume_dismissed: std::collections::HashSet<(u64, PathBuf)>,
     resume_menu: Option<u64>,
@@ -1066,6 +1081,7 @@ impl Workbench {
             account_details_open: HashSet::new(),
             session_board: Default::default(),
             orchestrator_dialog: None,
+            bots: bots::BotsState::load(),
             session_usage: Default::default(),
             usage_refreshed: None,
             card_plans_open: HashSet::new(),
@@ -1240,6 +1256,7 @@ impl Workbench {
         this.detect_agents(cx);
         this.start_update_checks(cx);
         this.start_service_status_checks(cx);
+        this.start_bots(cx);
         this.start_account_usage(cx);
         this.start_server_watch(cx);
         this.start_sync(cx);
@@ -1435,11 +1452,15 @@ impl Workbench {
             }
             TerminalEvent::Notified { kind, message } => {
                 this.record_notice(&pane, *kind, message.clone(), cx);
+                if matches!(kind, crate::terminal::NoticeKind::Permission | crate::terminal::NoticeKind::Question) {
+                    this.bot_asks_user(&pane, cx);
+                }
                 if *kind == crate::terminal::NoticeKind::Finished {
                     let pane_id = pane.read(cx).pane_id;
                     this.flow_agent_finished(pane_id, cx);
                     this.sync_after_turn(pane_id, cx);
                     this.chat_turn_finished(&pane, message.clone(), cx);
+                    this.bot_turn_finished(&pane, message.clone(), cx);
                     this.board_turn_finished(&pane, cx);
                 }
             }
@@ -1464,6 +1485,8 @@ impl Workbench {
                 this.warn_about_shared_tree(&pane, cx);
                 // A chat's lead that is free again reads the reports that waited for it.
                 this.flush_chat_pending(&pane, cx);
+                // A bot that is free again takes the next message that waited for it.
+                this.bot_pump(cx);
                 // A ticket's agent at work moves its ticket on the board.
                 this.board_status_changed(&pane, cx);
                 cx.notify();
@@ -3183,6 +3206,7 @@ impl Workbench {
             session_id,
             tool: Some(view.tool_id().to_string()),
             chat_view: None,
+            bot: view.spec.bot.clone(),
         }
     }
 
@@ -3630,6 +3654,9 @@ impl Render for Workbench {
         self.sync_plugin_workspace(cx);
         self.prepare_chats(window, cx);
         self.drop_hidden_select_ui(cx);
+        if self.page != Some(Page::Bots) {
+            self.drop_hidden_bot_selection();
+        }
         if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
             self.focus_active(window, cx);
         }
@@ -3713,6 +3740,7 @@ impl Render for Workbench {
             Some(Page::Remote) => self.render_remote_page(window, cx).into_any_element(),
             Some(Page::Database) => self.render_db_page(cx),
             Some(Page::Board) => self.render_board_page(cx),
+            Some(Page::Bots) => self.render_bots_page(window, cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
@@ -4143,6 +4171,8 @@ impl Render for Workbench {
             .children(self.render_account_pick(cx))
             .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
+            .children(self.render_new_bot_dialog(cx))
+            .children(self.render_skill_hub(cx))
             .children(self.render_run_add_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
@@ -4323,7 +4353,8 @@ impl Workbench {
 
     /// Pages next to which the workspace list stays useful.
     pub(super) fn page_keeps_sidebar(page: Page) -> bool {
-        matches!(page, Page::Flow | Page::Git | Page::Board)
+        // The bots are listed in the sidebar, and a bot's chat opens beside that list.
+        matches!(page, Page::Flow | Page::Git | Page::Board | Page::Bots)
     }
 
     /// A page's short name, for usage statistics.
@@ -4344,6 +4375,7 @@ impl Workbench {
             Page::Idea => "idea",
             Page::Database => "database",
             Page::Board => "board",
+            Page::Bots => "bots",
         }
     }
 
@@ -4760,6 +4792,7 @@ impl Workbench {
                     "db" => Some(Page::Database),
                     "board" if settings(cx).board.enabled => Some(Page::Board),
                     "git" => Some(Page::Git),
+                    "bots" => Some(Page::Bots),
                     _ => None,
                 };
                 match page {
@@ -4912,6 +4945,7 @@ impl Workbench {
             }
             "agents" => eprintln!("agents: {:?}", self.installed),
             // `panes`: the session each pane follows (the per-pane status bar's source).
+            "bots" => self.debug_bots(argument, window, cx),
             "panes" => {
                 for pane in self.all_panes() {
                     eprintln!("{}", pane.read(cx).debug_session());

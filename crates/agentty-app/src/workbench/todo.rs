@@ -311,6 +311,7 @@ mod tests {
             session_id: None,
             tool: None,
             chat_view: None,
+            bot: None,
         })
     }
 

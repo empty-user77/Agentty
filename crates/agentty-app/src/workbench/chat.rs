@@ -244,7 +244,7 @@ fn settle(path: &std::path::Path) {
 
 /// The last thing `agent` said in session `session`, whole and without its tool steps; else
 /// `fallback` (the first line its hook reported). Reads a transcript: call it off the main thread.
-fn last_reply(agent: Option<agentty_bridge::model::Agent>, session: Option<String>, fallback: Option<String>) -> Option<String> {
+pub(super) fn last_reply(agent: Option<agentty_bridge::model::Agent>, session: Option<String>, fallback: Option<String>) -> Option<String> {
     let from_transcript = agent.zip(session).and_then(|(agent, id)| {
         let path = agentty_bridge::transcript_path(agent, &id)?;
         settle(&path);
@@ -446,12 +446,36 @@ fn user_entries(text: &str) -> Vec<ChatItem> {
     let mut parts = text.split(boundary.as_str());
     let first = parts.next().unwrap_or_default().trim();
     match first.strip_prefix(REPORT_MARK) {
-        Some(report) => items.push(ChatItem::Report(report.trim().to_string())),
+        Some(report) => items.extend(report_items(report.trim())),
         None if !first.is_empty() => items.push(ChatItem::User(first.to_string())),
         None => {}
     }
-    items.extend(parts.map(str::trim).filter(|report| !report.is_empty()).map(|report| ChatItem::Report(report.to_string())));
+    items.extend(parts.map(str::trim).filter(|report| !report.is_empty()).flat_map(report_items));
     items
+}
+
+/// A report as entries. One that carries somebody's message to a bot (`bots::guide::framed`) reads
+/// as that message from them, not as its markup.
+fn report_items(report: &str) -> Vec<ChatItem> {
+    let framed = report.strip_prefix("<message from=\"").and_then(|rest| rest.split_once("\">\n")).and_then(|(from, rest)| {
+        let (body, after) = rest.split_once("\n</message>")?;
+        Some((from, body, after.trim()))
+    });
+    let Some((from, body, after)) = framed else { return vec![ChatItem::Report(report.to_string())] };
+    // "bot @scout, answering your request" names @scout; a session of the user's has no name.
+    let who = from.split([',', ';']).next().unwrap_or_default().trim();
+    let who = who.strip_prefix("bot ").unwrap_or(who);
+    let from = (!who.is_empty() && !who.starts_with("an agent session")).then(|| who.to_string());
+    let mut items = vec![ChatItem::Peer { from, text: body.replace("<\\/message", "</message") }];
+    if !after.is_empty() {
+        items.push(ChatItem::Report(after.to_string()));
+    }
+    items
+}
+
+/// Markdown as a chat draws it, for the pages that show what bots said.
+pub(super) fn markdown_text(text: &str, index: usize) -> AnyElement {
+    chat_view::markdown(text, index)
 }
 
 /// Something waiting for the lead while it waits on the user.
@@ -664,7 +688,7 @@ pub(super) fn waits_on_screen(view: &crate::terminal::TerminalView, screen: &cra
     view.status.needs_user() || screen.permission.is_some() || screen.question
 }
 
-fn waits_on_user(view: &crate::terminal::TerminalView) -> bool {
+pub(super) fn waits_on_user(view: &crate::terminal::TerminalView) -> bool {
     if view.status.needs_user() {
         return true;
     }
@@ -2744,6 +2768,15 @@ fn choice_keys(current: usize, target: usize) -> Vec<u8> {
     keys
 }
 
+/// Who a passed-on message is from: a bot's character when `@handle` names one, else the glyph.
+fn peer_face(from: Option<&str>) -> AnyElement {
+    from.and_then(|name| name.strip_prefix('@'))
+        .and_then(|handle| {
+            super::bot_face::of_handle(handle.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or(handle), 20.)
+        })
+        .map_or_else(|| icon("bot", 12., hex(Chrome::ACCENT)).into_any_element(), |face| face.into_any_element())
+}
+
 fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, cx: &App) -> AnyElement {
     // Chat view's text knows where in the conversation it is (for a selection across blocks).
     selectable::begin_item(rows.chat, index);
@@ -2850,6 +2883,9 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
         // Not something the user wrote: on the reply's side, saying who sent it.
         ChatItem::Peer { from, text } => {
             let title = match from {
+                // What Agentty passed on to a bot: a bot, a channel's sender, the user in a room.
+                Some(name) if name == "the user" => t(cx, "bots.room_you").to_string(),
+                Some(name) if name.starts_with('@') || name.starts_with("Telegram ") || name.starts_with("Slack ") => name.clone(),
                 Some(name) => tf(cx, "chat.peer_message", &[("name", name)]),
                 None => t(cx, "chat.peer_message_unnamed").to_string(),
             };
@@ -2867,7 +2903,7 @@ fn render_item(index: usize, item: &ChatItem, lead: &'static str, rows: &Rows, c
                     .flex_col()
                     .gap_1p5()
                     .child(
-                        div().flex().items_center().gap_1p5().child(icon("bot", 12., hex(Chrome::ACCENT))).child(
+                        div().flex().items_center().gap_1p5().child(peer_face(from.as_deref())).child(
                             div()
                                 .min_w_0()
                                 .truncate()

@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "browser",
     "signal",
     "tasks",
+    "bot",
     "plan",
     "db",
     "worktree-for",

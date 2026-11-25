@@ -146,21 +146,43 @@ pub fn enabled() -> bool {
 }
 
 /// Claude Code options that hand it the guide and Agentty's skills, when they are on and in place.
-pub fn claude_args() -> Vec<String> {
+/// A bot's session gets its own instructions file instead (the guide, when on, then who the bot
+/// is), whatever the guide's switch says.
+pub fn claude_args(bot: Option<&str>) -> Vec<String> {
     let (guide, plugin) = (guide_file(), plugin_dir());
-    if !enabled() || !guide.is_file() || !plugin.is_dir() {
-        return Vec::new();
+    let on = enabled() && guide.is_file() && plugin.is_dir();
+    let mut args = Vec::new();
+    match bot.and_then(crate::bots::instructions_file) {
+        Some(file) => args.extend(["--append-system-prompt-file".into(), file.display().to_string()]),
+        None if on => args.extend(["--append-system-prompt-file".into(), guide.display().to_string()]),
+        None => {}
     }
-    vec!["--append-system-prompt-file".into(), guide.display().to_string(), "--plugin-dir".into(), plugin.display().to_string()]
+    if on {
+        args.extend(["--plugin-dir".into(), plugin.display().to_string()]);
+    }
+    args
+}
+
+/// The guide as agents get it now, or nothing while it is switched off.
+pub fn guide_text() -> Option<String> {
+    enabled().then(|| if crate::settings::in_app_browser_enabled() { GUIDE.to_string() } else { guide_without_browser() })
 }
 
 /// Codex `-c` override that adds the guide as developer instructions — unless the user set their own
-/// `developer_instructions` (an override would replace them; theirs win).
-pub fn codex_override() -> Option<String> {
-    if !enabled() || user_codex_instructions() {
+/// `developer_instructions` (an override would replace them; theirs win). A bot's session always
+/// gets one: the user's own instructions first, then the guide and who the bot is.
+pub fn codex_override(bot: Option<&str>) -> Option<String> {
+    if let Some(text) = bot.and_then(crate::bots::instructions_text) {
+        let own = codex_config().and_then(|config| agentty_bridge::bots::guide::codex_user_instructions(&config));
+        return Some(codex_value(&match own {
+            Some(own) => format!("{own}\n\n{text}"),
+            None => text,
+        }));
+    }
+    if user_codex_instructions() {
         return None;
     }
-    Some(if crate::settings::in_app_browser_enabled() { codex_value(GUIDE) } else { codex_value(&guide_without_browser()) })
+    guide_text().map(|text| codex_value(&text))
 }
 
 /// `developer_instructions="…"`: a TOML basic string (JSON string escapes are valid TOML ones).
@@ -168,9 +190,13 @@ fn codex_value(text: &str) -> String {
     format!("developer_instructions={}", serde_json::to_string(text).unwrap_or_default())
 }
 
-fn user_codex_instructions() -> bool {
+fn codex_config() -> Option<String> {
     let home = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| Some(crate::launch::home_dir().join(".codex")));
-    home.and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok()).is_some_and(|text| sets_instructions(&text))
+    home.and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
+}
+
+fn user_codex_instructions() -> bool {
+    codex_config().is_some_and(|text| sets_instructions(&text))
 }
 
 /// A top-level `developer_instructions` key (before the first table).

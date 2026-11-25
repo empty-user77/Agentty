@@ -874,6 +874,7 @@ mod tests {
             session_id: session.map(str::to_string),
             tool: None,
             chat_view: None,
+            bot: None,
         })
     }
 

@@ -17,7 +17,8 @@ const STRINGS = {
     signIn: "Sign in", password: "Password",
     wrong: "Wrong password.", locked: "Too many wrong passwords. Try again in {s} s.", noPassword: "No password is set in Agentty yet.",
     failed: "Couldn't reach Agentty.", signOut: "Sign out", notify: "Notify me", notifyOn: "Notifying",
-    noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
+    bots: "Bots", botsBeta: "Beta", botHint: "Message for {name}…",
+    botOn: "On", botOff: "Off", botIdle: "Idle", botWorking: "Working…", botNeeds: "Needs you", botAnswer: "Answer", botBack: "Back", botEmpty: "Tell {name} what to do.", botIsOff: "Switched off. Switch it on to give it work.", botSchedule: "Schedule", botWatch: "Watch", botSession: "Agent session", botQueued: "{n} waiting", noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
     send: "Send", promptHint: "Prompt for this terminal…", live: "Connected", offline: "Reconnecting…",
     micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.", micTooBusy: "The Mac is busy transcribing. Try again in a moment.",
     capsLock: "Caps Lock is on.", hangulInput: "Passwords can only use English letters.", showPassword: "Show password", hidePassword: "Hide password",
@@ -44,7 +45,8 @@ const STRINGS = {
     signIn: "로그인", password: "비밀번호",
     wrong: "비밀번호가 틀렸습니다.", locked: "비밀번호가 여러 번 틀렸습니다. {s}초 뒤에 다시 시도하세요.", noPassword: "Agentty에 아직 비밀번호가 설정되지 않았습니다.",
     failed: "Agentty에 연결하지 못했습니다.", signOut: "로그아웃", notify: "알림 받기", notifyOn: "알림 켜짐",
-    noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
+    bots: "봇", botsBeta: "베타", botHint: "{name}에게 보낼 메시지…",
+    botOn: "켜짐", botOff: "꺼짐", botIdle: "대기 중", botWorking: "일하는 중…", botNeeds: "확인 필요", botAnswer: "답하기", botBack: "뒤로", botEmpty: "{name}에게 할 일을 말해 보세요.", botIsOff: "꺼져 있습니다. 켜면 일을 시킬 수 있습니다.", botSchedule: "스케줄", botWatch: "지켜보기", botSession: "에이전트 세션", botQueued: "{n}개 대기", noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
     send: "보내기", promptHint: "이 터미널에 보낼 프롬프트…", live: "연결됨", offline: "다시 연결하는 중…",
     micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.", micTooBusy: "Mac이 다른 음성을 변환하는 중입니다. 잠시 후 다시 시도하세요.",
     capsLock: "Caps Lock이 켜져 있습니다.", hangulInput: "비밀번호는 영어로만 설정 가능합니다.", showPassword: "비밀번호 보기", hidePassword: "비밀번호 숨기기",
@@ -71,7 +73,8 @@ const STRINGS = {
     signIn: "サインイン", password: "パスワード",
     wrong: "パスワードが違います。", locked: "パスワードの誤りが多すぎます。{s} 秒後に再試行してください。", noPassword: "Agentty にまだパスワードが設定されていません。",
     failed: "Agentty に接続できませんでした。", signOut: "サインアウト", notify: "通知を受け取る", notifyOn: "通知オン",
-    noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
+    bots: "ボット", botsBeta: "ベータ", botHint: "{name} へのメッセージ…",
+    botOn: "オン", botOff: "オフ", botIdle: "待機中", botWorking: "作業中…", botNeeds: "要対応", botAnswer: "答える", botBack: "戻る", botEmpty: "{name} に頼みたいことを書いてください。", botIsOff: "オフです。オンにすると作業を頼めます。", botSchedule: "スケジュール", botWatch: "ウォッチ", botSession: "エージェントセッション", botQueued: "{n} 件待ち", noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
     send: "送信", promptHint: "このターミナルへのプロンプト…", live: "接続中", offline: "再接続しています…",
     micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。", micTooBusy: "Mac が別の音声を文字起こし中です。少し待ってからもう一度お試しください。",
     capsLock: "Caps Lock がオンです。", hangulInput: "パスワードは英字でのみ設定できます。", showPassword: "パスワードを表示", hidePassword: "パスワードを隠す",
@@ -98,7 +101,8 @@ const STRINGS = {
     signIn: "登录", password: "密码",
     wrong: "密码错误。", locked: "密码错误次数过多，请在 {s} 秒后重试。", noPassword: "Agentty 尚未设置密码。",
     failed: "无法连接 Agentty。", signOut: "退出登录", notify: "接收通知", notifyOn: "通知已开启",
-    noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
+    bots: "机器人", botsBeta: "测试版", botHint: "发给 {name} 的消息…",
+    botOn: "开启", botOff: "关闭", botIdle: "空闲", botWorking: "工作中…", botNeeds: "需要你处理", botAnswer: "回答", botBack: "返回", botEmpty: "告诉 {name} 要做什么。", botIsOff: "已关闭。开启后才能交给它工作。", botSchedule: "计划", botWatch: "监视", botSession: "代理会话", botQueued: "{n} 条等待", noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
     send: "发送", promptHint: "发送给此终端的提示…", live: "已连接", offline: "正在重新连接…",
     micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。", micTooBusy: "Mac 正在转写其他语音，请稍后再试。",
     capsLock: "大写锁定已开启。", hangulInput: "密码只能使用英文字母设置。", showPassword: "显示密码", hidePassword: "隐藏密码",
@@ -125,7 +129,8 @@ const STRINGS = {
     signIn: "Anmelden", password: "Passwort",
     wrong: "Falsches Passwort.", locked: "Zu viele falsche Passwörter. Versuche es in {s} s erneut.", noPassword: "In Agentty ist noch kein Passwort festgelegt.",
     failed: "Agentty ist nicht erreichbar.", signOut: "Abmelden", notify: "Mitteilungen erhalten", notifyOn: "Mitteilungen an",
-    noWorkspaces: "In Agentty ist kein Arbeitsbereich geöffnet.", sleeping: "Dieser Arbeitsbereich ruht. Wecke ihn auf, um seine Terminals wieder zu starten.",
+    bots: "Bots", botsBeta: "Beta", botHint: "Nachricht für {name} …",
+    botOn: "An", botOff: "Aus", botIdle: "Bereit", botWorking: "Arbeitet…", botNeeds: "Braucht dich", botAnswer: "Antworten", botBack: "Zurück", botEmpty: "Sag {name}, was zu tun ist.", botIsOff: "Ausgeschaltet. Schalte ihn ein, um ihm Arbeit zu geben.", botSchedule: "Zeitplan", botWatch: "Beobachtung", botSession: "Agent-Sitzung", botQueued: "{n} warten", noWorkspaces: "In Agentty ist kein Arbeitsbereich geöffnet.", sleeping: "Dieser Arbeitsbereich ruht. Wecke ihn auf, um seine Terminals wieder zu starten.",
     send: "Senden", promptHint: "Prompt für dieses Terminal …", live: "Verbunden", offline: "Verbindung wird wiederhergestellt …",
     micStart: "Prompt diktieren", micRecording: "Aufnahme – zum Beenden tippen", micBusy: "Wird transkribiert …", micDenied: "Der Mikrofonzugriff wurde blockiert.", micFailed: "Transkription fehlgeschlagen. Versuche es erneut.", micTooBusy: "Der Mac transkribiert gerade. Versuche es gleich noch einmal.",
     capsLock: "Feststelltaste ist aktiv.", hangulInput: "Passwörter können nur lateinische Buchstaben enthalten.", showPassword: "Passwort zeigen", hidePassword: "Passwort verbergen",
@@ -391,6 +396,7 @@ async function signOut() {
 
 function showLogin(locked, me) {
   stopEvents();
+  closeBot();
   $("app").hidden = true;
   $("login").hidden = false;
   $("password").placeholder = T.password;
@@ -544,6 +550,7 @@ function openAskedPane() {
 }
 
 function goHome() {
+  closeBot();
   state.workspace = null;
   state.tab = 0;
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
@@ -551,6 +558,7 @@ function goHome() {
 }
 
 function selectWorkspace(id) {
+  closeBot();
   const ws = workspace(id);
   if (!ws) return;
   state.workspace = id;
@@ -572,6 +580,7 @@ function selectTab(index) {
 }
 
 function selectPane(pane) {
+  closeBot();
   const s = session(pane);
   if (!s) return;
   state.workspace = s.workspace_id;
@@ -652,7 +661,8 @@ function renderWorkspaces() {
   const root = $("workspaces");
   root.replaceChildren();
   if (!state.workspaces.length) {
-    root.append(el("div", "empty-note", T.noWorkspaces), newWorkspaceButton());
+    root.append(el("div", "empty-note", T.noWorkspaces), newWorkspaceButton(), ...botCards());
+    refreshBots();
     return;
   }
   let lastGroup;
@@ -668,7 +678,299 @@ function renderWorkspaces() {
     lastGroup = ws.group;
     root.append(workspaceCard(ws));
   }
-  root.append(newWorkspaceButton());
+  root.append(newWorkspaceButton(), ...botCards());
+  refreshBots();
+}
+
+// ---- Bots ----
+
+// The bots are asked for when the list is drawn, at most every few seconds, and while a bot's chat
+// is open: nothing polls them while neither is looked at.
+let botsAskedAt = 0;
+async function refreshBots() {
+  if (Date.now() - botsAskedAt < 5000) return;
+  botsAskedAt = Date.now();
+  try {
+    const { status, data } = await api("/api/bots");
+    if (status !== 200 || !Array.isArray(data.bots)) return;
+    if (JSON.stringify(data.bots) !== JSON.stringify(state.bots || [])) {
+      state.bots = data.bots;
+      renderWorkspaces();
+    }
+  } catch (_) { /* offline; the dot says so */ }
+}
+
+const botOf = (handle) => (state.bots || []).find((b) => b.handle === handle);
+
+function botFace(bot, cls) {
+  // Its character, as the app draws it.
+  const face = el("img", cls);
+  face.src = "/bots/" + encodeURIComponent(bot.avatar || "robot") + ".svg";
+  face.alt = "";
+  if (/^#[0-9a-f]{6}$/.test(bot.color || "")) face.style.background = bot.color;
+  return face;
+}
+
+/// A bot's switch: on, it takes work; off, it takes none and its schedules do not run.
+function botSwitch(bot) {
+  const on = bot.state !== "off";
+  const toggle = el("button", "switch" + (on ? " on" : ""));
+  toggle.type = "button";
+  toggle.setAttribute("role", "switch");
+  toggle.setAttribute("aria-checked", String(on));
+  toggle.setAttribute("aria-label", bot.name + " · " + (on ? T.botOn : T.botOff));
+  toggle.append(el("i"));
+  toggle.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    toggle.disabled = true;
+    try {
+      const { status } = await api("/api/bots/switch", { handle: bot.handle, on: !on });
+      if (status === 401) return showLogin();
+      if (status === 200) {
+        // Shown at once; the app's own word follows with the next look.
+        bot.state = on ? "off" : "idle";
+        bot.line = null;
+        drawn.bot = null;
+        renderWorkspaces();
+        renderBot();
+        botsAskedAt = 0;
+        setTimeout(refreshBots, 800);
+      } else if (status === 429 || status === 503) alert(T.busy);
+    } catch (_) { /* offline; the dot says so */ }
+    toggle.disabled = false;
+  });
+  return toggle;
+}
+
+function botStateWord(bot) {
+  if (bot.state === "off") return T.botOff;
+  if (bot.needsYou != null || bot.state === "needs the user") return T.botNeeds;
+  if (bot.state === "working") return T.botWorking;
+  return T.botIdle;
+}
+
+// ---- A bot's chat ----
+//
+// What was written to the bot and what it answered and reported, its switch, and a box to give it
+// work. Asked for every few seconds while it is open, and not at all otherwise.
+const botView = { handle: null, rev: "", lines: [], sent: [], timer: null };
+
+function openBot(handle) {
+  clearTimeout(botView.timer);
+  Object.assign(botView, { handle, rev: "", lines: [], sent: [] });
+  drawn.bot = null;
+  closeDrawers();
+  $("bot-view").hidden = false;
+  renderBot();
+  pollBot();
+}
+
+function closeBot() {
+  clearTimeout(botView.timer);
+  botView.handle = null;
+  $("bot-view").hidden = true;
+}
+
+async function pollBot() {
+  const handle = botView.handle;
+  if (!handle) return;
+  clearTimeout(botView.timer);
+  try {
+    botsAskedAt = 0;
+    await refreshBots();
+    const { status, data } = await api("/api/bots/chat?handle=" + encodeURIComponent(handle) + "&rev=" + encodeURIComponent(botView.rev));
+    if (botView.handle !== handle) return;
+    if (status === 401) {
+      closeBot();
+      return showLogin();
+    }
+    if (status === 404) return closeBot();
+    if (status === 200 && Array.isArray(data.lines)) {
+      botView.rev = data.rev || "";
+      botView.lines = data.lines;
+      // What was sent from here is in the chat itself now.
+      botView.sent = botView.sent.filter((text) => !data.lines.some((line) => line.side === "you" && line.text === text));
+    }
+  } catch (_) { /* offline; the dot says so */ }
+  if (botView.handle !== handle) return;
+  renderBot();
+  botView.timer = setTimeout(pollBot, document.hidden ? 15000 : 2500);
+}
+
+function botTime(at) {
+  const when = new Date(Number(at) || 0);
+  const today = new Date().toDateString() === when.toDateString();
+  return today
+    ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : when.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/// A bot's answer as Markdown: rendered with raw HTML off, then sanitized, with no pictures (the
+/// answer is an agent's text, never this page's code). Plain text until the renderer is there.
+function botAnswer(text) {
+  const box = el("div", "text markdown", text);
+  loadMarkdown().then(() => {
+    const html = window.markdownit({ html: false, linkify: true, breaks: true }).render(text);
+    box.innerHTML = window.DOMPurify.sanitize(html, { FORBID_TAGS: ["img", "picture", "video", "audio", "iframe", "form", "input", "style"] });
+    for (const a of box.querySelectorAll("a[href]")) {
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    }
+  }, () => { /* stays plain */ });
+  return box;
+}
+
+function botLine(line, bot) {
+  if (line.side === "you") {
+    const box = el("div", "msg user");
+    box.append(el("div", "text", line.text));
+    return box;
+  }
+  if (line.side === "bot") {
+    const row = el("div", "bot-row");
+    const box = el("div", "msg bot-said");
+    box.append(botAnswer(line.text || ""), el("div", "bot-at", botTime(line.at)));
+    row.append(botFace(bot, "bot-face small"), box);
+    return row;
+  }
+  // What started it otherwise: a schedule, a watch, a channel, another bot.
+  const who = { schedule: T.botSchedule, watch: T.botWatch, session: T.botSession }[line.who] || line.who || "";
+  const pill = el("div", "bot-start");
+  pill.append(el("b", null, who), el("span", null, line.text || ""));
+  return pill;
+}
+
+function renderBot() {
+  const handle = botView.handle;
+  if (!handle) return;
+  const bot = botOf(handle);
+  // Gone from the list: deleted, or its workspace left out of remote access.
+  if (!bot) return state.bots ? closeBot() : undefined;
+  redraw("bot", [bot, botView.rev, botView.sent], () => {
+    const head = $("bot-head");
+    const words = el("div", "bot-words");
+    const sub = [botStateWord(bot), bot.queued ? T.botQueued.replace("{n}", bot.queued) : null].filter(Boolean).join(" · ");
+    words.append(el("div", "name", bot.name), el("div", "sub state-" + (bot.state === "needs the user" ? "needs" : bot.state), sub));
+    head.replaceChildren(botFace(bot, "bot-face"), words, botSwitch(bot));
+
+    // Stopped at an approval or a question: the session to answer in.
+    const needs = $("bot-needs");
+    needs.hidden = bot.needsYou == null && bot.state !== "needs the user";
+    needs.replaceChildren();
+    if (!needs.hidden) {
+      needs.append(el("div", "what", bot.line || T.botNeeds));
+      if (bot.needsYou != null && session(bot.needsYou)) {
+        const answer = el("button", "primary", T.botAnswer);
+        answer.type = "button";
+        answer.addEventListener("click", () => {
+          closeBot();
+          selectPane(bot.needsYou);
+        });
+        needs.append(answer);
+      }
+    }
+
+    const log = $("bot-log");
+    const following = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
+    log.replaceChildren();
+    if (!botView.lines.length && !botView.sent.length) {
+      log.append(el("div", "chat-empty", (bot.state === "off" ? T.botIsOff : T.botEmpty).replace("{name}", bot.name)));
+    }
+    for (const line of botView.lines) log.append(botLine(line, bot));
+    for (const text of botView.sent) log.append(botLine({ side: "you", text }, bot));
+    if (bot.state === "working") {
+      const row = el("div", "bot-row");
+      const box = el("div", "msg bot-said working");
+      box.append(el("span", "dots"), el("span", "what", bot.line || T.botWorking));
+      row.append(botFace(bot, "bot-face small"), box);
+      log.append(row);
+    }
+    if (following) requestAnimationFrame(() => (log.scrollTop = log.scrollHeight));
+
+    const off = bot.state === "off";
+    $("bot-message").placeholder = off ? T.botIsOff : T.botHint.replace("{name}", bot.name);
+    $("bot-message").disabled = off;
+    $("bot-send").disabled = off;
+  });
+}
+
+function setupBot() {
+  const box = $("bot-message");
+  $("bot-send").textContent = T.send;
+  $("bot-back").setAttribute("aria-label", T.botBack);
+  $("bot-back").addEventListener("click", closeBot);
+  const grow = () => {
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.3) + "px";
+  };
+  box.addEventListener("input", grow);
+  box.addEventListener("keydown", (e) => {
+    // Enter sends on a computer; Shift+Enter (or a phone's return key) adds a line.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(pointer: fine)").matches) {
+      e.preventDefault();
+      $("bot-form").requestSubmit();
+    }
+  });
+  $("bot-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const handle = botView.handle;
+    const text = box.value.trim();
+    if (!handle || !text) return;
+    $("bot-send").disabled = true;
+    try {
+      const { status } = await api("/api/bots", { handle, text });
+      if (status === 401) {
+        closeBot();
+        return showLogin();
+      }
+      if (status === 413) alert(T.tooLong);
+      else if (status === 429 || status === 503) alert(T.busy);
+      else if (status === 200 && botView.handle === handle) {
+        botView.sent.push(text);
+        box.value = "";
+        grow();
+        renderBot();
+        const log = $("bot-log");
+        log.scrollTop = log.scrollHeight;
+        clearTimeout(botView.timer);
+        botView.timer = setTimeout(pollBot, 700);
+      }
+    } catch (_) { /* offline; the dot says so */ }
+    $("bot-send").disabled = false;
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && botView.handle && !state.viewer) closeBot();
+  });
+  // Back on the page: the chat is asked for at once, not after the slow wait of a hidden one.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && botView.handle) pollBot();
+  });
+}
+
+function botCards() {
+  const bots = state.bots || [];
+  if (!bots.length) return [];
+  const head = el("div", "group-head", T.bots);
+  head.append(el("span", "beta", T.botsBeta));
+  const out = [head];
+  for (const bot of bots) {
+    // A row of two controls: the bot's card opens its chat, the switch beside it turns it on or off.
+    const row = el("div", "bot-card" + (bot.state === "off" ? " off" : "") + (botView.handle === bot.handle ? " active" : ""));
+    const card = el("button", "ws-card bot");
+    card.type = "button";
+    const words = el("div", "bot-words");
+    words.append(el("div", "name", bot.name));
+    words.append(el("div", "sub", bot.line || [botStateWord(bot), bot.purpose].filter(Boolean).join(" · ")));
+    card.append(botFace(bot, "bot-face"), words);
+    const marks = el("div", "marks");
+    if (bot.state === "working") marks.append(el("span", "working"));
+    if (bot.needsYou != null || bot.state === "needs the user") marks.append(el("span", "needs", "!"));
+    card.append(marks);
+    card.addEventListener("click", () => openBot(bot.handle));
+    row.append(card, botSwitch(bot));
+    out.push(row);
+  }
+  return out;
 }
 
 function workspaceCard(ws) {
@@ -2595,5 +2897,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setupChat();
   setupViewer();
   setupVoice();
+  setupBot();
   start();
 });

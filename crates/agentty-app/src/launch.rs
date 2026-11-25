@@ -104,6 +104,9 @@ pub struct LaunchSpec {
     /// The agent whose login in `accounts` was picked for this pane (the own login included): the
     /// window's does not replace it.
     pub fixed_account: Option<AuthAgent>,
+    /// The bot (its handle) this pane is a conversation of: its agent starts with the bot's
+    /// instructions and memory, and never with permission prompts skipped.
+    pub bot: Option<String>,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
@@ -226,6 +229,7 @@ impl LaunchSpec {
             read_only: false,
             accounts: AccountChoice::default(),
             fixed_account: None,
+            bot: None,
         }
     }
 
@@ -244,6 +248,7 @@ impl LaunchSpec {
             read_only: false,
             accounts: AccountChoice::default(),
             fixed_account: None,
+            bot: None,
         }
     }
 
@@ -266,6 +271,7 @@ impl LaunchSpec {
             read_only: false,
             accounts: AccountChoice::default(),
             fixed_account: None,
+            bot: None,
         }
     }
 
@@ -368,7 +374,7 @@ impl LaunchSpec {
                 } else if self.read_only {
                     // A reviewer keeps the user's permission mode; only its editing tools go.
                     args.extend(["--disallowedTools".into(), READ_ONLY_DENIED_TOOLS.join(",")]);
-                } else if crate::settings::always_bypass() {
+                } else if crate::settings::always_bypass() && self.bot.is_none() {
                     // The user turned on "always Bypass" in Settings (off by default). The flag alone
                     // leaves the starting mode to the user's `defaultMode` (`auto` stayed `auto` in a
                     // test), so the mode is named too.
@@ -392,7 +398,7 @@ impl LaunchSpec {
                     args.extend(["--mcp-config".into(), inline_or_file(name, config)]);
                 }
                 // What Agentty offers the agent (guide + skills), passed along, never written into its settings.
-                args.extend(crate::agent_guide::claude_args());
+                args.extend(crate::agent_guide::claude_args(self.bot.as_deref()));
                 args.extend(["--settings".into(), inline_or_file("claude-settings.json", claude_hook_settings())]);
             }
             PaneKind::Codex => {
@@ -405,7 +411,7 @@ impl LaunchSpec {
                     args.extend(["exec".into(), "--skip-git-repo-check".into()]);
                 }
                 args.extend(["-c".into(), codex_notify_override()]);
-                if let Some(guide) = crate::agent_guide::codex_override() {
+                if let Some(guide) = crate::agent_guide::codex_override(self.bot.as_deref()) {
                     args.extend(["-c".into(), guide]);
                 }
                 if self.read_only && !self.restricted {
@@ -421,7 +427,7 @@ impl LaunchSpec {
                     }
                     args.extend(["-c".into(), "sandbox_workspace_write.network_access=false".into()]);
                 } else {
-                    if crate::settings::always_bypass() {
+                    if crate::settings::always_bypass() && self.bot.is_none() {
                         // The user turned on "always Full Access" in Settings (off by default).
                         let full_access = "--dangerously-bypass-approvals-and-sandbox"; // audit: ok — always-bypass opt-in
                         args.push(full_access.into());

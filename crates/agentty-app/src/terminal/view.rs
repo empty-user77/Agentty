@@ -1626,6 +1626,10 @@ impl TerminalView {
     }
 
     pub fn display_title(&self) -> String {
+        // A bot's conversation is named after the bot, whatever its agent calls the window.
+        if self.spec.bot.is_some() && !self.spec.title.is_empty() {
+            return self.spec.title.clone();
+        }
         let title = self.title.trim();
         let title = match title.split_once(':') {
             Some((prefix, rest)) if prefix.contains('@') && !prefix.contains(' ') && !rest.is_empty() => rest.trim(),

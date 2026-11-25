@@ -143,6 +143,8 @@ struct Live {
     branch: Option<String>,
     worktree: bool,
     width: f32,
+    /// The bot whose conversation this is.
+    bot: Option<String>,
 }
 
 /// Below this height (points) a chat pane shows its input and nothing else.
@@ -234,6 +236,7 @@ impl Workbench {
             branch: view.git_branch.clone(),
             worktree: view.worktree.is_some(),
             width: self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX),
+            bot: view.spec.bot.clone(),
         }
     }
 
@@ -508,6 +511,7 @@ impl Workbench {
     /// agent's earlier sessions in this folder to pick up again.
     fn render_chat_welcome(&self, state: &ChatState, live: &Live, cx: &mut Context<Self>) -> AnyElement {
         let tiny = live.width < TINY_COMPOSER;
+        let bot = live.bot.as_deref().and_then(|handle| self.bots.get(handle));
         // Where it runs, one line; the folder and branch open what they name.
         let fact = |key: &'static str, glyph: &'static str, text: String| {
             div()
@@ -635,19 +639,23 @@ impl Workbench {
                             .flex_col()
                             .items_center()
                             .gap_2()
-                            .child(crate::brand::avatar(live.tool, 44.))
+                            // A bot's conversation opens on the bot itself: its character and its name.
+                            .child(match bot {
+                                Some(bot) => super::super::bot_face::tile(bot, 72.).into_any_element(),
+                                None => crate::brand::avatar(live.tool, 44.).into_any_element(),
+                            })
                             // Wraps in a narrow pane instead of running past both edges; a pane
                             // squeezed to a sliver keeps the logo alone, not a word a letter a line.
                             .when(!tiny, |d| {
-                                d.child(
-                                    div()
-                                        .max_w_full()
-                                        .pt_1()
-                                        .t_display()
-                                        .text_center()
-                                        .text_color(hex(Chrome::BRIGHT))
-                                        .child(t(cx, "chat.plain_empty")),
-                                )
+                                d.child(div().max_w_full().pt_1().t_display().text_center().text_color(hex(Chrome::BRIGHT)).child(
+                                    match bot {
+                                        Some(bot) => bot.name.clone(),
+                                        None => t(cx, "chat.plain_empty").to_string(),
+                                    },
+                                ))
+                                .children(bot.filter(|bot| !bot.purpose.is_empty()).map(|bot| {
+                                    div().max_w_full().t_body().text_center().text_color(hex(Chrome::MUTED)).child(bot.purpose.clone())
+                                }))
                                 .child(facts)
                             }),
                     )

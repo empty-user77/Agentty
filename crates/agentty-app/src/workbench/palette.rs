@@ -206,6 +206,7 @@ impl Workbench {
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
             (Page::Board, "page.board", ""),
+            (Page::Bots, "page.bots", ""),
             (Page::Browsers, "page.monitoring", "⌥⌘U"),
             (Page::Usage, "page.usage", ""),
             (Page::Processes, "page.processes", ""),

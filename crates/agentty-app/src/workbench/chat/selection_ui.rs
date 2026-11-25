@@ -30,7 +30,7 @@ pub(in crate::workbench) enum SelectUiKind {
 }
 
 /// `quote` as a Markdown quote, before what is asked about it.
-pub(super) fn quoted(quote: &str, text: &str) -> String {
+pub(in crate::workbench) fn quoted(quote: &str, text: &str) -> String {
     let quote: Vec<String> = quote.lines().map(|line| format!("> {line}")).collect();
     if text.trim().is_empty() {
         quote.join("\n")
