@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-11-25
+
 ### Added
 - A tab can be given a name of its own: **Rename** in its right-click menu, or a double-click on the tab. The name
   is kept with the layout, in the recently closed tabs and in TODO, and remote access shows it. An empty name goes
@@ -16,6 +18,9 @@ All notable changes to this project are documented here. The format follows
   they are now. Text editing keys, ⌘1…⌘9 and the file editor's shortcuts stay as they are.
 
 ### Fixed
+- Session Flow: a line between two linked sessions leaves the side of its card that faces the other one, instead of
+  running round both cards. The two lines of a two-way link run beside each other without crossing, and each has
+  its own buttons on it, so it is clear which direction a button acts on.
 - Linux, X11: Agentty's windows set `_NET_WM_ICON`, so the window switcher (Alt+Tab) and title bar show Agentty's icon
   instead of a generic one.
 
