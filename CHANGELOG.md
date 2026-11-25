@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Linux, X11: Agentty's windows set `_NET_WM_ICON`, so the window switcher (Alt+Tab) and title bar show Agentty's icon
+  instead of a generic one.
+
 ## [0.4.9] - 2026-11-23
 
 ### Added

@@ -118,6 +118,22 @@ pub fn guide_url(language: &str, page: &str) -> String {
 /// dock and the window switcher show Agentty's icon and name instead of a generic one.
 pub const APP_ID: &str = "run.agentty.Agentty";
 
+/// Agentty's icon for X11 windows (`_NET_WM_ICON`), which X11 window switchers and title bars read
+/// from the window itself instead of the desktop entry.
+pub fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    static ICON: std::sync::OnceLock<Option<std::sync::Arc<image::RgbaImage>>> = std::sync::OnceLock::new();
+    ICON.get_or_init(decode_window_icon).clone()
+}
+
+fn decode_window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    image::load_from_memory_with_format(include_bytes!("../assets/brand/logo-256.png"), image::ImageFormat::Png)
+        .ok()
+        .map(|img| std::sync::Arc::new(img.into_rgba8()))
+}
+
 /// Where to report a problem or ask for help.
 const SUPPORT_URL: &str = "https://github.com/empty-user77/Agentty/issues";
 
@@ -1356,6 +1372,7 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
         window_decorations: platform::decorations::requested(cx.compositor_name()),
         window_min_size: Some(min_size),
         app_id: Some(APP_ID.into()),
+        icon: window_icon(),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
@@ -1483,5 +1500,11 @@ mod tests {
         assert_eq!(file_url_path("file://localhost/tmp/%ED%95%9C"), Some(PathBuf::from("/tmp/한")));
         assert_eq!(file_url_path("file:///"), Some(PathBuf::from("/")));
         assert_eq!(file_url_path("https://agentty.run"), None);
+    }
+
+    #[test]
+    fn window_icon_decodes_bundled_logo() {
+        let icon = super::decode_window_icon().expect("bundled logo-256.png must decode");
+        assert_eq!(icon.dimensions(), (256, 256));
     }
 }
