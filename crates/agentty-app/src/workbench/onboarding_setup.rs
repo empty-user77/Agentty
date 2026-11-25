@@ -250,11 +250,14 @@ impl Workbench {
     /// Terminal or chat, as two cards like the appearance step's: what agents open as.
     fn setup_mode(&self, cx: &mut Context<Self>) -> gpui::Div {
         let chat = settings(cx).chat_view;
-        div().flex().flex_col().child(title(t(cx, "onboarding.mode_title"))).child(subtitle(t(cx, "onboarding.mode_body"))).child(
-            div().mt(px(36.)).w_full().flex().justify_between().children(
+        div()
+            .flex()
+            .flex_col()
+            .child(title(t(cx, "onboarding.mode_title")))
+            .child(subtitle(&crate::shortcuts::in_text(t(cx, "onboarding.mode_body"), cx)))
+            .child(div().mt(px(36.)).w_full().flex().justify_between().children(
                 [false, true].map(|on| mode_card("onboarding-mode", on, chat == on, 170., cx).w(gpui::relative(0.49)).flex_none()),
-            ),
-        )
+            ))
     }
 
     fn setup_look(&self, cx: &mut Context<Self>) -> gpui::Div {

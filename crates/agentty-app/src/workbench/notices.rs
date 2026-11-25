@@ -380,7 +380,14 @@ impl Workbench {
                     ),
             )
             .child(list)
-            .child(div().px_3().py_1p5().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "notice.shortcut")))
+            .child(
+                div()
+                    .px_3()
+                    .py_1p5()
+                    .t_small()
+                    .text_color(hex(Chrome::MUTED))
+                    .child(crate::shortcuts::in_text(t(cx, "notice.shortcut"), cx)),
+            )
     }
 }
 

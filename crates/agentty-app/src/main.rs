@@ -60,6 +60,7 @@ mod session_plan;
 mod settings;
 mod setup_check;
 mod shell_integration;
+mod shortcuts;
 mod single_instance;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/status_item.rs")]
 mod status_item;
@@ -496,6 +497,14 @@ fn follow_keyboard_layout(cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// Binds everything again after the shortcut settings changed, and shows the new keys in the menus.
+pub fn rebind_keys(cx: &mut App) {
+    cx.clear_key_bindings();
+    bind_keys(cx);
+    set_app_menus(cx);
+    cx.refresh_windows();
+}
+
 /// Binds shortcuts made with [`key`] as the active keyboard layout needs them: without those that
 /// would take a character it types ([`keymap::takes_typed_character`]), and with the form gpui
 /// reports a shifted symbol in ([`keymap::typed_twin`]). Every binding goes through here, and they
@@ -516,52 +525,18 @@ pub fn bind(cx: &mut App, bindings: impl IntoIterator<Item = KeyBinding>) {
 
 fn bind_keys(cx: &mut App) {
     use workbench::*;
+    // The shortcuts a user can change, as the settings have them (`shortcuts`).
+    let changeable = shortcuts::bind(cx);
+    crate::bind(cx, changeable);
     crate::bind(
         cx,
         [
             key("cmd-q", Quit, None),
-            key("cmd-shift-n", NewWindow, None),
-            key("cmd-t", NewTerminalTab, None),
-            key("alt-cmd-c", NewClaudeTab, None),
-            key("alt-cmd-x", NewCodexTab, None),
-            // ⌘N: a new tab where you are; in the workspace list, a new workspace.
-            key("cmd-n", NewTerminalTab, None),
-            key("cmd-n", NewWorkspace, Some("Sidebar")),
-            key("cmd-w", ClosePane, None),
-            key("cmd-shift-w", CloseTab, None),
-            key("cmd-d", SplitRight, None),
-            key("cmd-shift-d", SplitDown, None),
-            key("cmd-]", NextPane, None),
-            key("cmd-[", PreviousPane, None),
-            key("cmd-shift-]", NextTab, None),
-            key("cmd-shift-[", PreviousTab, None),
-            key("ctrl-tab", NextTab, None),
-            key("ctrl-shift-tab", PreviousTab, None),
-            key("cmd-alt-down", NextWorkspace, None),
-            key("cmd-alt-up", PreviousWorkspace, None),
-            key("cmd-b", ToggleSidebar, None),
-            key("cmd-shift-e", ShowWorkspaces, None),
-            key("cmd-shift-s", ShowSessions, None),
-            key("cmd-shift-f", OpenFlow, None),
-            key("cmd-alt-u", OpenUsage, None),
-            key("cmd-,", OpenSettings, None),
-            key("cmd-shift-x", OpenExtensions, None),
-            key("cmd-shift-g", OpenGit, None),
-            key("ctrl-cmd-m", ToggleMini, None),
-            key("cmd-shift-b", ToggleBrowser, None),
-            key("cmd-shift-r", HardReloadBrowser, None),
-            key("cmd-alt-b", ToggleFiles, None),
-            key("cmd-p", GoToFile, None),
             key("cmd-f", FindInTerminal, None),
             key("cmd-=", ZoomIn, None),
             key("cmd-+", ZoomIn, None),
             key("cmd--", ZoomOut, None),
             key("cmd-0", ZoomReset, None),
-            key("cmd-shift-u", JumpToUnread, None),
-            key("cmd-shift-p", OpenPalette, None),
-            key("cmd-shift-enter", ToggleZoom, None),
-            key("cmd-shift-j", ToggleChatView, None),
-            key("cmd-shift-o", SearchSessions, None),
             key("ctrl-1", GoToTab1, None),
             key("ctrl-2", GoToTab2, None),
             key("ctrl-3", GoToTab3, None),
@@ -580,10 +555,6 @@ fn bind_keys(cx: &mut App) {
             key("cmd-7", GoToWorkspace7, None),
             key("cmd-8", GoToWorkspace8, None),
             key("cmd-9", GoToWorkspace9, None),
-            key("cmd-enter", git_view::CommitChanges, Some("GitView")),
-            key("cmd-p", git_view::RemoteAction, Some("GitView")),
-            key("cmd-shift-t", git_view::Fetch, Some("GitView")),
-            key("cmd-r", git_view::Refresh, Some("GitView")),
             key("cmd-c", terminal::Copy, Some("Terminal")),
             key("cmd-c", workbench::CopyChatSelection, Some("ChatReading")),
             key("cmd-v", workbench::PasteIntoChat, Some("ChatReading")),
@@ -618,10 +589,6 @@ fn bind_keys(cx: &mut App) {
                 KeyBinding::new("ctrl-shift-c", workbench::diff_body::DiffCopy, diff),
             ],
         );
-    }
-    // Voice input records on macOS only; elsewhere ⇧⌘M would translate onto mini mode's chord.
-    if workbench::voice_input_available() {
-        crate::bind(cx, [key("cmd-shift-m", ToggleVoiceInput, None)]);
     }
     text_input::bind_keys(cx);
     editor::bind_keys(cx);

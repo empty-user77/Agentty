@@ -91,6 +91,7 @@ mod session_viewer;
 mod settings_agents;
 mod settings_lsp;
 mod settings_page;
+mod shortcut_settings;
 pub mod side_panels;
 mod status_menus;
 mod subagent_view;

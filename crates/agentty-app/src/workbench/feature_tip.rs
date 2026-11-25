@@ -91,7 +91,12 @@ impl Workbench {
                                     .child(t(cx, "tip.chat_view_title")),
                             ),
                         )
-                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "tip.chat_view_body")))
+                        .child(
+                            div()
+                                .t_body()
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(crate::shortcuts::in_text(t(cx, "tip.chat_view_body"), cx)),
+                        )
                         .child(
                             div()
                                 .pt_2()

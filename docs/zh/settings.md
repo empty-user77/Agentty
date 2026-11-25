@@ -75,7 +75,7 @@ Agentty 配合使用的外部服务，每个服务一张卡片并显示是否已
 
 ## 键盘快捷键
 
-完整列表，以你所在平台的表示法显示。参见[键盘快捷键](/docs/keyboard-shortcuts)。
+完整列表，以你所在平台的表示法显示。点击快捷键即可更改，也可以选择作为基础的预设（Agentty、VS Code）。参见[键盘快捷键](/docs/keyboard-shortcuts)。
 
 ## 通知
 

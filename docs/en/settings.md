@@ -75,7 +75,7 @@ Theme, font, font size, line height, letter spacing, bold text, colours of your 
 
 ## Keyboard shortcuts
 
-The full list, in your platform's notation. See [Keyboard shortcuts](/docs/keyboard-shortcuts).
+The full list, in your platform's notation. Click a shortcut to change it, or pick a preset (Agentty, VS Code) to start from. See [Keyboard shortcuts](/docs/keyboard-shortcuts).
 
 ## Notifications
 

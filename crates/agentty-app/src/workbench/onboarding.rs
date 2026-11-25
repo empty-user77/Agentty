@@ -64,6 +64,7 @@ type Demo = fn(&mut Workbench, &mut Window, &mut Context<Workbench>);
 struct TourStep {
     text: &'static str,
     done: &'static str,
+    /// The command (`shortcuts::catalog`) whose shortcut does this step.
     shortcut: Option<&'static str>,
     /// Element id of the real control, which gets a ring while this step is the one to do.
     target: Option<&'static str>,
@@ -103,7 +104,7 @@ impl Task {
                     step(
                         "onboarding.split_1",
                         "onboarding.split_1_done",
-                        Some("⌘T"),
+                        Some("new_terminal"),
                         None,
                         Check::State(|w| w.active_pane().is_some()),
                         Some(|w, window, cx| w.create_workspace(LaunchSpec::new(PaneKind::Shell, home_dir()), window, cx)),
@@ -111,7 +112,7 @@ impl Task {
                     step(
                         "onboarding.split_2",
                         "onboarding.split_2_done",
-                        Some("⌘D"),
+                        Some("split_right"),
                         Some("header-split-right"),
                         Check::Event(TourEvent::Split),
                         Some(|w, window, cx| {
@@ -122,7 +123,7 @@ impl Task {
                     step(
                         "onboarding.split_3",
                         "onboarding.split_3_done",
-                        Some("⌘W"),
+                        Some("close_pane"),
                         None,
                         Check::Event(TourEvent::PaneClosed),
                         Some(|w, _, cx| {
@@ -148,7 +149,7 @@ impl Task {
                     step(
                         "onboarding.orch_1",
                         "onboarding.orch_1_done",
-                        Some("⇧⌘F"),
+                        Some("flow"),
                         Some("activity-flow"),
                         Check::State(|w| w.page == Some(Page::Flow)),
                         Some(|w, _, cx| w.open_page(Page::Flow, cx)),
@@ -166,7 +167,7 @@ impl Task {
                     step(
                         "onboarding.orch_3",
                         "onboarding.orch_3_done",
-                        Some("⇧⌘F"),
+                        Some("flow"),
                         Some("activity-flow"),
                         Check::State(|w| w.page != Some(Page::Flow)),
                         Some(|w, _, cx| {
@@ -184,12 +185,12 @@ impl Task {
                     step(
                         "onboarding.mini_1",
                         "onboarding.mini_1_done",
-                        Some("⌃⌘M"),
+                        Some("mini"),
                         Some("header-mini"),
                         Check::Event(TourEvent::MiniEntered),
                         Some(|w, window, cx| w.toggle_mini(window, cx)),
                     ),
-                    step("onboarding.mini_2", "onboarding.mini_2_done", Some("⌃⌘M"), None, Check::Event(TourEvent::MiniLeft), None),
+                    step("onboarding.mini_2", "onboarding.mini_2_done", Some("mini"), None, Check::Event(TourEvent::MiniLeft), None),
                 ],
             },
             Task::Accounts => Guide {
@@ -221,7 +222,7 @@ impl Task {
                     step(
                         "onboarding.accounts_3",
                         "onboarding.accounts_3_done",
-                        Some("⌘W"),
+                        Some("close_pane"),
                         None,
                         Check::State(|w| w.page != Some(Page::Settings)),
                         Some(|w, window, cx| {
@@ -240,7 +241,7 @@ impl Task {
                     step(
                         "onboarding.files_1",
                         "onboarding.files_1_done",
-                        Some("⌥⌘B"),
+                        Some("files"),
                         Some("header-files"),
                         Check::State(|w| w.files_panel.is_some()),
                         Some(|w, _, cx| w.toggle_files_panel(cx)),
@@ -265,7 +266,7 @@ impl Task {
                     step(
                         "onboarding.files_4",
                         "onboarding.files_4_done",
-                        Some("⌥⌘B"),
+                        Some("files"),
                         Some("header-files"),
                         Check::State(|w| w.files_panel.is_none()),
                         Some(|w, _, cx| w.toggle_files_panel(cx)),
@@ -555,7 +556,7 @@ impl Workbench {
                 .when(is_done, |d| d.bg(hex_alpha(Chrome::SUCCESS, 0.25)).child(icon("check", 12., hex(Chrome::SUCCESS))))
                 .when(is_now, |d| d.bg(hex(Chrome::WARNING)).text_color(hex(0x1e1e1e)).child((index + 1).to_string()))
                 .when(!is_done && !is_now, |d| d.bg(hex(0x3a3a3a)).text_color(hex(Chrome::MUTED)).child((index + 1).to_string()));
-            let keys = step.shortcut.map(|shortcut| {
+            let keys = step.shortcut.and_then(|command| crate::shortcuts::hint(command, cx)).map(|shortcut| {
                 div()
                     .flex_shrink_0()
                     .px_1p5()
@@ -766,6 +767,9 @@ mod tests {
                 // A step the app cannot do for the user must be one the user can always finish.
                 if step.demo.is_none() {
                     assert!(step.shortcut.is_some(), "{} has neither a demo nor a shortcut", step.text);
+                }
+                if let Some(command) = step.shortcut {
+                    assert!(crate::shortcuts::catalog::command(command).is_some(), "{command} is not a command");
                 }
             }
             // Every text of the card exists, in every language (a missing key would show as the key).

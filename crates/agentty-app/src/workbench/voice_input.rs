@@ -479,7 +479,8 @@ impl Workbench {
         let (glyph_color, label, tooltip): (u32, Option<(String, u32)>, String) = match &self.voice_input.phase {
             Phase::Idle => {
                 let note = self.voice_input.note.as_ref().filter(|(text, _, _)| !text.is_empty());
-                let tip = if installed { t(cx, "voice.idle") } else { t(cx, "voice.setup_hint") };
+                let tip =
+                    if installed { crate::shortcuts::in_text(t(cx, "voice.idle"), cx) } else { t(cx, "voice.setup_hint").to_string() };
                 // The agent CLI may have voice of its own; say what it is, so people pick the one
                 // they want (Claude Code's `/voice` dictates through Anthropic's servers; Codex's
                 // `/voice` is a spoken conversation, not dictation).
