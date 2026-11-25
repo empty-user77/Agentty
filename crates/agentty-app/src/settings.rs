@@ -488,6 +488,13 @@ pub struct Settings {
     /// (and stops filtering, whatever was typed before).
     #[serde(default = "yes")]
     pub workspace_search_bar: bool,
+    /// The bots: their section in the sidebar, their schedules and their channels. Off, none of
+    /// it runs or shows; the bots themselves are kept.
+    #[serde(default = "yes")]
+    pub bots_enabled: bool,
+    /// The bots' section of the sidebar is folded to its bar.
+    #[serde(default)]
+    pub bots_folded: bool,
     /// How the workspace list is put together: grouping, order and what is left out (the
     /// sidebar's options menu).
     #[serde(default)]
@@ -1117,6 +1124,8 @@ impl Default for Settings {
             card_activity: true,
             sort_finished_to_top: false,
             workspace_search_bar: true,
+            bots_enabled: true,
+            bots_folded: false,
             workspace_list: WorkspaceListOptions::default(),
             unified_header: true,
             prevent_sleep: false,
@@ -1479,6 +1488,11 @@ pub fn plugin_mcp_off() -> std::collections::BTreeSet<String> {
 /// [`Settings::in_app_browser`], read from the settings file like [`browser_tools_enabled`].
 pub fn in_app_browser_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.in_app_browser())
+}
+
+/// The language shown (`en`, `ko`, …), read from the settings file like [`browser_tools_enabled`].
+pub fn language_code() -> &'static str {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).map_or("en", |s| s.language.code())
 }
 
 /// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].

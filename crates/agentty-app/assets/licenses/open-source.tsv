@@ -268,6 +268,7 @@ crate	home	0.5.12	MIT OR Apache-2.0	https://github.com/rust-lang/cargo
 crate	hound	3.5.1	Apache-2.0	https://github.com/ruuda/hound
 crate	http	1.5.0	MIT OR Apache-2.0	https://github.com/hyperium/http
 crate	http-body	1.1.0	MIT	https://github.com/hyperium/http-body
+crate	httparse	1.10.1	MIT OR Apache-2.0	https://github.com/seanmonstar/httparse
 crate	hybrid-array	0.4.15	MIT OR Apache-2.0	https://github.com/RustCrypto/hybrid-array
 crate	iana-time-zone	0.1.65	MIT OR Apache-2.0	https://github.com/strawlab/iana-time-zone
 crate	icu_collections	2.4.0	Unicode-3.0	https://github.com/unicode-org/icu4x
@@ -609,6 +610,7 @@ crate	tracing	0.1.44	MIT	https://github.com/tokio-rs/tracing
 crate	tracing-attributes	0.1.31	MIT	https://github.com/tokio-rs/tracing
 crate	tracing-core	0.1.36	MIT	https://github.com/tokio-rs/tracing
 crate	ttf-parser	0.25.1	MIT OR Apache-2.0	https://github.com/harfbuzz/ttf-parser
+crate	tungstenite	0.30.0	MIT OR Apache-2.0	https://github.com/snapview/tungstenite-rs
 crate	two-face	0.5.2+bat-0.26.1	MIT OR Apache-2.0	https://codeberg.org/CosmicHarper/two-face
 crate	twox-hash	2.1.4	MIT	https://github.com/shepmaster/twox-hash
 crate	typed-builder	0.22.0	MIT OR Apache-2.0	https://github.com/idanarye/rust-typed-builder

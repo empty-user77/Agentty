@@ -158,8 +158,22 @@ const FILES: &[(&str, &[u8])] = &[
     ("logos/qwen.svg", include_bytes!("../assets/logos/qwen.svg")),
     ("logos/sourcegraph.svg", include_bytes!("../assets/logos/sourcegraph.svg")),
     ("logos/x.svg", include_bytes!("../assets/logos/x.svg")),
+    ("bots/cat.svg", include_bytes!("../assets/bots/cat.svg")),
+    ("bots/bunny.svg", include_bytes!("../assets/bots/bunny.svg")),
+    ("bots/bear.svg", include_bytes!("../assets/bots/bear.svg")),
+    ("bots/frog.svg", include_bytes!("../assets/bots/frog.svg")),
+    ("bots/owl.svg", include_bytes!("../assets/bots/owl.svg")),
+    ("bots/fox.svg", include_bytes!("../assets/bots/fox.svg")),
+    ("bots/chick.svg", include_bytes!("../assets/bots/chick.svg")),
+    ("bots/robot.svg", include_bytes!("../assets/bots/robot.svg")),
+    ("bots/dog.svg", include_bytes!("../assets/bots/dog.svg")),
     ("brand/logo.png", include_bytes!("../assets/brand/logo-256.png")),
 ];
+
+/// A bundled file's bytes, for what serves one as it is (the remote page's pictures).
+pub fn file(path: &str) -> Option<&'static [u8]> {
+    FILES.iter().find(|(name, _)| *name == path).map(|(_, bytes)| *bytes)
+}
 
 pub struct Assets;
 

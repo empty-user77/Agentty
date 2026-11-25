@@ -18,7 +18,7 @@ pub fn agent_builder() -> ureq::AgentBuilder {
     ureq::AgentBuilder::new().tls_config(tls_config())
 }
 
-fn tls_config() -> Arc<rustls::ClientConfig> {
+pub(crate) fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {

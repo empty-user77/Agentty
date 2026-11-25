@@ -140,6 +140,8 @@ pub struct Remote {
     last_overview: Option<std::time::Instant>,
     /// When the board was last copied out, while a page asks for it.
     last_board: Option<std::time::Instant>,
+    /// When the bots were last copied out, while a page asks for them.
+    last_bots: Option<std::time::Instant>,
     /// When the page was last checked through Tailscale, whether an answer is awaited, and how
     /// many checks in a row failed.
     last_health: Option<std::time::Instant>,
@@ -1085,6 +1087,11 @@ fn tick(cx: &mut App) {
     if board_due {
         remote.last_board = Some(std::time::Instant::now());
     }
+    let bots_due = hub.bots_asked() && remote.last_bots.is_none_or(|at| at.elapsed() >= BOARD_EVERY);
+    if bots_due {
+        remote.last_bots = Some(std::time::Instant::now());
+    }
+    let mut bots: Option<String> = None;
     let watched = hub.watched();
     let chats = if overview { hub.chats_asked() } else { Vec::new() };
     let mut board = board_due.then(board::Board::default);
@@ -1107,6 +1114,10 @@ fn tick(cx: &mut App) {
             if let Some(board) = &mut board {
                 board.merge(wb.remote_board(cx));
             }
+            // The window that runs the bots answers for them.
+            if bots_due && bots.is_none() {
+                bots = wb.remote_bots(cx);
+            }
             for pane in &watched {
                 if let Some(screen) = wb.remote_screen(*pane, cx) {
                     hub.publish_screen(*pane, screen);
@@ -1121,6 +1132,9 @@ fn tick(cx: &mut App) {
     }
     if let Some(board) = board {
         hub.publish_board(board);
+    }
+    if let Some(bots) = bots {
+        hub.publish_bots(bots);
     }
     // The dashboard's counters and log follow along, about once a second, while it is open.
     let remote = cx.global_mut::<Remote>();

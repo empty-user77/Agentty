@@ -11,6 +11,8 @@ mod agent_signal;
 mod agents;
 mod ai_processes;
 mod assets;
+mod bot_cli;
+mod bots;
 mod branch_picker;
 mod brand;
 mod browser_cli;
@@ -703,6 +705,11 @@ fn main() {
         std::process::exit(tasks_cli::run(&args[2..]));
     }
 
+    // `agentty bot …`: an agent hands work to a bot and reads its answer.
+    if args.get(1).map(String::as_str) == Some("bot") {
+        std::process::exit(bot_cli::run(&args[2..]));
+    }
+
     // `agentty plan`: an orchestrator hands its plan to the Orchestration page.
     if args.get(1).map(String::as_str) == Some("plan") {
         std::process::exit(tasks_cli::run_plan(&args[2..]));
@@ -1052,6 +1059,16 @@ fn main() {
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
                                     Some(window) => {
                                         let _ = window.update(cx, |workbench, _, cx| workbench.answer_tasks_ctl(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Bot(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_bot(request, cx));
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));

@@ -661,6 +661,9 @@ impl Workbench {
                     .child(crate::ui::scrollbar(self.sidebar_scroll.clone()))
                     .into_any_element(),
             })
+            // The bots stay at the foot of the sidebar, under the workspaces and their groups:
+            // met by face, not through a menu, and never pushing the user's own work down.
+            .when(self.panel == SidePanel::Workspaces && self.prefs(cx).bots_enabled, |d| d.child(self.render_bots_sidebar(cx)))
             .child(
                 div()
                     .id("sidebar-resize")
@@ -1287,11 +1290,20 @@ impl Workbench {
         // A plugin's workspace works in the plugin's own folder: say whose it is instead, or what
         // one of its automations is doing right now while it works.
         let plugin_working_text = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin_working_text(cx, id));
+        // A bot's workspace says whose conversations it holds.
+        let bot: Option<String> = match &ws.dormant {
+            Some(saved) if ws.tabs.is_empty() => saved.tabs.iter().find_map(|tab| super::bots::snapshot_bot(&tab.layout)),
+            _ => ws.tabs.iter().flat_map(|tab| tab.root.leaves()).find_map(|pane| pane.read(cx).spec.bot.clone()),
+        };
         // A chat says so, and names its project: its lead works in a worktree of the chat's own.
         let chat = ws.plugin.is_none() && self.is_chat_workspace(ws);
         let path = match (&ws.plugin, &plugin_working_text) {
             (Some(_), Some(text)) => text.clone(),
             (Some(_), None) => t(cx, "workspace.plugin_card").to_string(),
+            // A bot's conversations: its handle, then where it works.
+            (None, _) if bot.is_some() => {
+                format!("{} @{} · {}", t(cx, "workspace.bot_card"), bot.as_deref().unwrap_or_default(), tilde(&cwd))
+            }
             (None, _) if chat => tf(cx, "workspace.chat_card", &[("folder", &tilde(&ws.cwd))]),
             (None, _) => tilde(&cwd),
         };
@@ -2307,6 +2319,7 @@ impl Workbench {
                 Page::Idea => vec![(page, None, t(cx, "page.idea"))],
                 Page::Database => vec![(page, None, t(cx, "page.database"))],
                 Page::Board => vec![(page, None, t(cx, "page.board"))],
+                Page::Bots => vec![(page, None, t(cx, "page.bots"))],
             };
             for (tab_page, tab_category, label) in pages {
                 let active = tab_page == page && tab_category.is_none_or(|c| c == category);

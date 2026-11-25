@@ -92,6 +92,7 @@ button:disabled { opacity: .5; cursor: default; }
 .workspaces { flex: 1; overflow-y: auto; padding: 0 8px 12px; -webkit-overflow-scrolling: touch; }
 .group-head { display: flex; align-items: center; gap: 6px; margin: 12px 6px 6px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
 .group-head .swatch { width: 8px; height: 8px; border-radius: 2px; }
+.group-head .beta { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 400; letter-spacing: 0; color: var(--muted); background: var(--panel-2); }
 .ws-card { display: block; width: 100%; text-align: left; padding: 9px 11px; margin-bottom: 6px; border-radius: 10px; background: var(--panel-2);
   border: 1px solid var(--border); color: var(--text); position: relative; }
 .ws-card.colored { border-color: transparent; color: #fff; }
@@ -103,6 +104,53 @@ button:disabled { opacity: .5; cursor: default; }
 .ws-card .needs { min-width: 18px; height: 18px; border-radius: 9px; background: var(--attention); color: #fff; font-size: 11px; font-weight: 700;
   display: flex; align-items: center; justify-content: center; padding: 0 5px; }
 .ws-card .working { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.ws-card.bot { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; padding-right: 4px; }
+.bot-face { width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; }
+.bot-face.small { width: 28px; height: 28px; border-radius: 8px; align-self: flex-end; }
+.bot-words { flex: 1; min-width: 0; }
+.bot-words .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bot-words .sub { font-size: 12px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bot-words .sub.state-working { color: var(--accent); opacity: 1; }
+.bot-words .sub.state-needs { color: var(--attention); opacity: 1; }
+/* A bot in the list: its card opens its chat, the switch beside it turns it on or off. */
+.bot-card { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; padding-right: 9px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); }
+.bot-card.active { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bot-card.off .ws-card { opacity: .55; }
+.bot-card .ws-card .name { padding-right: 0; }
+.bot-card .ws-card .marks { position: static; flex-shrink: 0; }
+/* A switch, wide enough for a thumb. */
+.switch { flex-shrink: 0; width: 44px; height: 26px; padding: 0; border-radius: 13px; border: 1px solid var(--border); background: var(--bg); position: relative; transition: background .15s ease; }
+.switch i { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--muted); transition: transform .15s ease, background .15s ease; }
+.switch.on { background: var(--success); border-color: var(--success); }
+.switch.on i { transform: translateX(18px); background: #fff; }
+
+/* A bot's chat, over the page; beside the list on wide screens. */
+.bot-view { position: fixed; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; padding-top: var(--safe-top); }
+@media (min-width: 900px) { .bot-view { left: 280px; } }
+.bot-bar { display: flex; align-items: center; gap: 4px; padding: 8px 12px 8px 4px; border-bottom: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
+.bot-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.bot-needs { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #2a1d1c; border-bottom: 1px solid var(--attention); font-size: 13px; flex-shrink: 0; }
+.bot-needs .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.bot-log { padding-bottom: 16px; }
+.bot-row { display: flex; gap: 8px; align-items: flex-start; max-width: 100%; }
+.msg.bot-said { min-width: 0; max-width: min(88%, 720px); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; }
+.msg.bot-said .text { white-space: normal; }
+.msg.bot-said .markdown { margin: 0; max-width: none; font-size: 14px; line-height: 1.5; }
+.msg.bot-said .markdown > :first-child { margin-top: 0; }
+.msg.bot-said .markdown > :last-child { margin-bottom: 0; }
+.msg.bot-said .markdown h1, .msg.bot-said .markdown h2, .msg.bot-said .markdown h3 { font-size: 15px; border: 0; padding: 0; margin: 10px 0 4px; }
+.msg.bot-said .markdown ul, .msg.bot-said .markdown ol { padding-left: 20px; margin: 4px 0; }
+.msg.bot-said .markdown p { margin: 6px 0; }
+.bot-at { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.msg.bot-said.working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.msg.bot-said.working .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dots { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: bot-pulse 1.2s ease-in-out infinite; }
+@keyframes bot-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dots { animation: none; } }
+/* What started the bot when it was not the user: a schedule, a watch, a channel, another bot. */
+.bot-start { align-self: center; max-width: 92%; display: flex; gap: 6px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 4px 10px; }
+.bot-start b { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.bot-start span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty-note { color: var(--muted); padding: 16px 8px; font-size: 14px; }
 
 /* Top bar */

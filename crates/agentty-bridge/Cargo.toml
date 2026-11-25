@@ -26,6 +26,8 @@ ring = "0.17"
 base64 = "0.22"
 url = "2.5.8"
 memchr = "2"
+# Slack Socket Mode for bots: one outgoing WebSocket, on the TLS setup the HTTP client uses.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3.5", optional = true }
 # Session sync's local store (a single SQLite file), through the SQLite every system already has:

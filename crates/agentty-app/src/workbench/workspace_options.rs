@@ -97,6 +97,10 @@ impl Workbench {
             .into_iter()
             .filter(|&i| {
                 let ws = &self.workspaces[i];
+                // A bot's conversations are opened from its row above the list.
+                if self.workspace_bot(i, cx).is_some() {
+                    return false;
+                }
                 if i == self.active_workspace {
                     return true;
                 }
@@ -298,6 +302,21 @@ impl Workbench {
                 "search",
                 t(cx, "settings.workspace_search_bar"),
                 toggle("wo-search-bar", prefs.workspace_search_bar, |s| s.workspace_search_bar = !s.workspace_search_bar, cx),
+            ))
+            .child(switch_row(
+                "bot",
+                t(cx, "workspace_options.bots"),
+                super::settings_page::switch(
+                    "wo-bots",
+                    prefs.bots_enabled,
+                    cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                        this.change_settings(cx, |s| s.bots_enabled = !s.bots_enabled);
+                        // Their schedules and channels stop with it, and start again.
+                        this.bot_schedules_changed(cx);
+                        this.bot_channels_changed(cx);
+                        cx.notify();
+                    }),
+                ),
             ))
             .when(cfg!(target_os = "macos"), |d| {
                 d.child(switch_row(

@@ -167,6 +167,10 @@ pub enum Command {
     /// A local dev server a terminal runs (`port`, checked against the overview) shown on the
     /// tailnet through Agentty's proxy (`devproxy`).
     OpenPort { port: u16 },
+    /// A message for a bot, as written in the app: it goes into the bot's mailbox.
+    Bot { handle: String, text: String },
+    /// A bot switched on or off, as its switch in the app does.
+    BotSwitch { handle: String, on: bool },
     /// What the chat view's Stop does: the running turn ended, once.
     Stop { pane: u64 },
     /// An option of the selection on the agent's screen (0 for its first), picked the way the chat
@@ -237,6 +241,8 @@ impl Command {
             | Command::CloseTab { .. }
             | Command::OpenFolder { .. }
             | Command::OpenPort { .. }
+            | Command::Bot { .. }
+            | Command::BotSwitch { .. }
             | Command::Orchestration(_) => None,
         }
     }
@@ -283,6 +289,8 @@ struct View {
     chat_live: HashMap<u64, (Instant, ChatLive)>,
     /// The board as last copied out, while a page asks for it.
     board: Option<(Instant, Arc<Board>)>,
+    /// The bots as last copied out (one JSON document), while a page asks for them.
+    bots: Option<(Instant, Arc<String>)>,
 }
 
 /// Conversations being followed: pane → when last asked for, and its reading.
@@ -326,6 +334,8 @@ pub struct Hub {
     chat_asked: Mutex<HashMap<u64, Instant>>,
     /// When a page last asked for the board.
     board_asked: Mutex<Option<Instant>>,
+    /// When a page last asked for the bots.
+    bots_asked: Mutex<Option<Instant>>,
     /// At most `MAX_FOLLOWS`.
     follows: Mutex<Follows>,
 }
@@ -506,6 +516,7 @@ impl Hub {
             transcribing: AtomicUsize::new(0),
             chat_asked: Mutex::new(HashMap::new()),
             board_asked: Mutex::new(None),
+            bots_asked: Mutex::new(None),
             follows: Mutex::new(HashMap::new()),
         });
         let accept = hub.clone();
@@ -757,6 +768,16 @@ impl Hub {
         }
     }
 
+    /// Whether a page asked for the bots just now: then they are copied out about once a second.
+    pub fn bots_asked(&self) -> bool {
+        self.bots_asked.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|at| at.elapsed() < INTEREST)
+    }
+
+    pub fn publish_bots(&self, bots: String) {
+        self.view.lock().unwrap_or_else(|e| e.into_inner()).bots = Some((Instant::now(), Arc::new(bots)));
+        self.changed.notify_all();
+    }
+
     /// Whether a page asked for the board just now: then it is copied out about once a second.
     pub fn board_asked(&self) -> bool {
         self.board_asked.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|at| at.elapsed() < INTEREST)
@@ -930,6 +951,13 @@ impl Hub {
             (true, "/app.js") => return Routed::Response(Response::fixed(200, "text/javascript; charset=utf-8", APP_JS.as_bytes())),
             (true, "/app.css") => return Routed::Response(Response::fixed(200, "text/css; charset=utf-8", APP_CSS.as_bytes())),
             (true, "/icon.svg") => return Routed::Response(Response::fixed(200, "image/svg+xml", ICON_SVG.as_bytes())),
+            // The bots' characters: the app's own drawings, the same for everyone.
+            (true, path) if path.starts_with("/bots/") => {
+                return Routed::Response(match crate::assets::file(&path[1..]) {
+                    Some(art) => Response::fixed(200, "image/svg+xml", art).with("Cache-Control", "private, max-age=604800"),
+                    None => Response::new(404, "text/plain", "Not Found"),
+                });
+            }
             (true, "/manifest.webmanifest") => {
                 return Routed::Response(Response::fixed(200, "application/manifest+json", MANIFEST.as_bytes()));
             }
@@ -991,7 +1019,7 @@ impl Hub {
         }
         // 3. Everything past here needs a session of this login. An app polling a chat or the board
         // does so by itself: that doesn't count as use, or a device left open would never go idle.
-        let polling = method == "GET" && matches!(path, "/api/chat" | "/api/board");
+        let polling = method == "GET" && matches!(path, "/api/chat" | "/api/board" | "/api/bots" | "/api/bots/chat");
         let mut auth = self.auth.lock().unwrap_or_else(|e| e.into_inner());
         let signed_in = if polling { auth.sessions.check_idle(&token, &login, now) } else { auth.sessions.check(&token, &login, now) };
         drop(auth);
@@ -1011,6 +1039,10 @@ impl Hub {
             ("GET", "/api/chat") => Routed::Response(self.chat(request)),
             ("GET", "/api/skills") => Routed::Response(self.skills(request)),
             ("GET", "/api/board") => Routed::Response(self.board(request, &config)),
+            ("GET", "/api/bots") => Routed::Response(self.bots()),
+            ("POST", "/api/bots") => Routed::Response(self.bot_message(request)),
+            ("GET", "/api/bots/chat") => Routed::Response(self.bot_chat(request)),
+            ("POST", "/api/bots/switch") => Routed::Response(self.bot_switch(request)),
             ("GET", "/api/sessions") => {
                 let voice = self.voice_available();
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -1231,6 +1263,113 @@ impl Hub {
             self.wake();
             view = self.changed.wait_timeout(view, left).unwrap_or_else(|e| e.into_inner()).0;
         }
+    }
+
+    /// `GET /api/bots`: the bots, what each is doing, and which wait for the user. Copied out by
+    /// the app while a page asks, like the board.
+    fn bots(&self) -> Response {
+        match self.fresh_bots() {
+            Some(bots) => Response::new(200, "application/json; charset=utf-8", bots.as_bytes().to_vec()),
+            None => Response::json(503, &json!({ "error": "busy" })),
+        }
+    }
+
+    /// The bots as the app copied them out just now, waiting a moment for it to.
+    fn fresh_bots(&self) -> Option<Arc<String>> {
+        *self.bots_asked.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        let deadline = Instant::now() + BOARD_WAIT;
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some((_, bots)) = view.bots.as_ref().filter(|(at, _)| at.elapsed() < BOARD_FRESH) {
+                return Some(bots.clone());
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            self.wake();
+            view = self.changed.wait_timeout(view, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// Whether the page is shown the bot `handle`: one in a workspace left out of remote access
+    /// is not listed, and nothing about it is answered. `None` while the app has not said.
+    fn bot_listed(&self, handle: &str) -> Option<bool> {
+        let bots = self.fresh_bots()?;
+        let listed = serde_json::from_str::<serde_json::Value>(&bots).ok()?;
+        Some(listed["bots"].as_array().is_some_and(|all| all.iter().any(|bot| bot["handle"].as_str() == Some(handle))))
+    }
+
+    /// `GET /api/bots/chat?handle=…[&rev=…]`: the newest lines of a bot's chat, what was written to
+    /// it and what it answered and reported. `rev` is what the page was last given: unchanged, 304.
+    fn bot_chat(&self, request: &Request) -> Response {
+        let handle = request.query_param("handle").unwrap_or_default();
+        if agentty_bridge::bots::check_handle(&handle).is_err() {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        }
+        match self.bot_listed(&handle) {
+            None => return Response::json(503, &json!({ "error": "busy" })),
+            Some(false) => return Response::json(404, &json!({ "error": "not found" })),
+            Some(true) => {}
+        }
+        let rev = crate::workbench::remote_bot_chat_rev(&handle);
+        if request.query_param("rev").as_deref() == Some(rev.as_str()) {
+            return Response::new(304, "application/json; charset=utf-8", Vec::new());
+        }
+        Response::json(200, &json!({ "handle": handle, "rev": rev, "lines": crate::workbench::remote_bot_chat(&handle) }))
+    }
+
+    /// `POST /api/bots/switch` `{handle, on}`: a bot switched on or off, as its switch in the app.
+    fn bot_switch(&self, request: &Request) -> Response {
+        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let (handle, Some(on)) = (body["handle"].as_str().unwrap_or_default(), body["on"].as_bool()) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        if agentty_bridge::bots::check_handle(handle).is_err() {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        }
+        match self.bot_listed(handle) {
+            None => return Response::json(503, &json!({ "error": "busy" })),
+            Some(false) => return Response::json(404, &json!({ "error": "not found" })),
+            Some(true) => {}
+        }
+        let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+        if inbox.len() >= 256 {
+            return Response::json(429, &json!({ "error": "busy" }));
+        }
+        inbox.push(Command::BotSwitch { handle: handle.to_string(), on });
+        drop(inbox);
+        self.wake();
+        Response::json(200, &json!({ "ok": true }))
+    }
+
+    /// `POST /api/bots` `{handle, text}`: a message for a bot, as the app's own page sends one.
+    /// Beside its switch (`/api/bots/switch`) nothing else about a bot can be asked for here: not
+    /// its making, its permission, what it is made of or its channels.
+    fn bot_message(&self, request: &Request) -> Response {
+        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let (handle, text) = (body["handle"].as_str().unwrap_or_default(), body["text"].as_str().unwrap_or_default());
+        if agentty_bridge::bots::check_handle(handle).is_err() || text.trim().is_empty() {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        }
+        if text.chars().count() > MAX_INPUT_CHARS {
+            return Response::json(413, &json!({ "error": "too long" }));
+        }
+        // Only a bot the page is shown, as its switch and its chat.
+        match self.bot_listed(handle) {
+            None => return Response::json(503, &json!({ "error": "busy" })),
+            Some(false) => return Response::json(404, &json!({ "error": "not found" })),
+            Some(true) => {}
+        }
+        let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+        if inbox.len() >= 256 {
+            return Response::json(429, &json!({ "error": "busy" }));
+        }
+        inbox.push(Command::Bot { handle: handle.to_string(), text: text.to_string() });
+        drop(inbox);
+        self.wake();
+        Response::json(200, &json!({ "ok": true }))
     }
 
     /// `GET /api/board`: what the Orchestrator page shows, of what the page may see.
@@ -2967,6 +3106,50 @@ mod tests {
         assert!(hub.follows.lock().unwrap().is_empty());
         hub.shutdown();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bots_are_listed_and_written_to_by_a_signed_in_page_only() {
+        let hub = hub("secret-password");
+        assert_eq!(send(&hub, &Req::get("/api/bots").raw()).0, 401);
+        assert_eq!(send(&hub, &Req::post("/api/bots", json!({ "handle": "reviewer", "text": "hi" })).raw()).0, 401);
+        assert!(hub.take_commands().is_empty());
+        let cookie = sign_in(&hub, "secret-password");
+        let signed = |req: Req| send(&hub, &Req { cookie: Some(cookie.clone()), ..req }.raw());
+        hub.publish_bots(json!({ "bots": [{ "handle": "reviewer", "name": "Reviewer", "state": "idle" }] }).to_string());
+        let (status, _, body) = signed(Req::get("/api/bots"));
+        assert_eq!(status, 200);
+        assert!(body.contains("\"handle\":\"reviewer\""), "{body}");
+        assert!(hub.bots_asked(), "the app copies them out while a page asks");
+        // A message goes to the app as one command; nothing but a handle and a text is taken.
+        assert_eq!(signed(Req::post("/api/bots", json!({ "handle": "reviewer", "text": "check the PR" }))).0, 200);
+        assert_eq!(hub.take_commands(), vec![Command::Bot { handle: "reviewer".into(), text: "check the PR".into() }]);
+        // Its switch, and its chat: of a bot the page is shown only.
+        assert_eq!(send(&hub, &Req::post("/api/bots/switch", json!({ "handle": "reviewer", "on": false })).raw()).0, 401);
+        assert_eq!(send(&hub, &Req::get("/api/bots/chat?handle=reviewer").raw()).0, 401);
+        assert_eq!(signed(Req::post("/api/bots/switch", json!({ "handle": "reviewer", "on": false }))).0, 200);
+        assert_eq!(hub.take_commands(), vec![Command::BotSwitch { handle: "reviewer".into(), on: false }]);
+        assert_eq!(signed(Req::post("/api/bots/switch", json!({ "handle": "hidden", "on": true }))).0, 404);
+        assert_eq!(signed(Req::post("/api/bots", json!({ "handle": "hidden", "text": "hi" }))).0, 404);
+        assert!(hub.take_commands().is_empty(), "nothing is handed on for a bot the page is not shown");
+        assert_eq!(signed(Req::get("/api/bots/chat?handle=hidden")).0, 404);
+        for bad in [json!({ "handle": "reviewer" }), json!({ "handle": "../x", "on": true }), json!({ "handle": "reviewer", "on": "yes" })]
+        {
+            assert_eq!(signed(Req::post("/api/bots/switch", bad.clone())).0, 400, "{bad}");
+        }
+        assert_eq!(signed(Req::get("/api/bots/chat?handle=..%2Fx")).0, 400);
+        assert!(hub.take_commands().is_empty());
+        for bad in [
+            json!({ "handle": "../x", "text": "hi" }),
+            json!({ "handle": "Reviewer", "text": "hi" }),
+            json!({ "handle": "reviewer", "text": "  " }),
+            json!({ "handle": "reviewer" }),
+            json!({ "handle": "reviewer", "text": "hi".repeat(MAX_INPUT_CHARS) }),
+        ] {
+            assert!(matches!(signed(Req::post("/api/bots", bad.clone())).0, 400 | 413), "{bad}");
+        }
+        assert!(hub.take_commands().is_empty(), "nothing refused was queued");
+        hub.shutdown();
     }
 
     #[test]
