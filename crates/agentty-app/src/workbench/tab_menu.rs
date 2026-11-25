@@ -1,4 +1,4 @@
-//! Right-click menu on a tab: close this / other / all tabs, set it aside in TODO, move the tab to
+//! Right-click menu on a tab: name it, close this / other / all tabs, set it aside in TODO, move the tab to
 //! another workspace, and the recently closed tabs to reopen.
 
 use super::workspace_menu::{row, rule, HoverListener};
@@ -122,6 +122,8 @@ impl Workbench {
         let active = self.workspaces.get(self.active_workspace)?;
         let count = active.visible_tabs().len();
         let has_targets = self.workspaces.len() > 1;
+        // An automation's tab is named by its plugin.
+        let nameable = active.tabs.get(index).is_some_and(|tab| tab.instance.is_none());
         // The fixed actions first, then where the tab can go, then the history.
         let list = popover()
             .w(px(MENU_WIDTH))
@@ -136,6 +138,14 @@ impl Workbench {
                         this.open_orchestrator_dialog(super::orchestrator::Place::NewTab, window, cx)
                     }),
                 ))
+                .child(rule())
+            })
+            .when(nameable, |d| {
+                d.child(
+                    row("tab-menu-rename", "pencil", t(cx, "rename"), false)
+                        .on_hover(Self::fold_tab_flyout(cx))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.rename_tab(index, window, cx))),
+                )
                 .child(rule())
             })
             .child(

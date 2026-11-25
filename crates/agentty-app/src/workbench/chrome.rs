@@ -1708,6 +1708,7 @@ impl Workbench {
             .child(div().px_3().pt_1().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "tabs.recently_closed")));
         for (index, tab) in ws.closed_tabs.iter().take(6).enumerate() {
             let (title, panes) = closed_tab_label(&tab.layout);
+            let title = tab.name.clone().unwrap_or(title);
             let label = if panes > 1 { format!("{title} ({panes})") } else { title };
             list = list.child(
                 menu_item(
@@ -2197,9 +2198,15 @@ impl Workbench {
                                 this.open_tab_menu(index, event.position, cx);
                             }),
                         )
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.activate_tab(index, window, cx)))
+                        // A double-click names the tab, as it does a workspace's card.
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            this.activate_tab(index, window, cx);
+                            if event.click_count() == 2 {
+                                this.rename_tab(index, window, cx);
+                            }
+                        }))
                         // Drag a tab onto another to reorder, or onto a workspace in the sidebar to move it.
-                        .on_drag(DraggedTab { workspace: ws.id, index, title: view.display_title().into() }, move |dragged, _, _, cx| {
+                        .on_drag(DraggedTab { workspace: ws.id, index, title: tab.title(cx).into() }, move |dragged, _, _, cx| {
                             super::drop_split::note_tab_drag(dragged.workspace, dragged.index);
                             cx.new(|_| DragPreview { title: dragged.title.clone() })
                         })
@@ -2242,7 +2249,7 @@ impl Workbench {
                                         .title
                                         .clone()
                                         .unwrap_or_else(|| tf(cx, "plugin_workspace.automation", &[("n", &(index + 1).to_string())])),
-                                    _ => view.display_title(),
+                                    _ => tab.title(cx),
                                 },
                             ),
                         )

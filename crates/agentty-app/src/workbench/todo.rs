@@ -28,7 +28,12 @@ impl Workspace {
 fn parked_summary(snapshot: &TabSnapshot) -> (String, String, usize) {
     let panes = super::snapshot_panes(&snapshot.layout);
     let front = panes.get(snapshot.active_pane).or(panes.first());
-    let title = snapshot.instance.as_ref().and_then(|i| i.title.clone()).or_else(|| front.map(|p| p.title.clone())).unwrap_or_default();
+    let title = snapshot
+        .name
+        .clone()
+        .or_else(|| snapshot.instance.as_ref().and_then(|i| i.title.clone()))
+        .or_else(|| front.map(|p| p.title.clone()))
+        .unwrap_or_default();
     let folder = front.map(|p| crate::ui::tilde(&p.cwd)).unwrap_or_default();
     (title, folder, panes.len())
 }
@@ -86,6 +91,7 @@ impl Workbench {
         }
         let snapshot = TabSnapshot {
             instance: None,
+            name: None,
             layout: NodeSnapshot::Pane(Self::snapshot_pane(pane, cx)),
             active_pane: 0,
             zoomed_pane: None,
@@ -322,7 +328,16 @@ mod tests {
             sizes: vec![0.5, 0.5],
             children: vec![pane("server", "/w/api"), pane("claude", "/w/app")],
         };
-        let tab = TabSnapshot { instance: None, layout, active_pane: 1, zoomed_pane: None, chat: false, chat_roles: None, todo: false };
+        let tab = TabSnapshot {
+            instance: None,
+            name: None,
+            layout,
+            active_pane: 1,
+            zoomed_pane: None,
+            chat: false,
+            chat_roles: None,
+            todo: false,
+        };
         let (title, folder, panes) = parked_summary(&tab);
         assert_eq!((title.as_str(), panes), ("claude", 2));
         assert!(folder.ends_with("app"), "{folder}");

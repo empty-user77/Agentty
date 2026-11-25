@@ -688,7 +688,7 @@ impl Workbench {
             }
         }
         let pane = self.spawn_pane(crate::bots::spec(&bot, Self::bot_saved_session(&bot)), cx);
-        let tab = Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None };
+        let tab = Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, name: None };
         // A workspace that already holds one of the bot's conversations takes the new one too.
         match self.bot_panes(handle, cx).first().and_then(|other| self.locate(other)) {
             Some((workspace, _)) => self.workspaces[workspace].tabs.push(tab),
@@ -1476,7 +1476,8 @@ impl Workbench {
             let shape = match kind {
                 ChannelKind::Telegram => "123456789",
                 ChannelKind::Slack => "U012ABCDEF",
-                ChannelKind::Discord => "123456789012345678",
+                // The start of an id's shape only: a whole one reads as somebody's.
+                ChannelKind::Discord => "1234567890…",
             };
             channels.senders.insert(kind, cx.new(|cx| TextInput::new(allowed, shape, window, cx)));
             for (secret, _) in super::bot_channels::secrets_of(kind) {

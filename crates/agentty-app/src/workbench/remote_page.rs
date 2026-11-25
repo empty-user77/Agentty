@@ -119,7 +119,7 @@ impl Workbench {
             for (index, tab) in ws.tabs.iter().enumerate() {
                 let panes: Vec<u64> = tab.root.leaves().iter().map(|p| p.read(cx).pane_id).collect();
                 tabs.push(TabInfo {
-                    title: tab.active.read(cx).display_title(),
+                    title: tab.title(cx),
                     active_pane: tab.active.read(cx).pane_id,
                     panes,
                     chat: self.remote_chat(tab, cx),
@@ -355,7 +355,7 @@ impl Workbench {
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, cwd), cx);
         let shown = index == self.active_workspace;
         let ws = &mut self.workspaces[index];
-        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, name: None });
         if !shown {
             ws.active_tab = ws.tabs.len() - 1;
         }
@@ -416,7 +416,7 @@ impl Workbench {
             name: title,
             group,
             cwd: folder,
-            tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
+            tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, name: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,

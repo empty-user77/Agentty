@@ -260,6 +260,16 @@ pub struct Tab {
     /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
     /// these terminals go together, and each tab runs on its own.
     pub instance: Option<persist::TabInstance>,
+    /// The name the user gave the tab (its menu, or a double-click on it). Without one the tab
+    /// reads as the pane in front does.
+    pub name: Option<String>,
+}
+
+impl Tab {
+    /// What the tab is called wherever a tab is listed: its own name, else its front pane's title.
+    pub fn title(&self, cx: &gpui::App) -> String {
+        self.name.clone().unwrap_or_else(|| self.active.read(cx).display_title())
+    }
 }
 
 pub struct Workspace {
@@ -417,6 +427,8 @@ pub enum SessionFilter {
 pub enum RenameTarget {
     Workspace(u64),
     Group(u64),
+    /// A tab, by the id of a pane in it: tabs have no id, and one may move while the dialog is up.
+    Tab(u64),
 }
 
 pub struct Rename {
@@ -1597,7 +1609,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance, name: tab.name });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1753,7 +1765,7 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, name: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
@@ -1802,7 +1814,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, name: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1826,7 +1838,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, name: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -2778,7 +2790,7 @@ impl Workbench {
             self.register_chat(&leaves[0], snapshot.chat_roles.unwrap_or_default(), cx);
         }
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone(), name: snapshot.name.clone() });
         ws.active_tab = ws.tabs.len() - 1;
         self.split_shared_instances(w);
         self.active_workspace = w;
@@ -3026,13 +3038,13 @@ impl Workbench {
             return crate::terminal::strip_agent_mark(name).to_string();
         }
         if let Some(tab) = ws.tabs.get(ws.active_tab) {
-            return tab.active.read(cx).display_title();
+            return tab.title(cx);
         }
         ws.dormant
             .as_ref()
             .and_then(|s| s.tabs.first())
-            .and_then(|t| first_pane(&t.layout))
-            .map(|p| crate::terminal::strip_agent_mark(&p.title).to_string())
+            .and_then(|t| t.name.clone().or_else(|| first_pane(&t.layout).map(|p| p.title.clone())))
+            .map(|title| crate::terminal::strip_agent_mark(&title).to_string())
             .unwrap_or_else(|| crate::ui::tilde(&ws.cwd))
     }
 
@@ -3043,10 +3055,28 @@ impl Workbench {
         card_title(self.workspace_title(ws, cx))
     }
 
+    /// The tab holding the pane with this id, as (workspace, tab).
+    fn tab_of_pane_id(&self, pane_id: u64, cx: &gpui::App) -> Option<(usize, usize)> {
+        self.workspaces.iter().enumerate().find_map(|(w, ws)| {
+            ws.tabs.iter().position(|tab| tab.root.leaves().iter().any(|p| p.read(cx).pane_id == pane_id)).map(|t| (w, t))
+        })
+    }
+
+    /// Names tab `index` of the workspace in front. An automation's tab is named by its plugin.
+    pub(super) fn rename_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(index)) else { return };
+        if tab.instance.is_some() {
+            return;
+        }
+        let pane = tab.active.read(cx).pane_id;
+        self.start_rename(RenameTarget::Tab(pane), window, cx);
+    }
+
     fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
         let current = match target {
             RenameTarget::Workspace(id) => self.workspaces.iter().find(|w| w.id == id).map(|w| self.workspace_title(w, cx)),
             RenameTarget::Group(id) => self.groups.iter().find(|g| g.id == id).map(|g| g.name.clone()),
+            RenameTarget::Tab(pane) => self.tab_of_pane_id(pane, cx).map(|(w, t)| self.workspaces[w].tabs[t].title(cx)),
         }
         .unwrap_or_default();
         let input = cx.new(|cx| TextInput::new(current, "", window, cx));
@@ -3062,6 +3092,7 @@ impl Workbench {
         });
         window.focus(&input.focus_handle(cx), cx);
         self.workspace_menu = None;
+        self.tab_menu = None;
         self.rename = Some(Rename { target, input, _subscription: subscription });
         cx.notify();
     }
@@ -3073,6 +3104,12 @@ impl Workbench {
         let title = match rename.target {
             RenameTarget::Workspace(_) => t(cx, "rename.workspace"),
             RenameTarget::Group(_) => t(cx, "rename.group"),
+            RenameTarget::Tab(_) => t(cx, "rename.tab"),
+        };
+        // A tab with no name of its own goes by what runs in it.
+        let hint = match rename.target {
+            RenameTarget::Tab(_) => t(cx, "rename.hint_empty"),
+            RenameTarget::Workspace(_) | RenameTarget::Group(_) => t(cx, "rename.hint"),
         };
         Some(
             div()
@@ -3114,7 +3151,7 @@ impl Workbench {
                                 .text_color(hex(Chrome::BRIGHT))
                                 .child(rename.input.clone()),
                         )
-                        .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "rename.hint")))
+                        .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(hint))
                         .child(
                             div()
                                 .flex()
@@ -3175,6 +3212,14 @@ impl Workbench {
                         }
                     }
                 }
+                RenameTarget::Tab(pane) => {
+                    if let Some((w, t)) = self.tab_of_pane_id(pane, cx) {
+                        // Saved as it was offered: the tab keeps following its pane, not that title for good.
+                        let tab = &self.workspaces[w].tabs[t];
+                        let offered = tab.name.is_none() && value == tab.active.read(cx).display_title();
+                        self.workspaces[w].tabs[t].name = (!value.is_empty() && !offered).then_some(value);
+                    }
+                }
             }
             self.persist(cx);
         }
@@ -3226,6 +3271,7 @@ impl Workbench {
         });
         TabSnapshot {
             instance: tab.instance.clone(),
+            name: tab.name.clone(),
             layout: NodeSnapshot::from_tree(&layout),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
@@ -3438,7 +3484,7 @@ impl Workbench {
             if tab.chat {
                 self.register_chat(&leaves[0], tab.chat_roles.unwrap_or_default(), cx);
             }
-            tabs.push(Tab { root, active, instance: tab.instance.clone() });
+            tabs.push(Tab { root, active, instance: tab.instance.clone(), name: tab.name.clone() });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -3450,7 +3496,7 @@ impl Workbench {
         if ws.tabs.is_empty() && ws.parked.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, name: None });
         }
         self.split_shared_instances(index);
     }
@@ -4980,6 +5026,8 @@ impl Workbench {
                     self.reorder_tab(ws, from, to, cx);
                 }
             }
+            // `tab-rename <index>`: the dialog that names tab <index>, as its menu opens it.
+            "tab-rename" => self.rename_tab(argument.trim().parse().unwrap_or(0), window, cx),
             "tab-menu" => self.open_tab_menu(argument.parse().unwrap_or(0), gpui::point(gpui::px(420.), gpui::px(60.)), cx),
             // `subagents <session id>`: the active pane follows that Claude session and opens its
             // subagents panel, without starting an agent (to look at a finished session's runs).
@@ -5591,7 +5639,14 @@ impl Workbench {
             "layout" => {
                 for ws in &self.workspaces {
                     let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
-                    eprintln!("layout: ws={} tabs={panes:?} parked={} active_tab={}", ws.id, ws.parked.len(), ws.active_tab);
+                    let titles: Vec<String> = ws.tabs.iter().map(|t| t.title(cx)).collect();
+                    eprintln!(
+                        "layout: ws={} tabs={panes:?} parked={} active_tab={} titles={titles:?} card={:?}",
+                        ws.id,
+                        ws.parked.len(),
+                        ws.active_tab,
+                        self.workspace_label(ws, cx)
+                    );
                 }
                 eprintln!("layout: confirm={}", self.close_confirm.is_some());
             }

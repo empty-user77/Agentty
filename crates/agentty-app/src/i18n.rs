@@ -360,6 +360,8 @@ strings! {
     "save" => ["Save", "저장", "保存", "保存", "Speichern"],
     "rename.workspace" => ["Rename workspace", "작업공간 이름 변경", "ワークスペース名を変更", "重命名工作区", "Arbeitsbereich umbenennen"],
     "rename.group" => ["Rename group", "그룹 이름 변경", "グループ名を変更", "重命名分组", "Gruppe umbenennen"],
+    "rename.tab" => ["Rename tab", "탭 이름 변경", "タブ名を変更", "重命名标签页", "Tab umbenennen"],
+    "rename.hint_empty" => ["Enter to save, Esc to cancel. Leave it empty to go back to the automatic name.", "Enter로 저장, Esc로 취소. 비워 두면 자동 이름으로 돌아갑니다.", "Enter で保存、Esc でキャンセル。空にすると自動の名前に戻ります。", "回车保存，Esc 取消。留空则恢复自动名称。", "Enter zum Speichern, Esc zum Abbrechen. Leer lassen, um zum automatischen Namen zurückzukehren."],
     "rename.hint" => ["Enter to save, Esc to cancel. Emoji and punctuation are fine.", "Enter로 저장, Esc로 취소. 이모지와 특수문자도 됩니다.", "Enter で保存、Esc でキャンセル。絵文字や記号も使えます。", "回车保存，Esc 取消。可以使用表情和标点。", "Enter zum Speichern, Esc zum Abbrechen. Emoji und Satzzeichen sind erlaubt."],
     "color.custom" => ["Pick a colour…", "직접 고르기…", "色を選ぶ…", "自选颜色…", "Farbe wählen …"],
     "color.more" => ["More colours", "색상 더보기", "もっと表示", "更多颜色", "Mehr Farben"],

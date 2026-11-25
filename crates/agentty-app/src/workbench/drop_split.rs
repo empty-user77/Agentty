@@ -102,7 +102,11 @@ impl Workbench {
         let moved = tab.active.clone();
         let ws = &mut self.workspaces[target_workspace];
         if !ws.tabs[target_tab].root.attach(target, tab.root, side.axis(), side.before()) {
-            self.restore_tab(Tab { root: super::panes::PaneNode::Leaf(moved.clone()), active: moved, instance: None }, window, cx);
+            self.restore_tab(
+                Tab { root: super::panes::PaneNode::Leaf(moved.clone()), active: moved, instance: None, name: None },
+                window,
+                cx,
+            );
             return;
         }
         ws.active_tab = target_tab;

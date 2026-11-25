@@ -40,6 +40,9 @@ pub struct TabSnapshot {
     /// The automation the tab is, in a plugin's workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<TabInstance>,
+    /// The name the user gave the tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub layout: NodeSnapshot,
     #[serde(default)]
     pub active_pane: usize,
@@ -747,6 +750,7 @@ mod tests {
             last_activity_ms: Some(1_700_000_000_000),
             tabs: vec![TabSnapshot {
                 instance: Some(TabInstance { id: "a1".into(), title: Some("Brand B".into()) }),
+                name: Some("Launch week".into()),
                 layout: NodeSnapshot::Pane(PaneSnapshot {
                     kind: PaneKind::Shell,
                     cwd: "/tmp".into(),
@@ -771,6 +775,11 @@ mod tests {
         assert_eq!(pane.tool.as_deref(), Some("claude"));
         // A plugin workspace's tab stays the same automation across a restart.
         assert_eq!(back.tabs[0].instance.as_ref().map(|i| i.id.as_str()), Some("a1"));
+        // The name a tab was given comes back; a tab saved before tabs had one has none.
+        assert_eq!(back.tabs[0].name.as_deref(), Some("Launch week"));
+        let unnamed: TabSnapshot = serde_json::from_str(r#"{"layout":{"type":"pane","kind":"shell","cwd":"/w","title":"t"}}"#).unwrap();
+        assert_eq!(unnamed.name, None);
+        assert!(!serde_json::to_string(&unnamed).unwrap().contains("\"name\""));
     }
 
     /// A layout saved while TODO tabs ran among the others: they come out of the tabs as parked
@@ -779,6 +788,7 @@ mod tests {
     fn old_todo_tabs_come_back_set_aside() {
         let tab = |title: &str, todo: bool| TabSnapshot {
             instance: None,
+            name: None,
             layout: NodeSnapshot::Pane(PaneSnapshot {
                 kind: PaneKind::Shell,
                 cwd: "/w".into(),
