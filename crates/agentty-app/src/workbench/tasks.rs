@@ -214,7 +214,12 @@ impl Workbench {
         let (w, _) = self.locate(anchor)?;
         self.wake_for_new_tab(w, cx);
         let pane = self.spawn_pane(spec, cx);
-        self.workspaces[w].tabs.push(super::Tab { root: super::panes::PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        self.workspaces[w].tabs.push(super::Tab {
+            root: super::panes::PaneNode::Leaf(pane.clone()),
+            active: pane.clone(),
+            instance: None,
+            name: None,
+        });
         self.persist(cx);
         cx.notify();
         Some(pane)
