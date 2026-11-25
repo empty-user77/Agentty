@@ -436,6 +436,8 @@ pub struct Settings {
     /// New orchestrations (from the home page or the Orchestration page) open as a tab of the
     /// workspace in front instead of a workspace of their own.
     pub orchestration_in_tab: bool,
+    /// The shortcuts preset and the user's own keys (`shortcuts`).
+    pub shortcuts: crate::shortcuts::ShortcutSettings,
     /// Agents started by Agentty get a short guide to what Agentty offers them (and Claude Code its
     /// Agentty skills).
     pub agent_guide: bool,
@@ -1100,6 +1102,7 @@ impl Default for Settings {
             orchestration_folder: None,
             orchestration_confirm_plan: true,
             orchestration_in_tab: false,
+            shortcuts: Default::default(),
             agent_guide: true,
             always_bypass: false,
             stop_servers_on_close: true,

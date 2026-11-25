@@ -178,17 +178,37 @@ impl Workbench {
         let launch = |kind: PaneKind, target: LaunchTarget| -> Run {
             Rc::new(move |this, window, cx| this.request_launch(kind, target, window, cx))
         };
-        push(t(cx, "new.terminal"), general, Some("⌘T"), launch(PaneKind::Shell, LaunchTarget::NewTab));
+        push(t(cx, "new.terminal"), general, crate::shortcuts::hint("new_terminal", cx), launch(PaneKind::Shell, LaunchTarget::NewTab));
         if self.offers_agent("claude", cx) {
-            push(t(cx, "new.claude"), general, Some("⌥⌘C"), launch(PaneKind::Claude, LaunchTarget::NewTab));
+            push(t(cx, "new.claude"), general, crate::shortcuts::hint("new_claude", cx), launch(PaneKind::Claude, LaunchTarget::NewTab));
         }
         if self.offers_agent("codex", cx) {
-            push(t(cx, "new.codex"), general, Some("⌥⌘X"), launch(PaneKind::Codex, LaunchTarget::NewTab));
+            push(t(cx, "new.codex"), general, crate::shortcuts::hint("new_codex", cx), launch(PaneKind::Codex, LaunchTarget::NewTab));
         }
-        push(t(cx, "new.workspace"), general, Some("⌘N"), launch(PaneKind::Shell, LaunchTarget::NewWorkspace));
-        push(t(cx, "split.right"), general, Some("⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Horizontal, window, cx)));
-        push(t(cx, "split.down"), general, Some("⇧⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Vertical, window, cx)));
-        push(t(cx, "notice.jump"), general, Some("⇧⌘U"), Rc::new(|this, window, cx| this.jump_to_unread(window, cx)));
+        push(
+            t(cx, "new.workspace"),
+            general,
+            crate::shortcuts::hint("new_workspace", cx),
+            launch(PaneKind::Shell, LaunchTarget::NewWorkspace),
+        );
+        push(
+            t(cx, "split.right"),
+            general,
+            crate::shortcuts::hint("split_right", cx),
+            Rc::new(|this, window, cx| this.split(super::Axis::Horizontal, window, cx)),
+        );
+        push(
+            t(cx, "split.down"),
+            general,
+            crate::shortcuts::hint("split_down", cx),
+            Rc::new(|this, window, cx| this.split(super::Axis::Vertical, window, cx)),
+        );
+        push(
+            t(cx, "notice.jump"),
+            general,
+            crate::shortcuts::hint("jump_unread", cx),
+            Rc::new(|this, window, cx| this.jump_to_unread(window, cx)),
+        );
         if self.active_pane().is_some_and(|p| p.read(cx).advisor().is_some()) {
             for choice in crate::settings::AdvisorChoice::ALL {
                 let label = format!("{}: {}", t(cx, "advisor.palette"), t(cx, choice.label_key()));
@@ -204,21 +224,21 @@ impl Workbench {
             }),
         );
         for (page, key, shortcut) in [
-            (Page::Flow, "page.flow", "⇧⌘F"),
+            (Page::Flow, "page.flow", crate::shortcuts::hint("flow", cx).unwrap_or("")),
             (Page::Board, "page.board", ""),
-            (Page::Browsers, "page.monitoring", "⌥⌘U"),
+            (Page::Browsers, "page.monitoring", crate::shortcuts::hint("monitoring", cx).unwrap_or("")),
             (Page::Usage, "page.usage", ""),
             (Page::Processes, "page.processes", ""),
             (Page::Worktrees, "page.worktrees", ""),
             (Page::Disk, "page.disk", ""),
             (Page::Browsers, "page.browsers", ""),
             (Page::Trash, "page.trash", ""),
-            (Page::Extensions, "page.extensions", "⇧⌘X"),
+            (Page::Extensions, "page.extensions", crate::shortcuts::hint("extensions", cx).unwrap_or("")),
             (Page::Plugins, "page.plugins", ""),
             (Page::Remote, "page.remote", ""),
             (Page::Idea, "page.idea", ""),
             (Page::Database, "page.database", ""),
-            (Page::Settings, "page.settings", "⌘,"),
+            (Page::Settings, "page.settings", crate::shortcuts::hint("settings", cx).unwrap_or("")),
         ] {
             if page == Page::Remote && !crate::settings::settings(cx).remote.feature {
                 continue;
@@ -243,14 +263,19 @@ impl Workbench {
                 }),
             );
         }
-        push(t(cx, "panel.sessions"), general, Some("⇧⌘S"), Rc::new(|this, _, cx| this.show_panel(SidePanel::Sessions, cx)));
-        push(t(cx, "files.title"), general, Some("⌥⌘B"), Rc::new(|this, _, cx| this.toggle_files_panel(cx)));
+        push(
+            t(cx, "panel.sessions"),
+            general,
+            crate::shortcuts::hint("show_sessions", cx),
+            Rc::new(|this, _, cx| this.show_panel(SidePanel::Sessions, cx)),
+        );
+        push(t(cx, "files.title"), general, crate::shortcuts::hint("files", cx), Rc::new(|this, _, cx| this.toggle_files_panel(cx)));
         push(t(cx, "docker.title"), general, None, Rc::new(|this, _, cx| this.toggle_docker_panel(cx)));
         push(t(cx, "onboarding.show_again"), general, None, Rc::new(|this, _, cx| this.open_onboarding(cx)));
         push(
             t(cx, "menu.toggle_sidebar"),
             general,
-            Some("⌘B"),
+            crate::shortcuts::hint("toggle_sidebar", cx),
             Rc::new(|this, _, cx| {
                 this.sidebar_open = !this.sidebar_open;
                 cx.notify();

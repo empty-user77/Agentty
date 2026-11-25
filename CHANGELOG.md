@@ -9,6 +9,11 @@ All notable changes to this project are documented here. The format follows
 - A tab can be given a name of its own: **Rename** in its right-click menu, or a double-click on the tab. The name
   is kept with the layout, in the recently closed tabs and in TODO, and remote access shows it. An empty name goes
   back to the automatic one.
+- Keyboard shortcuts can be changed. In **Settings → Keyboard shortcuts**, click a shortcut and press the keys for it;
+  if another command has them, the dialog says which one loses them. A shortcut can also be left with no keys, and
+  each change can be undone on its own. A **VS Code** preset moves new terminal, splits, pane focus, files and Git
+  to the keys Visual Studio Code uses. The menu bar, tooltips, the command palette and the tour show the keys as
+  they are now. Text editing keys, ⌘1…⌘9 and the file editor's shortcuts stay as they are.
 
 ### Fixed
 - Linux, X11: Agentty's windows set `_NET_WM_ICON`, so the window switcher (Alt+Tab) and title bar show Agentty's icon

@@ -186,7 +186,7 @@ fn as_typed(chord: Chord, key: &str) -> (Chord, &str) {
 }
 
 /// The character Shift types on a punctuation or digit key of a US layout (`[` → `{`).
-fn us_shifted(key: &str) -> Option<&'static str> {
+pub fn us_shifted(key: &str) -> Option<&'static str> {
     Some(match key {
         "[" => "{",
         "]" => "}",

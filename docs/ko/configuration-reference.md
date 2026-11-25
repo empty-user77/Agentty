@@ -69,6 +69,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `orchestrationHelpersOff` | 새 오케스트레이션이 기본으로 빼는 다른 에이전트(`codex`, `gemini`, `agy`) |
 | `orchestrationConfirmPlan` | 오케스트레이터가 계획을 보여 주고 시작을 기다림 |
 | `orchestrationInTab` | 새 오케스트레이션을 앞에 있는 작업공간의 새 탭으로 엶 |
+| `shortcuts` | 단축키 프리셋(`agentty` 또는 `vscode`)과, `custom` 아래에 시스템·동작별로 직접 정한 키(빈 값은 단축키 없음). **설정 → 키보드 단축키**에서 정함 |
 | `agentGuide` | 여기서 시작한 에이전트에게 Agentty 명령 안내를 전달 |
 | `stopServersOnClose` | 페인을 닫으면 거기서 시작한 서버를 종료 |
 | `confirmClose` | 사용한 것을 닫기 전에 확인 |

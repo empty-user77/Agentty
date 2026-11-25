@@ -69,6 +69,7 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `orchestrationHelpersOff` | 新しいオーケストレーションが既定で外す他のエージェント（`codex`、`gemini`、`agy`） |
 | `orchestrationConfirmPlan` | オーケストレーターが計画を見せて開始を待つ |
 | `orchestrationInTab` | 新しいオーケストレーションを前面のワークスペースの新しいタブで開く |
+| `shortcuts` | ショートカットのプリセット（`agentty` または `vscode`）と、`custom` 以下にシステム・操作ごとの自分のキー（空の値はショートカットなし）。**設定 → キーボードショートカット**で設定 |
 | `agentGuide` | ここで起動したエージェントに Agentty のコマンド案内を渡す |
 | `stopServersOnClose` | ペインを閉じたら、そこで起動したサーバーを終了 |
 | `confirmClose` | 使用したものを閉じる前に確認 |

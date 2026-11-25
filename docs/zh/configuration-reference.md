@@ -69,6 +69,7 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `orchestrationHelpersOff` | 新编排默认不使用的其他智能体（`codex`、`gemini`、`agy`） |
 | `orchestrationConfirmPlan` | 编排者展示计划后等待开始 |
 | `orchestrationInTab` | 新编排在当前工作区的新标签页中打开 |
+| `shortcuts` | 快捷键预设（`agentty` 或 `vscode`），以及 `custom` 下按系统和操作保存的自定义按键（空值表示不设快捷键）。在**设置 → 键盘快捷键**中设置 |
 | `agentGuide` | 从这里启动的智能体会收到 Agentty 命令的简短说明 |
 | `stopServersOnClose` | 关闭窗格时停止其中启动的服务器 |
 | `confirmClose` | 关闭用过的东西前先确认 |

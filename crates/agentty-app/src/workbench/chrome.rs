@@ -302,14 +302,14 @@ impl Workbench {
                          cx: &mut Context<Self>| {
             // Panel titles are upper-case headings; the tooltip uses the menu names.
             let (key, shortcut) = match tooltip {
-                "panel.workspaces" => ("menu.show_workspaces", "⇧⌘E"),
-                "panel.sessions" => ("menu.show_sessions", "⇧⌘S"),
-                "page.git" => (tooltip, "⇧⌘G"),
-                "page.flow" => (tooltip, "⇧⌘F"),
-                "page.monitoring" => (tooltip, "⌥⌘U"),
-                "page.extensions" => (tooltip, "⇧⌘X"),
+                "panel.workspaces" => ("menu.show_workspaces", crate::shortcuts::hint("show_workspaces", cx).unwrap_or("")),
+                "panel.sessions" => ("menu.show_sessions", crate::shortcuts::hint("show_sessions", cx).unwrap_or("")),
+                "page.git" => (tooltip, crate::shortcuts::hint("git", cx).unwrap_or("")),
+                "page.flow" => (tooltip, crate::shortcuts::hint("flow", cx).unwrap_or("")),
+                "page.monitoring" => (tooltip, crate::shortcuts::hint("monitoring", cx).unwrap_or("")),
+                "page.extensions" => (tooltip, crate::shortcuts::hint("extensions", cx).unwrap_or("")),
                 "page.plugins" => (tooltip, ""),
-                "page.settings" => (tooltip, "⌘,"),
+                "page.settings" => (tooltip, crate::shortcuts::hint("settings", cx).unwrap_or("")),
                 _ => (tooltip, ""),
             };
             div()
@@ -538,7 +538,7 @@ impl Workbench {
                 cx.notify();
             }),
         )
-        .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.hide_sidebar"), Some("⌘B")));
+        .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.hide_sidebar"), crate::shortcuts::hint("toggle_sidebar", cx)));
         // With the unified header the sidebar button lives in the title bar, by the traffic lights.
         let collapse = (!self.unified_header(cx)).then_some(collapse);
         let bell = self.notices_in_sidebar(cx).then(|| self.render_notices_button(cx));
@@ -566,7 +566,7 @@ impl Workbench {
                         "plus",
                         cx.listener(|this, _: &ClickEvent, window, cx| this.open_new_workspace_page(window, cx)),
                     )
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "new.workspace"), Some("⌘N"))),
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "new.workspace"), crate::shortcuts::hint("new_workspace", cx))),
                 )
                 // How the list is laid out, grouped, ordered and filtered.
                 .child(self.render_workspace_options_button(cx))
@@ -758,7 +758,7 @@ impl Workbench {
     fn render_workspaces_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = div().flex().flex_col().px_2().pt_1().gap_px();
         if self.workspaces.is_empty() && self.groups.is_empty() {
-            return list.child(hint(t(cx, "hint.no_workspaces")));
+            return list.child(hint(crate::shortcuts::in_text(t(cx, "hint.no_workspaces"), cx)));
         }
         // While searching the list becomes a list of results: every match on its own, whatever
         // group, fold or link it sits in, with what matched and where.
@@ -2442,7 +2442,7 @@ impl Workbench {
                     .cursor_pointer()
                     .when(self.launcher_open, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), Some("⌘T")))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), crate::shortcuts::hint("new_terminal", cx)))
                     .child(icon("plus", IconSize::BUTTON, hex(Chrome::FOREGROUND)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
@@ -2504,7 +2504,7 @@ impl Workbench {
                         "header-split-right",
                         "columns-2",
                         false,
-                        (t(cx, "split.right"), Some("⌘D")),
+                        (t(cx, "split.right"), crate::shortcuts::hint("split_right", cx)),
                         cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
                     ),
                     "header-split-right",
@@ -2534,7 +2534,7 @@ impl Workbench {
                                 "header-browser",
                                 "globe",
                                 self.browser.is_some(),
-                                (t(cx, "tooltip.browser"), Some("⇧⌘B")),
+                                (t(cx, "tooltip.browser"), crate::shortcuts::hint("browser", cx)),
                                 cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
                             ),
                             "header-browser",
@@ -2547,7 +2547,7 @@ impl Workbench {
                                 "header-mini",
                                 "picture-in-picture-2",
                                 false,
-                                (t(cx, "mini.enter"), Some("⌃⌘M")),
+                                (t(cx, "mini.enter"), crate::shortcuts::hint("mini", cx)),
                                 cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
                             ),
                             "header-mini",
@@ -2558,7 +2558,7 @@ impl Workbench {
                             "header-split-right",
                             "columns-2",
                             false,
-                            (t(cx, "split.right"), Some("⌘D")),
+                            (t(cx, "split.right"), crate::shortcuts::hint("split_right", cx)),
                             cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
                         ),
                         "header-split-right",
@@ -2567,7 +2567,7 @@ impl Workbench {
                         "header-split-down",
                         "rows-2",
                         false,
-                        (t(cx, "split.down"), Some("⇧⌘D")),
+                        (t(cx, "split.down"), crate::shortcuts::hint("split_down", cx)),
                         cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
                     ))
                     // The files panel docks at the right edge, so its button is the last one. A tree, not a
@@ -2667,7 +2667,7 @@ impl Workbench {
                 "launch-shell".into(),
                 Some("shell"),
                 t(cx, "welcome.terminal").into(),
-                "⌘T",
+                crate::shortcuts::hint("new_terminal", cx).unwrap_or(""),
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, this.launcher_target, w, cx)),
                 cx,
             ));
@@ -2676,7 +2676,7 @@ impl Workbench {
                 "launch-claude".into(),
                 Some("claude"),
                 "Claude Code".into(),
-                "⌥⌘C",
+                crate::shortcuts::hint("new_claude", cx).unwrap_or(""),
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, this.launcher_target, w, cx)),
                 cx,
             ));
@@ -2686,7 +2686,7 @@ impl Workbench {
                 "launch-codex".into(),
                 Some("codex"),
                 "Codex".into(),
-                "⌥⌘X",
+                crate::shortcuts::hint("new_codex", cx).unwrap_or(""),
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, this.launcher_target, w, cx)),
                 cx,
             ));
@@ -2776,7 +2776,7 @@ impl Workbench {
                 "launch-workspace".into(),
                 None,
                 t(cx, "new.workspace").into(),
-                "⌘N",
+                crate::shortcuts::hint("new_workspace", cx).unwrap_or(""),
                 Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
                 cx,
             ))

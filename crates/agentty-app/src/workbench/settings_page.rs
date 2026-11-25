@@ -169,124 +169,6 @@ impl SettingsSection {
     }
 }
 
-/// Every default shortcut for the guide: (group key, [(action key, keys)]).
-pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "shortcuts.group.launch",
-        &[
-            ("new.terminal", "⌘T"),
-            ("new.claude", "⌥⌘C"),
-            ("new.codex", "⌥⌘X"),
-            ("shortcuts.new_tab_here", "⌘N"),
-            ("shortcuts.new_workspace_sidebar", "⌘N"),
-            ("new.window", "⇧⌘N"),
-            ("split.right", "⌘D"),
-            ("split.down", "⇧⌘D"),
-        ],
-    ),
-    (
-        "shortcuts.group.navigate",
-        &[
-            ("shortcuts.next_prev_pane", "⌘]  /  ⌘["),
-            ("shortcuts.next_prev_tab", "⇧⌘]  /  ⇧⌘[  ·  ⌃Tab"),
-            ("shortcuts.tab_n", "⌃1 … ⌃9"),
-            ("shortcuts.workspace_n", "⌘1 … ⌘9"),
-            ("shortcuts.next_prev_workspace", "⌥⌘↓  /  ⌥⌘↑"),
-            ("shortcuts.jump_unread", "⇧⌘U"),
-            ("tooltip.zoom", "⇧⌘↩"),
-            ("close.pane", "⌘W"),
-            ("close.tab", "⇧⌘W"),
-        ],
-    ),
-    (
-        "shortcuts.group.views",
-        &[
-            ("shortcuts.palette", "⇧⌘P"),
-            ("shortcuts.voice", "⇧⌘M"),
-            ("shortcuts.search_sessions", "⇧⌘O"),
-            ("panel.workspaces", "⇧⌘E"),
-            ("panel.sessions", "⇧⌘S"),
-            ("page.git", "⇧⌘G"),
-            ("page.flow", "⇧⌘F"),
-            ("page.monitoring", "⌥⌘U"),
-            ("page.extensions", "⇧⌘X"),
-            ("page.settings", "⌘,"),
-            ("shortcuts.toggle_sidebar", "⌘B"),
-            ("mini.enter", "⌃⌘M"),
-            ("shortcuts.browser", "⇧⌘B"),
-        ],
-    ),
-    (
-        "shortcuts.group.git",
-        &[("shortcuts.git_commit", "⌘↩"), ("shortcuts.git_push", "⌘P"), ("shortcuts.git_fetch", "⇧⌘T"), ("shortcuts.git_refresh", "⌘R")],
-    ),
-    (
-        "shortcuts.group.terminal",
-        &[
-            ("shortcuts.copy_paste", "⌘C  /  ⌘V"),
-            ("shortcuts.select_all", "⌘A"),
-            ("shortcuts.clear", "⌘K"),
-            ("shortcuts.find", "⌘F"),
-            ("shortcuts.zoom", "⌘=  /  ⌘-  /  ⌘0"),
-            ("shortcuts.open_link", "⌘ Click"),
-        ],
-    ),
-    (
-        EDITOR_SHORTCUTS,
-        &[
-            ("editor.save", "⌘S"),
-            ("editor.format", "⇧⌥F"),
-            ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"),
-            ("find.replace", "⌥⌘F"),
-            ("editor.shortcut_organize_imports", "⇧⌥O"),
-            ("editor.shortcut_comment", "⌘/"),
-            ("editor.shortcut_move_lines", "⌥↑  /  ⌥↓"),
-            ("editor.shortcut_duplicate_lines", "⇧⌥↑  /  ⇧⌥↓"),
-            ("editor.shortcut_delete_lines", "⇧⌘K"),
-            ("editor.shortcut_select_line", "⌘L"),
-            ("editor.shortcut_next_occurrence", "⌘D  /  ⇧⌘L"),
-            ("editor.shortcut_add_cursor", "⌥ Click  /  ⌥⌘↑  /  ⌥⌘↓"),
-            ("editor.shortcut_go_to_bracket", "⇧⌘\\"),
-            ("editor.shortcut_fold", "⌥⌘[  /  ⌥⌘]"),
-            ("editor.shortcut_indent_lines", "⌘]  /  ⌘["),
-            ("editor.shortcut_insert_line", "⌘↩  /  ⇧⌘↩"),
-            ("editor.shortcut_delete_to_start", "⌘⌫"),
-            ("editor.shortcut_delete_word", "⌥⌫  /  ⌥⌦"),
-            ("editor.close_file", "⌘W"),
-        ],
-    ),
-];
-
-/// The file editor's group: a text field, so its shortcuts use plain Ctrl on Windows and Linux.
-const EDITOR_SHORTCUTS: &str = "editor.shortcuts_group";
-
-fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
-    let mut list = div().flex().flex_col();
-    for (group, items) in SHORTCUTS {
-        let mut block = section(t(cx, group));
-        for (action, keys) in items.iter() {
-            block = block.child(row(
-                t(cx, action),
-                div()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .bg(hex(0x2a2a2a))
-                    .t_small()
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(
-                        if *group == EDITOR_SHORTCUTS { crate::keymap::display_in_text(keys) } else { crate::keymap::display(keys) }
-                            .into_owned(),
-                    ),
-            ));
-        }
-        list = list.child(block);
-    }
-    list
-}
-
 /// Installed font families for the full list: sorted, deduplicated, without hidden system faces.
 /// "D2Coding is recommended for Korean", with a way to get it — for someone reading Agentty in
 /// Korean who does not have it installed, and nobody else: someone who has it and picked another
@@ -1563,7 +1445,11 @@ impl Workbench {
             .flex_col()
             .child(
                 section(t(cx, "settings.group.agent_view"))
-                    .child(row_with_hint(t(cx, "settings.chat_view"), t(cx, "settings.chat_view_hint"), div()))
+                    .child(row_with_hint(
+                        t(cx, "settings.chat_view"),
+                        &crate::shortcuts::in_text(t(cx, "settings.chat_view_hint"), cx),
+                        div(),
+                    ))
                     .child(modes),
             )
             .child(self.render_orchestration_settings(&prefs, cx))
@@ -2086,7 +1972,7 @@ impl Workbench {
                 )
                 .into_any_element(),
             SettingsSection::Aliases => aliases.into_any_element(),
-            SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
+            SettingsSection::Shortcuts => self.render_shortcut_settings(window, cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
             SettingsSection::Windows => self.render_windows_settings(cx).into_any_element(),
             SettingsSection::Sync => self.render_sync_settings(window, cx).into_any_element(),

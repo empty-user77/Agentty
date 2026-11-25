@@ -1,9 +1,26 @@
 ---
 title: Keyboard shortcuts
-description: Every default shortcut, and how they translate to Windows and Linux.
+description: Every default shortcut, how to change one, and how they translate to Windows and Linux.
 ---
 
 The full list is also in **Settings → Keyboard shortcuts**, shown in your platform's notation.
+
+## Changing shortcuts
+
+In **Settings → Keyboard shortcuts**, click a shortcut and press the keys you want for it. If another command already has those keys, the dialog names it: saving leaves that command without them. **No shortcut** frees a key without giving it to anything, and **Reset to default** (or the arrow beside a changed shortcut) brings back the preset's.
+
+**Preset** picks the shortcuts to start from: **Agentty** (the tables below), or **VS Code**, which moves these to the keys Visual Studio Code uses. Your own changes stay on top of either. **Reset all to default** goes back to the Agentty preset and forgets every change, after asking.
+
+| VS Code preset | macOS |
+|---|---|
+| New terminal | ⌃⇧` (and ⌘T) |
+| Split right / down | ⌘\ / ⌥⌘\ |
+| Next / previous pane | ⌥⌘→ / ⌥⌘← |
+| Files | ⇧⌘E |
+| Workspaces | ⌥⌘B |
+| Git | ⌃⇧G |
+
+Copy and paste, the rest of text editing, ⌘1…⌘9, ⌃1…⌃9, font size, find and the file editor's shortcuts stay as they are, and their keys cannot be given to something else. Neither can Ctrl with a letter, which belongs to the shell. Changes are kept per system (`shortcuts` in `settings.json`), since the keys pressed on a Mac are not the ones pressed on Windows or Linux.
 
 ## Windows and Linux
 

@@ -69,6 +69,7 @@ Secrets are never in these files. They live in the operating system's credential
 | `orchestrationHelpersOff` | Other agents installed (`codex`, `gemini`, `agy`) a new orchestration leaves out |
 | `orchestrationConfirmPlan` | The orchestrator shows its plan and waits for Start |
 | `orchestrationInTab` | New orchestrations open as a tab of the workspace in front |
+| `shortcuts` | The shortcuts preset (`agentty` or `vscode`) and, under `custom`, your own keys per system and command (an empty value: no shortcut). Set from **Settings → Keyboard shortcuts** |
 | `agentGuide` | Agents started here get a short guide to Agentty's commands |
 | `stopServersOnClose` | Closing a pane stops the servers started in it |
 | `confirmClose` | Ask before closing something that was used |

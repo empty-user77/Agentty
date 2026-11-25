@@ -345,7 +345,7 @@ impl Workbench {
                             )
                             .tooltip(crate::ui::Tooltip::text(
                                 crate::i18n::t(cx, if zoomed { "tooltip.unzoom" } else { "tooltip.zoom" }),
-                                Some("⇧⌘↩"),
+                                crate::shortcuts::hint("zoom_pane", cx),
                             ))
                             .when(zoomed, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.35))),
                         )
@@ -357,7 +357,7 @@ impl Workbench {
                                     this.request_close_pane(&close, window, cx);
                                 }),
                             )
-                            .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "close.pane"), Some("⌘W"))),
+                            .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "close.pane"), crate::shortcuts::hint("close_pane", cx))),
                         ),
                 )
         });
