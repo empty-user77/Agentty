@@ -919,15 +919,22 @@ impl Workbench {
         list
     }
 
-    /// The workspace list while searching: one card per workspace that matches, in list order,
-    /// each saying what matched — its name, its folder, or something said in one of its
+    /// The workspace list while searching: one card per workspace that matches, the ones named
+    /// like the query first, each saying what matched — its name, its folder, or something said in one of its
     /// conversations (with the sentence around it).
     fn render_workspace_results(&self, query: &str, mut list: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
         use super::content_search::{marked, match_block, match_line, role_label, snippet, tag};
         // Ungrouped first, then each group in its order: the order the plain list shows them in.
         let group_rank = |ws: &Workspace| ws.group.and_then(|gid| self.groups.iter().position(|g| g.id == gid)).map_or(0, |p| p + 1);
         let mut order: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspace_matches(*i, cx)).collect();
-        order.sort_by_key(|i| group_rank(&self.workspaces[*i]));
+        // A workspace whose name or folder name is what was typed comes first, then one whose name
+        // contains it; one found only by what was said in it comes last. Within each, list order.
+        order.sort_by_cached_key(|i| {
+            let ws = &self.workspaces[*i];
+            let (label, title) = (self.workspace_label(ws, cx), self.workspace_title(ws, cx));
+            let rank = super::content_search::workspace_rank(label.as_ref(), title.as_ref(), &self.workspace_folder(ws, cx), query);
+            (rank, group_rank(ws))
+        });
         let running = self.workspace_search_running(cx);
         let summary = if order.is_empty() && !running {
             t(cx, "workspaces.no_matches").to_string()

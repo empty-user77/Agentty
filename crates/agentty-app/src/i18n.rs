@@ -2962,6 +2962,7 @@ strings! {
     "plugins.installing" => ["Installing…", "설치 중…", "インストール中…", "正在安装…", "Wird installiert …"],
     "plugins.install_continue" => ["Install and Continue", "설치 후 계속", "インストールして続行", "安装并继续", "Installieren und fortfahren"],
     "plugins.installed_ok" => ["{name} is installed", "{name} 설치 완료", "{name} をインストールしました", "已安装 {name}", "{name} ist installiert"],
+    "plugins.menu_uninstall" => ["Uninstall this plugin", "이 플러그인 제거", "このプラグインを削除", "卸载此插件", "Dieses Plugin deinstallieren"],
     "plugins.uninstall" => ["Uninstall", "제거", "アンインストール", "卸载", "Deinstallieren"],
     "plugins.update_wants" => ["Update — it now wants: {perms}", "업데이트 — 추가 요구: {perms}", "アップデート — 追加で要求: {perms}", "更新 — 新增请求：{perms}", "Aktualisieren – es verlangt jetzt: {perms}"],
     "plugins.update_confirm" => ["Click again to update and allow it", "한 번 더 누르면 업데이트하고 허용", "もう一度押すと更新して許可", "再次点击以更新并允许", "Erneut klicken, um zu aktualisieren und zu erlauben"],

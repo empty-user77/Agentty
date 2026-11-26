@@ -820,6 +820,8 @@ pub struct Workbench {
     plugin_group_menu: bool,
     /// The right-click menu of a plugin's activity-bar item: the plugin, and where it was clicked.
     plugin_pin_menu: Option<(String, gpui::Point<gpui::Pixels>)>,
+    /// "Uninstall" in that menu was clicked once: the next click on it removes the plugin.
+    plugin_menu_confirm: bool,
     /// The panel's plugin shows a popover beside the panel: the page moves right to leave it room
     /// while it is open.
     plugin_popover_open: bool,
@@ -1185,6 +1187,7 @@ impl Workbench {
             plugin_mode_menu: false,
             plugin_group_menu: false,
             plugin_pin_menu: None,
+            plugin_menu_confirm: false,
             plugin_popover_open: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
@@ -5232,6 +5235,7 @@ impl Workbench {
             // `plugin-pin-menu <id>`: the right-click menu of a plugin's activity-bar item.
             "plugin-pin-menu" => {
                 self.plugin_pin_menu = Some((argument.to_string(), gpui::point(px(60.), px(560.))));
+                self.plugin_menu_confirm = false;
                 cx.notify();
             }
             "plugin-command" => {

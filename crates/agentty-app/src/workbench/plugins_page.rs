@@ -437,7 +437,7 @@ impl Workbench {
         self.pick_agent(None, false, cx).map_or("Claude Code", crate::agents::AgentPick::name).to_string()
     }
 
-    fn set_plugin_enabled(&mut self, id: &str, enabled: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_plugin_enabled(&mut self, id: &str, enabled: bool, cx: &mut Context<Self>) {
         match store::set_enabled(id, enabled) {
             Ok(()) => {
                 if !enabled {
@@ -461,7 +461,7 @@ impl Workbench {
         entry.permissions.iter().filter(|wanted| !had.contains(wanted)).cloned().collect()
     }
 
-    fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(super) fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.plugins_page.confirm_uninstall = None;
         if self.plugins_page.uninstalling.is_some() {
             return;
@@ -516,10 +516,19 @@ impl Workbench {
                 if self.plugins_page.selected.as_deref() == Some(id) {
                     self.plugins_page.selected = None;
                 }
-                self.plugins_message(tf(cx, "plugins.uninstalled", &[("name", &name)]), false, cx);
+                self.plugins_report(tf(cx, "plugins.uninstalled", &[("name", &name)]), false, cx);
             }
-            Err(err) => self.plugins_message(format!("{err:#}"), true, cx),
+            Err(err) => self.plugins_report(format!("{err:#}"), true, cx),
         }
+    }
+
+    /// A result on the plugins page's message line, and in a toast when that page is not the one
+    /// on screen (the plugin was uninstalled from its activity-bar menu).
+    fn plugins_report(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
+        if self.page != Some(Page::Plugins) {
+            self.show_toast(text.clone(), cx);
+        }
+        self.plugins_message(text, error, cx);
     }
 
     fn select_plugin(&mut self, id: String, cx: &mut Context<Self>) {

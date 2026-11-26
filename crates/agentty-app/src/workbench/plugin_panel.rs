@@ -907,6 +907,7 @@ impl Workbench {
                 gpui::MouseButton::Right,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                     this.plugin_pin_menu = Some((menu_id.clone(), event.position));
+                    this.plugin_menu_confirm = false;
                     cx.notify();
                 }),
             )
@@ -931,12 +932,38 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The right-click menu of a plugin's activity-bar item: pin it there, or let it go back into
-    /// the group.
+    /// The right-click menu of a plugin's activity-bar item: pin it there or let it go back into
+    /// the group, turn the plugin off, or uninstall it (which asks for a second click, as the
+    /// plugins page does: its data goes with it).
     fn render_plugin_pin_menu(&self, id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, position) = self.plugin_pin_menu.as_ref().filter(|(menu, _)| menu == id)?;
         let pinned = settings(cx).pinned_plugins.iter().any(|p| p == id);
         let target = id.to_string();
+        let confirming = self.plugin_menu_confirm;
+        let disable = crate::ui::menu_item(SharedString::from(format!("activity-plugin-disable-{id}")), t(cx, "plugins.disable"), {
+            let id = id.to_string();
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.plugin_pin_menu = None;
+                this.set_plugin_enabled(&id, false, cx);
+            })
+        });
+        let uninstall = crate::ui::menu_item(
+            SharedString::from(format!("activity-plugin-uninstall-{id}")),
+            t(cx, if confirming { "plugins.confirm_uninstall" } else { "plugins.menu_uninstall" }),
+            {
+                let id = id.to_string();
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if this.plugin_menu_confirm {
+                        this.plugin_pin_menu = None;
+                        this.uninstall_plugin(&id, cx);
+                    } else {
+                        this.plugin_menu_confirm = true;
+                    }
+                    cx.notify();
+                })
+            },
+        )
+        .when(confirming, |item| item.text_color(hex(Chrome::ERROR)));
         let menu = crate::ui::popover()
             .min_w(px(200.))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -951,7 +978,10 @@ impl Workbench {
                     toggle_plugin_pin(&target, cx);
                     cx.notify();
                 }),
-            ));
+            ))
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(disable)
+            .child(uninstall);
         let anchored = gpui::anchored().position(*position).snap_to_window_with_margin(px(8.)).child(menu);
         Some(gpui::deferred(anchored).with_priority(3).into_any_element())
     }
