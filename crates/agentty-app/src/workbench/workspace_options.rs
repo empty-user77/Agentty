@@ -5,7 +5,7 @@
 use super::settings_page::toggle;
 use super::Workbench;
 use crate::i18n::t;
-use crate::settings::{Settings, WorkspaceGrouping, WorkspaceSort};
+use crate::settings::{CardLayout, Settings, WorkspaceGrouping, WorkspaceSort};
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
@@ -196,6 +196,7 @@ impl Workbench {
     fn render_workspace_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = self.prefs(cx).clone();
         let options = prefs.workspace_list.clone();
+        let layout = prefs.card_layout();
         popover()
             .id("workspace-options")
             .w(px(320.))
@@ -219,12 +220,16 @@ impl Workbench {
             .child(section_title(t(cx, "workspace_options.layout")))
             .child(segmented(
                 "wo-layout",
-                prefs.compact_workspaces,
-                &[(false, "workspace_options.layout_cards"), (true, "workspace_options.layout_compact")],
-                |s, v| s.compact_workspaces = v,
+                layout,
+                &[
+                    (CardLayout::Cards, "workspace_options.layout_cards"),
+                    (CardLayout::Compact, "workspace_options.layout_compact"),
+                    (CardLayout::Mini, "workspace_options.layout_mini"),
+                ],
+                Settings::set_card_layout,
                 cx,
             ))
-            .when(!prefs.compact_workspaces, |d| {
+            .when(layout == CardLayout::Cards, |d| {
                 d.child(switch_row(
                     "bot",
                     t(cx, "workspace_options.card_subagents"),

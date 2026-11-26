@@ -59,6 +59,8 @@ const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
 const WELCOME_RECENT: usize = 6;
 /// How far a workspace listed under a parent is moved in, per level.
 const NEST_INDENT: f32 = 14.;
+/// The sidebar's header drops its title under this width, where it no longer fits whole.
+const TITLE_FROM_WIDTH: f32 = 216.;
 /// A sleeping workspace's card: faded enough to read as not running, still legible.
 const SLEEPING_OPACITY: f32 = 0.45;
 
@@ -626,7 +628,9 @@ impl Workbench {
                     .gap_2()
                     .t_small()
                     .text_color(hex(Chrome::MUTED))
-                    .child(div().flex_1().min_w_0().truncate().child(title))
+                    // Too narrow for the title beside its buttons: a title cut to its first two
+                    // letters names nothing, and the lit icon in the activity bar already does.
+                    .when(width >= TITLE_FROM_WIDTH, |d| d.child(div().flex_1().min_w_0().truncate().child(title)))
                     .child(div().flex_shrink_0().child(actions)),
             )
             .children(workspace_search)
@@ -756,7 +760,11 @@ impl Workbench {
     }
 
     fn render_workspaces_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut list = div().flex().flex_col().px_2().pt_1().gap_px();
+        // A narrow sidebar gives its margins to the cards (see `render_workspace_row`).
+        let mini = self.prefs(cx).sidebar_mini();
+        let mut list = div().flex().flex_col().pt_1().gap_px().map(|d| if mini { d.px_1() } else { d.px_2() });
+        // How far a group's cards sit in from its header.
+        let group_indent = if mini { 4. } else { 12. };
         if self.workspaces.is_empty() && self.groups.is_empty() {
             return list.child(hint(crate::shortcuts::in_text(t(cx, "hint.no_workspaces"), cx)));
         }
@@ -830,7 +838,9 @@ impl Workbench {
                 }
                 for (index, depth) in self.nested_order(&members) {
                     list = list.child(
-                        div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)),
+                        div()
+                            .pl(px(group_indent + NEST_INDENT * depth as f32))
+                            .child(self.render_workspace_entry(index, &linked, window, cx)),
                     );
                 }
             }
@@ -887,7 +897,9 @@ impl Workbench {
                 list = list.child(block);
                 continue;
             }
-            if members.is_empty() {
+            // The mini layout leaves the row out: an empty group is one line, and its header's
+            // plus (in place of the count, under the pointer) adds the workspace.
+            if members.is_empty() && !mini {
                 let gid = group.id;
                 block = block.child(
                     div()
@@ -911,8 +923,9 @@ impl Workbench {
                 );
             }
             for (index, depth) in self.nested_order(&members) {
-                block = block
-                    .child(div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)));
+                block = block.child(
+                    div().pl(px(group_indent + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)),
+                );
             }
             list = list.child(block);
         }
@@ -1079,6 +1092,7 @@ impl Workbench {
     ) -> gpui::Stateful<gpui::Div> {
         let id = SharedString::from(format!("group-header-{}", group.unwrap_or(0)));
         let drag_title: SharedString = name.clone().into();
+        let mini = self.prefs(cx).sidebar_mini();
         div()
             .id(id)
             .relative()
@@ -1133,7 +1147,9 @@ impl Workbench {
             .child(if collapsed { "▸" } else { "▾" })
             // Shown as it was typed: lower case, emoji and punctuation are all a valid name.
             .child(div().flex_1().truncate().t_body().font_weight(crate::theme::EMPHASIS).child(name.clone()))
-            .when_some(group, |d, gid| {
+            // The mini layout keeps the row for the name: its buttons would take half of it even
+            // while hidden. Renaming and deleting stay a double click and a right click away.
+            .when_some(group.filter(|_| !mini), |d, gid| {
                 d.child(
                     div()
                         .flex()
@@ -1176,7 +1192,35 @@ impl Workbench {
             })
             // Last, so the count sits at the right edge of every header: a group's buttons take
             // their space even while hidden, and would otherwise push the number off the edge.
-            .child(div().child(count.to_string()))
+            .child(match group.filter(|_| mini) {
+                None => div().child(count.to_string()),
+                // Under the pointer the count gives its place to the plus, as a card's time does
+                // to its menu button.
+                Some(gid) => div()
+                    .relative()
+                    .flex_shrink_0()
+                    .min_w(px(GROUP_ICON_BUTTON))
+                    .h(px(GROUP_ICON_BUTTON))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .child(div().group_hover("group-header", |s| s.invisible()).child(count.to_string()))
+                    .child(
+                        div().absolute().top_0().right_0().invisible().group_hover("group-header", |s| s.visible()).child(
+                            icon_only_sized(
+                                SharedString::from(format!("group-add-{gid}")),
+                                "plus",
+                                GROUP_ICON_BUTTON,
+                                GROUP_ICON,
+                                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_new_workspace_page_in(Some(gid), window, cx);
+                                }),
+                            )
+                            .tooltip(crate::ui::Tooltip::text(t(cx, "group.add_workspace"), None)),
+                        ),
+                    ),
+            })
             .children(group.filter(|gid| self.group_menu == Some(*gid)).map(|gid| {
                 div().absolute().top(px(26.)).left(px(8.)).child(gpui::deferred(self.render_group_menu(gid, cx)).with_priority(3))
             }))
@@ -1355,7 +1399,131 @@ impl Workbench {
         }
         let marked = chat || orchestration.is_some();
         let indent = px(if show_logo || marked { 24. } else { 2. });
-        let compact = self.prefs(cx).compact_workspaces;
+        let layout = self.prefs(cx).card_layout();
+        // Both short layouts drop the detailed card's lines; the mini one then adds one of its own.
+        let compact = layout != crate::settings::CardLayout::Cards;
+        let mini = layout == crate::settings::CardLayout::Mini;
+
+        // Last activity, like the session history; the menu button takes its place on hover. On
+        // the name's row, except in the mini layout: there the name gets its row to itself.
+        let trailing = div()
+            .relative()
+            .flex_shrink_0()
+            .map(|d| if mini { d.min_w(px(20.)).h(px(14.)) } else { d.min_w(px(26.)).h(px(20.)) })
+            .flex()
+            .items_center()
+            .justify_end()
+            .children(last_activity.map(|at| {
+                div().group_hover("workspace-row", |s| s.invisible()).t_caption().text_color(sub_color).child(relative_time(now_ms(), at))
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(if mini { -6. } else { -3. }))
+                    .right(px(-4.))
+                    .invisible()
+                    .group_hover("workspace-row", |s| s.visible())
+                    .child(crate::ui::icon_only_in(
+                        ("workspace-menu", id as usize),
+                        "ellipsis",
+                        ink,
+                        cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if this.just_dismissed("workspace-menu") {
+                                return;
+                            }
+                            if this.workspace_menu == Some(id) {
+                                this.workspace_menu = None;
+                            } else {
+                                this.open_workspace_menu(id, f32::from(event.position().y), cx);
+                            }
+                            cx.notify();
+                        }),
+                    )),
+            );
+        let mut trailing = Some(trailing);
+
+        // The mini card's second line, made for a sidebar too narrow for a line per fact: the
+        // agents' state in a word (and how many subagents are running), then the branch — its
+        // glyph in the pull request's colour when it has one — or the folder, then when it was
+        // last busy. Everything left out is in the card's tooltip, whole.
+        let mut mini_tip = None;
+        let mini_line = mini.then(|| {
+            let state = self.mini_state(ws, cx);
+            let strong = if ws_colored { hex_alpha(ink, 0.9) } else { hex(Chrome::FOREGROUND) };
+            // Under the logo, so what follows starts where the name does.
+            let lead = |mark: AnyElement| {
+                div().flex_shrink_0().mr(px(2.)).when(show_logo || marked, |d| d.w(px(16.))).flex().justify_center().child(mark)
+            };
+            let folder = match (&ws.plugin, chat) {
+                (None, false) => cwd.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().to_string()),
+                _ => path.clone(),
+            };
+            let pr_color = pull_request.as_ref().map(|pr| {
+                let color = if pr.is_merged() {
+                    Chrome::PURPLE
+                } else if pr.is_open() {
+                    Chrome::GREEN
+                } else {
+                    Chrome::MUTED
+                };
+                if ws_colored {
+                    hex_alpha(ink, 0.9)
+                } else {
+                    hex(color)
+                }
+            });
+            let (glyph, glyph_color, place) = match &branch {
+                Some(name) if pr_color.is_some() => ("git-pull-request", pr_color.unwrap_or(sub_color), name.clone()),
+                Some(name) => ("git-branch", sub_color, name.clone()),
+                None => ("folder", sub_color, folder),
+            };
+            let mut tip = vec![title.clone(), if counts.is_empty() { path.clone() } else { format!("{path} · {counts}") }];
+            if let Some(name) = &branch {
+                tip.push(match &pull_request {
+                    Some(pr) => format!("{name} · #{}", pr.number),
+                    None => name.clone(),
+                });
+            }
+            let mut line = div().pt_px().flex().items_center().gap_1p5().min_w_0().t_caption().text_color(sub_color);
+            match state {
+                Some(state) => {
+                    tip.push(state.summary);
+                    let dot = if ws_colored { hex_alpha(ink, 0.95) } else { hex(state.color) };
+                    line = line
+                        .child(lead(div().size(px(6.)).rounded_full().bg(dot).into_any_element()))
+                        .child(div().flex_shrink_0().max_w(px(76.)).truncate().text_color(strong).child(state.label))
+                        .when(state.subagents > 0, |d| {
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_0p5()
+                                    .child(icon("bot", 10., sub_color))
+                                    .child(state.subagents.to_string()),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_0p5()
+                                .child(icon(glyph, 10., glyph_color))
+                                .child(div().min_w_0().truncate().child(place)),
+                        );
+                }
+                None => {
+                    line = line
+                        .child(lead(icon(glyph, 10., glyph_color).into_any_element()))
+                        .child(div().flex_1().min_w_0().truncate().child(place));
+                }
+            }
+            mini_tip = Some(tip.join("\n"));
+            line.children(trailing.take())
+        });
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
         // waiting for the user. A card that already carries a colour would only clash with it, so
@@ -1383,9 +1551,12 @@ impl Workbench {
             .group("workspace-row")
             .relative()
             .when(asleep, |d| d.opacity(SLEEPING_OPACITY))
-            .pl(px(10.))
-            .pr_2p5()
-            .map(|d| if compact { d.py_0p5() } else { d.py_1p5() })
+            .map(|d| match layout {
+                crate::settings::CardLayout::Cards => d.pl(px(10.)).pr_2p5().py_1p5(),
+                crate::settings::CardLayout::Compact => d.pl(px(10.)).pr_2p5().py_0p5(),
+                crate::settings::CardLayout::Mini => d.pl(px(8.)).pr_1p5().py_1(),
+            })
+            .when_some(mini_tip, |d, tip| d.tooltip(crate::ui::Tooltip::text(tip, None)))
             .rounded_md()
             .cursor_pointer()
             .border_1()
@@ -1503,57 +1674,16 @@ impl Workbench {
                     // The list view drops the branch/path line below the title to fit more
                     // workspaces on screen; the branch is still worth a glance without opening
                     // the card, so a short form of it rides along the title row instead.
-                    .when(compact, |d| {
+                    .when(compact && !mini, |d| {
                         d.children(
                             branch
                                 .clone()
                                 .map(|name| div().flex_shrink_0().max_w(px(96.)).truncate().t_caption().text_color(sub_color).child(name)),
                         )
                     })
-                    // Last activity, like the session history; the menu button takes its place on hover.
-                    .child(
-                        div()
-                            .relative()
-                            .flex_shrink_0()
-                            .min_w(px(26.))
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .children(last_activity.map(|at| {
-                                div()
-                                    .group_hover("workspace-row", |s| s.invisible())
-                                    .t_caption()
-                                    .text_color(sub_color)
-                                    .child(relative_time(now_ms(), at))
-                            }))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(-3.))
-                                    .right(px(-4.))
-                                    .invisible()
-                                    .group_hover("workspace-row", |s| s.visible())
-                                    .child(crate::ui::icon_only_in(
-                                        ("workspace-menu", id as usize),
-                                        "ellipsis",
-                                        ink,
-                                        cx.listener(move |this, event: &ClickEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            if this.just_dismissed("workspace-menu") {
-                                                return;
-                                            }
-                                            if this.workspace_menu == Some(id) {
-                                                this.workspace_menu = None;
-                                            } else {
-                                                this.open_workspace_menu(id, f32::from(event.position().y), cx);
-                                            }
-                                            cx.notify();
-                                        }),
-                                    )),
-                            ),
-                    ),
+                    .children(trailing.take()),
             )
+            .children(mini_line)
             // A line each: a branch name and a path never fit side by side in a sidebar, and both
             // matter too much to be cut short so they can share one.
             .when(!compact, |d| {
@@ -1636,7 +1766,18 @@ impl Workbench {
                         .absolute()
                         .map(|d| if upwards { d.bottom(px(28.)) } else { d.top(px(28.)) })
                         .right(px(4.))
-                        .child(gpui::deferred(self.render_workspace_menu(id, cx)).with_priority(3)),
+                        // Its right edge on the card's, as far as the window lets it: beside a
+                        // narrow sidebar the menu is wider than what lies left of that edge, and
+                        // it moves right to stay whole instead of running off the window.
+                        .child(
+                            gpui::deferred(
+                                gpui::anchored()
+                                    .anchor(if upwards { gpui::Anchor::BottomRight } else { gpui::Anchor::TopRight })
+                                    .snap_to_window_with_margin(px(8.))
+                                    .child(self.render_workspace_menu(id, cx)),
+                            )
+                            .with_priority(3),
+                        ),
                 )
             })
     }

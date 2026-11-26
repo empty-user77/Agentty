@@ -283,6 +283,9 @@ pub struct Settings {
     pub option_as_meta: bool,
     pub scrollback: usize,
     pub sidebar_width: f32,
+    /// The sidebar's width before the mini layout was picked from the list's options: where it
+    /// goes back to when another layout is picked there.
+    pub sidebar_width_wide: f32,
     /// Width of the files panel docked at the right edge.
     pub files_panel_width: f32,
     /// Width of the plugin panel docked right of the terminals.
@@ -1042,6 +1045,7 @@ impl Default for Settings {
             option_as_meta: true,
             scrollback: 10_000,
             sidebar_width: 300.0,
+            sidebar_width_wide: 300.0,
             files_panel_width: 300.0,
             plugin_panel_width: crate::workbench::side_panels::DEFAULT_PLUGIN_WIDTH,
             plugin_panel_modes: std::collections::BTreeMap::new(),
@@ -1302,6 +1306,63 @@ pub struct SettingsStore {
     windows: std::collections::HashMap<usize, WindowLayer>,
 }
 
+/// The narrowest the sidebar is dragged, and the width the mini layout sets it to.
+pub const SIDEBAR_MIN_WIDTH: f32 = 180.;
+/// The widest the sidebar is dragged.
+pub const SIDEBAR_MAX_WIDTH: f32 = 640.;
+/// A sidebar narrower than this lists its workspaces in the mini layout: the cards' lines no
+/// longer fit, so each card says less and says it whole.
+pub const SIDEBAR_MINI_BELOW: f32 = 270.;
+
+/// How the workspace list draws its cards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardLayout {
+    /// Every line: branch, folder, pull request, agents, ports.
+    Cards,
+    /// The name alone, for a list of many.
+    Compact,
+    /// Two short lines made for a narrow sidebar.
+    Mini,
+}
+
+impl Settings {
+    /// Whether the sidebar is narrow enough for the mini layout.
+    pub fn sidebar_mini(&self) -> bool {
+        self.sidebar_width < SIDEBAR_MINI_BELOW
+    }
+
+    /// The layout the cards are drawn in: mini follows the sidebar's width, whichever of the other
+    /// two was picked.
+    pub fn card_layout(&self) -> CardLayout {
+        match (self.sidebar_mini(), self.compact_workspaces) {
+            (true, _) => CardLayout::Mini,
+            (false, true) => CardLayout::Compact,
+            (false, false) => CardLayout::Cards,
+        }
+    }
+
+    /// Picks a layout from the list's options. Mini is a width: picking it narrows the sidebar,
+    /// and picking another one from there widens it back to where it was. Dragging the sidebar's
+    /// edge does the same without coming through here.
+    pub fn set_card_layout(&mut self, layout: CardLayout) {
+        let mini = self.sidebar_mini();
+        match layout {
+            CardLayout::Mini => {
+                if !mini {
+                    self.sidebar_width_wide = self.sidebar_width;
+                    self.sidebar_width = SIDEBAR_MIN_WIDTH;
+                }
+            }
+            CardLayout::Cards | CardLayout::Compact => {
+                self.compact_workspaces = layout == CardLayout::Compact;
+                if mini {
+                    self.sidebar_width = self.sidebar_width_wide.clamp(SIDEBAR_MINI_BELOW, SIDEBAR_MAX_WIDTH);
+                }
+            }
+        }
+    }
+}
+
 /// Settings each window may keep for itself: how its own sidebar, list and panels look. Window 0
 /// (the main window) sets them for every window; another window that changes one keeps its value,
 /// and follows the main window in the rest. What the terminals draw (font, theme) is the same in
@@ -1315,6 +1376,7 @@ pub const WINDOW_KEYS: &[&str] = &[
     "workspaceSearchBar",
     "unifiedHeader",
     "sidebarWidth",
+    "sidebarWidthWide",
     "filesPanelWidth",
     "filesPanelTreesHeight",
     "pluginPanelWidth",
@@ -1993,6 +2055,25 @@ mod window_settings_tests {
         let mut overrides = serde_json::Map::new();
         overrides.insert("sidebarWidth".into(), serde_json::json!("wide"));
         assert_eq!(layered(&common, &overrides).sidebar_width, 280.);
+    }
+
+    #[test]
+    fn the_mini_layout_is_a_narrow_sidebar() {
+        let mut s = Settings { sidebar_width: 320., compact_workspaces: true, ..Settings::default() };
+        assert_eq!(s.card_layout(), CardLayout::Compact);
+        s.set_card_layout(CardLayout::Mini);
+        assert_eq!((s.card_layout(), s.sidebar_width), (CardLayout::Mini, SIDEBAR_MIN_WIDTH));
+        // Dragged wider by hand: back to the layout picked before, with nothing else to undo.
+        s.sidebar_width = SIDEBAR_MINI_BELOW;
+        assert_eq!(s.card_layout(), CardLayout::Compact);
+        // Picked from the options instead: the sidebar goes back to the width it had.
+        s.sidebar_width = 200.;
+        s.set_card_layout(CardLayout::Cards);
+        assert_eq!((s.card_layout(), s.sidebar_width), (CardLayout::Cards, 320.));
+        // Narrowed by hand and never wide before: still wide enough to leave mini.
+        let mut s = Settings { sidebar_width: 190., sidebar_width_wide: 190., ..Settings::default() };
+        s.set_card_layout(CardLayout::Compact);
+        assert_eq!((s.card_layout(), s.sidebar_width), (CardLayout::Compact, SIDEBAR_MINI_BELOW));
     }
 
     #[test]

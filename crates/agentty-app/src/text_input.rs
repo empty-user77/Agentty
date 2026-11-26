@@ -162,6 +162,8 @@ pub struct TextInput {
     placeholder: SharedString,
     /// i18n key of the placeholder, looked up at paint so it follows language changes.
     placeholder_key: Option<&'static str>,
+    /// i18n key of the hint a single-line field too narrow for the usual one shows instead.
+    placeholder_short_key: Option<&'static str>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -236,6 +238,7 @@ impl TextInput {
             content,
             placeholder: placeholder.into(),
             placeholder_key: None,
+            placeholder_short_key: None,
             selected_range: 0..len,
             selection_reversed: false,
             marked_range: None,
@@ -500,6 +503,13 @@ impl TextInput {
             self.placeholder_key = None;
             cx.notify();
         }
+    }
+
+    /// A shorter translated hint (`key` in `i18n.rs`) shown in place of the usual one wherever the
+    /// field is too narrow for that: a hint cut off mid-word says less than a short one whole.
+    pub fn short_placeholder(mut self, key: &'static str) -> Self {
+        self.placeholder_short_key = Some(key);
+        self
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -1094,7 +1104,22 @@ impl Element for TextElement {
         let style = window.text_style();
         let masked = input.masked && !input.revealed && !content.is_empty();
         let (display_text, text_color) = if content.is_empty() {
-            let placeholder = input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into());
+            let mut placeholder: SharedString =
+                input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into());
+            if let Some(short) = input.placeholder_short_key {
+                let font_size = style.font_size.to_pixels(window.rem_size());
+                let run = TextRun {
+                    len: placeholder.len(),
+                    font: style.font(),
+                    color: style.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                if window.text_system().shape_line(placeholder.clone(), font_size, &[run], None).width > bounds.size.width {
+                    placeholder = crate::i18n::t(cx, short).into();
+                }
+            }
             (placeholder, hex_alpha(Chrome::FOREGROUND, 0.4))
         } else if masked {
             (SharedString::from(input.masked_display()), style.color)
