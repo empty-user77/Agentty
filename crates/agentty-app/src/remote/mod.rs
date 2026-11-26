@@ -880,6 +880,22 @@ fn watch_health(cx: &mut App) {
     .detach();
 }
 
+/// What a plugin's switch in the Plugins page does, asked for by the page: every window drops the
+/// plugin's panel when it goes off, and the plugins are read again, which stops it or starts it.
+/// Starting still waits for the user's answer at the Mac when it asks for something not allowed.
+fn set_plugin_enabled(id: &str, enabled: bool, windows: &[gpui::WindowHandle<crate::workbench::Workbench>], cx: &mut App) {
+    if let Err(err) = agentty_bridge::plugins::store::set_enabled(id, enabled) {
+        eprintln!("remote: couldn't turn plugin {id} {}: {err:#}", if enabled { "on" } else { "off" });
+        return;
+    }
+    if !enabled {
+        for window in windows {
+            let _ = window.update(cx, |wb, _, cx| wb.remote_plugin_off(id, cx));
+        }
+    }
+    crate::plugins::reload(cx);
+}
+
 /// Characters of a plugin's failure kept for the page.
 const MAX_PLUGIN_ERROR_CHARS: usize = 300;
 
@@ -1050,6 +1066,10 @@ fn tick(cx: &mut App) {
     for command in commands {
         if let server::Command::OpenPort { port } = command {
             open_dev_server(port, cx);
+            continue;
+        }
+        if let server::Command::Plugin { id, enabled } = &command {
+            set_plugin_enabled(id, *enabled, &windows, cx);
             continue;
         }
         // Its last page left and came back before this round: it is shown again, at the size
