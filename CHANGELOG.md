@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-11-26
+
 ### Fixed
 - macOS: an update no longer fails with "rejected" on a network that blocks Apple's notarization servers (some
   company networks). The app inside the disk image now carries its own notarization ticket.
