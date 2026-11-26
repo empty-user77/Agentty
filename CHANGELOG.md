@@ -5,13 +5,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-11-26
+
 ### Added
+- A narrow sidebar lists workspaces in a mini layout: two-line cards (name; state, running subagents, branch or
+  folder, last activity) with the rest in a tooltip. **Mini** in the card layout options narrows the sidebar;
+  dragging it wider or picking another layout goes back.
 - The right-click menu of a plugin's button in the activity bar turns the plugin off (**Disable**) or uninstalls
   it (**Uninstall this plugin**, which asks for a second click), without a trip to the Plugins page.
+- Remote access can turn a plugin on or off, for phone apps that offer the switch. Turning one on grants nothing:
+  a plugin that asks for permissions still waits for the answer at the Mac.
 
 ### Changed
 - Workspace search: a workspace whose name or folder name is exactly what was typed comes first, then those whose
   name contains it; those found only in a conversation come last.
+
+### Fixed
+- The workspace menu no longer runs off the window's left edge beside a narrow sidebar.
 
 ## [0.4.11] - 2026-11-26
 
