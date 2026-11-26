@@ -945,7 +945,8 @@ impl Workbench {
                 _ => {}
             }
         });
-        let workspace_search = cx.new(|cx| TextInput::localized("", "workspaces.search", window, cx));
+        let workspace_search =
+            cx.new(|cx| TextInput::localized("", "workspaces.search", window, cx).short_placeholder("workspaces.search_short"));
         let workspace_search_subscription =
             cx.subscribe(&workspace_search, |this, input, event: &crate::text_input::TextInputEvent, cx| match event {
                 crate::text_input::TextInputEvent::Changed => {
@@ -3562,7 +3563,8 @@ impl Workbench {
             self.change_settings_live(cx, move |s| s.browser.width = width);
             cx.notify();
         } else if self.sidebar_resizing {
-            let width = (f32::from(event.position.x) - chrome::ACTIVITY_BAR_WIDTH).clamp(180.0, 640.0);
+            let width = (f32::from(event.position.x) - chrome::ACTIVITY_BAR_WIDTH)
+                .clamp(crate::settings::SIDEBAR_MIN_WIDTH, crate::settings::SIDEBAR_MAX_WIDTH);
             self.change_settings_live(cx, move |s| s.sidebar_width = width);
             cx.notify();
         } else if let Some(drag) = &self.split_drag {

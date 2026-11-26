@@ -53,56 +53,51 @@ fn dollars(cost: f64) -> Option<String> {
     (cost >= 1.).then(|| format!("${}", cost.floor() as u64))
 }
 
+/// The subagents of a card's agents: the running ones (whose, name, what it is doing, when it
+/// started — oldest first), how many finished, and the agents that have any.
+struct Subagents {
+    running: Vec<(Pane, String, Option<String>, u64)>,
+    finished: usize,
+    with_subagents: Vec<Pane>,
+}
+
+/// What a mini card says about its agents: the state in a word, its colour, how many subagents
+/// are running, and everything a detailed card would list, for the tooltip.
+pub(super) struct MiniState {
+    pub label: String,
+    pub color: u32,
+    pub subagents: usize,
+    pub summary: String,
+}
+
 impl Workbench {
-    /// The card's agent lines, or nothing for a workspace without a running agent.
-    pub(super) fn render_session_lines(
-        &self,
-        ws: &Workspace,
-        ink: Option<u32>,
-        indent: Pixels,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let id = ws.id;
-        let agents: Vec<Pane> = ws
-            .tabs
+    /// The agents running in `ws`.
+    fn card_agents(&self, ws: &Workspace, cx: &gpui::App) -> Vec<Pane> {
+        ws.tabs
             .iter()
             .flat_map(|t| t.root.leaves())
             .filter(|p| {
                 let view = p.read(cx);
                 view.is_agent() && view.is_running()
             })
-            .collect();
-        let lead = agents.iter().max_by_key(|p| urgency(&p.read(cx).status))?.clone();
-        // On a card the user coloured, everything is cut from the card's own ink.
-        let tone = |color: u32, alpha: f32| -> Hsla {
-            match ink {
-                Some(ink) => hex_alpha(ink, alpha.max(0.75)),
-                None => hex_alpha(color, alpha),
-            }
-        };
-        // The tone of the card's branch and path lines above.
-        let muted = match ink {
-            Some(ink) => hex_alpha(ink, 0.7),
-            None => hex_alpha(Chrome::MUTED, 1.),
-        };
-        let prefs = self.prefs(cx);
-        let (show_activity, show_subagents) = (prefs.card_activity, prefs.card_subagents);
-        let mut lines = div().pl(indent).pt_0p5().flex().flex_col().gap_0p5().t_caption();
+            .collect()
+    }
 
-        // State · how long · what it used.
-        // An orchestrator's card says how far the orchestration got, as its strip and page do.
-        let (label, color) = match self.record_of_pane(&lead, cx).cloned() {
+    /// The state a card shows for `lead`, in a word, and its colour. An orchestrator's card says
+    /// how far the orchestration got, as its strip and page do.
+    fn card_state(&self, lead: &Pane, cx: &gpui::App) -> (String, u32) {
+        match self.record_of_pane(lead, cx).cloned() {
             Some(record) => {
-                let team = self.team_of(&record.session, Some(&lead), cx);
+                let team = self.team_of(&record.session, Some(lead), cx);
                 let (_, color) = self.stage_words(record.stage, team, cx);
                 (crate::i18n::t(cx, super::orchestration::stage_key(record.stage)).to_string(), color)
             }
-            None => {
-                let view = lead.read(cx);
-                super::status_label_sized(view, true, cx)
-            }
-        };
-        let now_ms = crate::ui::now_ms();
+            None => super::status_label_sized(lead.read(cx), true, cx),
+        }
+    }
+
+    /// `label`, then how many agents, how long they have run and what their sessions used.
+    fn card_facts(&self, agents: &[Pane], label: String, cx: &gpui::App) -> Vec<String> {
         let since = agents.iter().filter_map(|p| p.read(cx).agent_since_ms).min();
         let used: (u64, Option<f64>) = agents
             .iter()
@@ -122,7 +117,7 @@ impl Workbench {
             facts.push(tf(cx, "card.agents", &[("n", &agents.len().to_string())]));
         }
         if let Some(since) = since {
-            facts.push(span(now_ms.saturating_sub(since) / 1000));
+            facts.push(span(crate::ui::now_ms().saturating_sub(since) / 1000));
         }
         if used.0 > 0 {
             let used_tokens = tf(cx, "card.tokens", &[("n", &tokens(used.0))]);
@@ -131,6 +126,96 @@ impl Workbench {
                 None => used_tokens,
             });
         }
+        facts
+    }
+
+    /// The subagents of `agents` — from their transcripts when those are followed (as the chip
+    /// and the subagents window count), else as the hooks reported them.
+    fn card_subagents(&self, agents: &[Pane], cx: &gpui::App) -> Subagents {
+        let now_ms = crate::ui::now_ms();
+        let mut running: Vec<(Pane, String, Option<String>, u64)> = Vec::new();
+        let mut finished = 0;
+        // The agents that have subagents, for the summary's click.
+        let mut with_subagents: Vec<Pane> = Vec::new();
+        for pane in agents {
+            match self.subagent_rows(pane, cx) {
+                Some((rows, over)) => {
+                    if over > 0 || !rows.is_empty() {
+                        with_subagents.push(pane.clone());
+                    }
+                    finished += over;
+                    running.extend(rows.into_iter().map(|(name, doing, started)| (pane.clone(), name, doing, started)));
+                }
+                None => {
+                    if !pane.read(cx).subagents.is_empty() {
+                        with_subagents.push(pane.clone());
+                    }
+                    for run in &pane.read(cx).subagents {
+                        if run.running() {
+                            let doing = run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()));
+                            let name = run.task.clone().unwrap_or_else(|| run.kind.clone());
+                            let started = now_ms.saturating_sub(Instant::now().duration_since(run.started).as_millis() as u64);
+                            running.push((pane.clone(), name, doing, started));
+                        } else {
+                            finished += 1;
+                        }
+                    }
+                }
+            }
+        }
+        running.sort_by_key(|(_, _, _, started)| *started);
+        Subagents { running, finished, with_subagents }
+    }
+
+    /// What a mini card says about the agents in `ws`, or nothing without a running agent.
+    pub(super) fn mini_state(&self, ws: &Workspace, cx: &gpui::App) -> Option<MiniState> {
+        let agents = self.card_agents(ws, cx);
+        let lead = agents.iter().max_by_key(|p| urgency(&p.read(cx).status))?.clone();
+        let (label, color) = self.card_state(&lead, cx);
+        let Subagents { running, finished, .. } = self.card_subagents(&agents, cx);
+        let mut facts = self.card_facts(&agents, label.clone(), cx);
+        if !running.is_empty() {
+            facts.push(tf(cx, "card.subagents_running", &[("n", &running.len().to_string())]));
+        }
+        if finished > 0 {
+            facts.push(tf(cx, "card.subagents_done", &[("n", &finished.to_string())]));
+        }
+        Some(MiniState { label, color, subagents: running.len(), summary: facts.join(" · ") })
+    }
+}
+
+impl Workbench {
+    /// The card's agent lines, or nothing for a workspace without a running agent.
+    pub(super) fn render_session_lines(
+        &self,
+        ws: &Workspace,
+        ink: Option<u32>,
+        indent: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let id = ws.id;
+        let agents = self.card_agents(ws, cx);
+        let lead = agents.iter().max_by_key(|p| urgency(&p.read(cx).status))?.clone();
+        // On a card the user coloured, everything is cut from the card's own ink.
+        let tone = |color: u32, alpha: f32| -> Hsla {
+            match ink {
+                Some(ink) => hex_alpha(ink, alpha.max(0.75)),
+                None => hex_alpha(color, alpha),
+            }
+        };
+        // The tone of the card's branch and path lines above.
+        let muted = match ink {
+            Some(ink) => hex_alpha(ink, 0.7),
+            None => hex_alpha(Chrome::MUTED, 1.),
+        };
+        let prefs = self.prefs(cx);
+        let (show_activity, show_subagents) = (prefs.card_activity, prefs.card_subagents);
+        let mut lines = div().pl(indent).pt_0p5().flex().flex_col().gap_0p5().t_caption();
+
+        // State · how long · what it used.
+        let (label, color) = self.card_state(&lead, cx);
+        let now_ms = crate::ui::now_ms();
+        let facts = self.card_facts(&agents, label, cx);
         if show_activity {
             lines = lines.child(
                 div()
@@ -210,37 +295,7 @@ impl Workbench {
         // Subagents: the running ones with what each is doing, the finished ones counted — from
         // their transcripts when those are followed (as the chip and the subagents window count),
         // else as the hooks reported them.
-        let mut running: Vec<(Pane, String, Option<String>, u64)> = Vec::new();
-        let mut finished = 0;
-        // The agents that have subagents, for the summary's click.
-        let mut with_subagents: Vec<Pane> = Vec::new();
-        for pane in agents.iter().filter(|_| show_subagents) {
-            match self.subagent_rows(pane, cx) {
-                Some((rows, over)) => {
-                    if over > 0 || !rows.is_empty() {
-                        with_subagents.push(pane.clone());
-                    }
-                    finished += over;
-                    running.extend(rows.into_iter().map(|(name, doing, started)| (pane.clone(), name, doing, started)));
-                }
-                None => {
-                    if !pane.read(cx).subagents.is_empty() {
-                        with_subagents.push(pane.clone());
-                    }
-                    for run in &pane.read(cx).subagents {
-                        if run.running() {
-                            let doing = run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()));
-                            let name = run.task.clone().unwrap_or_else(|| run.kind.clone());
-                            let started = now_ms.saturating_sub(Instant::now().duration_since(run.started).as_millis() as u64);
-                            running.push((pane.clone(), name, doing, started));
-                        } else {
-                            finished += 1;
-                        }
-                    }
-                }
-            }
-        }
-        running.sort_by_key(|(_, _, _, started)| *started);
+        let Subagents { running, finished, with_subagents } = self.card_subagents(if show_subagents { &agents } else { &[] }, cx);
         for (index, (pane, name, doing, started)) in running.iter().take(SUBAGENT_ROWS).enumerate() {
             let (name, doing) = (name.clone(), doing.clone());
             let target = pane.clone();
