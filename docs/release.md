@@ -46,9 +46,11 @@ Each release also carries, built by the **Release packages** workflow (`.github/
    cold and takes a few minutes. `dev` still builds this checkout, which is the point of a dev build.
 2. Assembles `dist/Agentty.app` (`packaging/macos/Info.plist.in`, `Agentty.icns`, license files)
 3. Signs with **hardened runtime** and `packaging/macos/entitlements.plist`
-4. Creates and signs `dist/Agentty-<ver>-release<timestamp>-arm64.dmg`
-5. Submits to Apple with `xcrun notarytool submit --wait`, then staples app and DMG
-6. Verifies with `spctl` (must report `source=Notarized Developer ID`) and `stapler validate`
+4. Notarizes the app (`xcrun notarytool submit --wait` on a zip of it) and staples its ticket, so the copy that goes
+   into the DMG carries one: the updater checks that copy, and without a ticket the check needs Apple's servers
+5. Creates and signs `dist/Agentty-<ver>-release<timestamp>-arm64.dmg`, notarizes it and staples the DMG
+6. Verifies with `spctl` (must report `source=Notarized Developer ID`) and `stapler validate`, for the DMG and the app
+   inside it
 7. Writes a zip and `SHA256SUMS.txt`
 
 ## Credentials

@@ -174,6 +174,25 @@ codesign "${SIGN_ARGS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
 ok "App signed"
 
+# The app gets its notarization ticket before it goes into the DMG. A ticket stapled only to the
+# DMG leaves the app inside without one, and the updater's Gatekeeper check of that app then
+# needs Apple's servers: on a network that blocks them the update is refused as "rejected".
+notarize() {
+  xcrun notarytool submit "$1" \
+    --apple-id "$AGENTTY_APPLE_ID" --password "$AGENTTY_APPLE_PASSWORD" --team-id "$AGENTTY_TEAM_ID" \
+    --wait --timeout 30m | sed 's/^/  /'
+}
+if [[ "$NOTARIZE" == "true" ]]; then
+  log "Notarizing the app (usually 1–5 minutes)…"
+  APP_ZIP="$(mktemp -d)/$APP_NAME.zip"
+  ditto -c -k --keepParent "$APP" "$APP_ZIP"
+  notarize "$APP_ZIP"
+  rm -f "$APP_ZIP"
+  xcrun stapler staple "$APP" | sed 's/^/  /'
+  xcrun stapler validate "$APP" >/dev/null || die "the app has no stapled notarization ticket"
+  ok "App notarized and stapled"
+fi
+
 # ─── 6. DMG ───
 DMG_NAME="$APP_NAME-$VERSION-$ARCH.dmg"
 [[ "$MODE" != "dev" ]] && DMG_NAME="$APP_NAME-$VERSION-release$BUILD-$ARCH.dmg"
@@ -236,16 +255,21 @@ ok "DMG created: $DMG ($(du -h "$DMG" | cut -f1))"
 
 # ─── 7. Notarize + staple ───
 if [[ "$NOTARIZE" == "true" ]]; then
-  log "Submitting to Apple notary service (usually 1–5 minutes)…"
-  xcrun notarytool submit "$DMG" \
-    --apple-id "$AGENTTY_APPLE_ID" --password "$AGENTTY_APPLE_PASSWORD" --team-id "$AGENTTY_TEAM_ID" \
-    --wait --timeout 30m | sed 's/^/  /'
-  xcrun stapler staple "$APP" | sed 's/^/  /'
+  log "Notarizing the DMG (usually 1–5 minutes)…"
+  notarize "$DMG"
   xcrun stapler staple "$DMG" | sed 's/^/  /'
   log "Verifying Gatekeeper acceptance"
   spctl -a -vvv -t install "$DMG" 2>&1 | sed 's/^/  /'
   spctl -a -vvv -t exec "$APP" 2>&1 | sed 's/^/  /'
   xcrun stapler validate "$DMG" | sed 's/^/  /'
+  # What the updater checks is the app inside the DMG, not the one in dist/.
+  CHECK_DIR="$(mktemp -d)/mnt"
+  mkdir -p "$CHECK_DIR"
+  hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$CHECK_DIR" >/dev/null
+  INSIDE="ok"
+  xcrun stapler validate "$CHECK_DIR/$APP_NAME.app" >/dev/null 2>&1 || INSIDE="no ticket"
+  hdiutil detach "$CHECK_DIR" -quiet || hdiutil detach "$CHECK_DIR" -force -quiet
+  [[ "$INSIDE" == "ok" ]] || die "the app inside the DMG has no stapled notarization ticket"
   ok "Notarized and stapled"
 fi
 
