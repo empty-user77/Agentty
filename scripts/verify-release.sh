@@ -57,6 +57,17 @@ if [[ -n "$DMG" && -f "$DMG" ]]; then
   spctl --assess --type open --context context:primary-signature -vv "$DMG" 2>&1 | grep -q "source=Notarized Developer ID" \
     && pass "dmg: Notarized Developer ID (spctl)" || fail "dmg not accepted as Notarized Developer ID"
   xcrun stapler validate "$DMG" >/dev/null 2>&1 && pass "dmg: notarization ticket stapled" || fail "dmg: no stapled ticket"
+  # The updater assesses the app inside the DMG. Without its own ticket that needs Apple's servers,
+  # and the update is refused on a network that blocks them.
+  inside="$(mktemp -d)/mnt"
+  mkdir -p "$inside"
+  if hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$inside" >/dev/null 2>&1; then
+    xcrun stapler validate "$inside/Agentty.app" >/dev/null 2>&1 && pass "app inside the dmg: notarization ticket stapled" \
+      || fail "app inside the dmg: no stapled ticket"
+    hdiutil detach "$inside" -quiet 2>/dev/null || hdiutil detach "$inside" -force -quiet 2>/dev/null
+  else
+    fail "dmg does not mount"
+  fi
 fi
 
 if [[ -f "$SUMS" ]]; then
