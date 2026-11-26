@@ -144,8 +144,8 @@ pub struct WindowInfo {
     pub account: Option<String>,
 }
 
-/// An installed plugin and how it runs, for the page's home. Only shown: the page can't start,
-/// stop or reach a plugin.
+/// An installed plugin and how it runs, for the page's home. The page may turn it on or off
+/// (`Command::Plugin`), never reach it or grant what it asks for.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PluginInfo {
     pub id: String,

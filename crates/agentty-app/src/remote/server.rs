@@ -174,6 +174,10 @@ pub enum Command {
     Choice { pane: u64, option: usize },
     /// Something done to an orchestration, or a new one.
     Orchestration(OrchestrationCommand),
+    /// An installed plugin (`id`, checked against the overview) turned on or off, as its switch in
+    /// the Plugins page does. On never grants what it asks for: one the user hasn't allowed waits
+    /// for the answer at the Mac.
+    Plugin { id: String, enabled: bool },
 }
 
 /// What the page may ask of the orchestrator. Ids and stages were checked against the board; the
@@ -237,6 +241,7 @@ impl Command {
             | Command::CloseTab { .. }
             | Command::OpenFolder { .. }
             | Command::OpenPort { .. }
+            | Command::Plugin { .. }
             | Command::Orchestration(_) => None,
         }
     }
@@ -336,6 +341,13 @@ pub struct Hub {
 pub struct VoiceConfig {
     pub model: &'static agentty_bridge::voice::Model,
     pub language: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginBody {
+    id: String,
+    enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -1033,6 +1045,7 @@ impl Hub {
             ("POST", "/api/workspace/file") => Routed::Response(self.workspace_file(request)),
             ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
             ("POST", "/api/devserver") => Routed::Response(self.open_dev_server(request)),
+            ("POST", "/api/plugin") => Routed::Response(self.plugin(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
         }
     }
@@ -1704,6 +1717,18 @@ impl Hub {
         self.queue(Command::OpenPort { port: body.port })
     }
 
+    /// Turns an installed plugin on or off. Only one the overview lists.
+    fn plugin(&self, request: &Request) -> Response {
+        let Ok(body) = serde_json::from_slice::<PluginBody>(&request.body) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let listed = self.view.lock().unwrap_or_else(|e| e.into_inner()).plugins.iter().any(|p| p.id == body.id);
+        if !listed {
+            return Response::json(404, &json!({ "error": "no such plugin" }));
+        }
+        self.queue(Command::Plugin { id: body.id, enabled: body.enabled })
+    }
+
     /// Hands a command to the app's next round.
     fn queue(&self, command: Command) -> Response {
         let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
@@ -1718,6 +1743,7 @@ impl Hub {
                 | Command::Trash { .. }
                 | Command::CloseTab { .. }
                 | Command::OpenPort { .. }
+                | Command::Plugin { .. }
                 | Command::Orchestration(_)
         );
         if once && inbox.contains(&command) {
@@ -1852,8 +1878,17 @@ impl Hub {
 
 /// What the page lists: workspaces, terminals and plugins.
 fn overview(view: &View, voice: bool) -> serde_json::Value {
-    // `manage`: this Mac takes `sleep`, `close` and `trash`, so an app shows them only where they work.
-    json!({ "workspaces": view.workspaces, "windows": view.windows, "sessions": view.sessions, "plugins": view.plugins, "voice": voice, "manage": true })
+    // `manage`: this Mac takes `sleep`, `close` and `trash`; `pluginSwitch`: it turns plugins on and
+    // off. An app shows them only where they work.
+    json!({
+        "workspaces": view.workspaces,
+        "windows": view.windows,
+        "sessions": view.sessions,
+        "plugins": view.plugins,
+        "voice": voice,
+        "manage": true,
+        "pluginSwitch": true,
+    })
 }
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
@@ -2568,6 +2603,19 @@ mod tests {
             hub.take_commands(),
             vec![Command::Wake { workspace: 3 }, Command::NewTab { workspace: 3, kind: PaneKind::Claude }],
             "the second wake was not queued again"
+        );
+        assert!(body.contains("\"pluginSwitch\":true"), "the app learns it may turn plugins on and off: {body}");
+        let plugin = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/plugin", body) }.raw()).0;
+        assert_eq!(plugin(json!({ "id": "x", "enabled": false })), 200);
+        assert_eq!(plugin(json!({ "id": "x", "enabled": false })), 200, "a double tap");
+        assert_eq!(plugin(json!({ "id": "y", "enabled": true })), 404, "a plugin that isn't installed");
+        assert_eq!(plugin(json!({ "id": "x" })), 400, "on or off has to be said");
+        assert_eq!(plugin(json!({ "id": "x", "enabled": true, "grant": true })), 400, "nothing else is taken");
+        let queued = hub.take_commands();
+        assert_eq!(
+            queued.iter().filter(|c| matches!(c, Command::Plugin { .. })).collect::<Vec<_>>(),
+            vec![&Command::Plugin { id: "x".into(), enabled: false }],
+            "once for a double tap"
         );
         for _ in 1..MAX_NEW_TABS {
             assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "shell" })), 200);

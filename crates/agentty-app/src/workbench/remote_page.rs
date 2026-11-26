@@ -274,9 +274,16 @@ impl Workbench {
             | Command::OpenPort { .. }
             | Command::Stop { .. }
             | Command::Choice { .. }
+            | Command::Plugin { .. }
             | Command::Orchestration(_) => {}
         });
         true
+    }
+
+    /// A plugin turned off from the page: its panel here goes, as with its switch in the Plugins page.
+    pub fn remote_plugin_off(&mut self, plugin: &str, cx: &mut Context<Self>) {
+        self.drop_plugin_panel(plugin, cx);
+        cx.notify();
     }
 
     /// The index of a workspace the remote page may act on: the user's own, not left out.
