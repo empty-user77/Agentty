@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The right-click menu of a plugin's button in the activity bar turns the plugin off (**Disable**) or uninstalls
+  it (**Uninstall this plugin**, which asks for a second click), without a trip to the Plugins page.
+
+### Changed
+- Workspace search: a workspace whose name or folder name is exactly what was typed comes first, then those whose
+  name contains it; those found only in a conversation come last.
+
 ## [0.4.11] - 2026-11-26
 
 ### Fixed

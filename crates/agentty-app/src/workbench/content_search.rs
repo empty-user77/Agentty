@@ -201,10 +201,45 @@ pub(crate) fn match_block(label: impl Into<SharedString>, text: StyledText) -> D
         .child(div().w_full().min_w_0().line_clamp(2).t_small().text_color(hex(0xa8a8a8)).child(text))
 }
 
+/// How well a workspace answers what was typed, best first: the name on its card or the name of
+/// its folder is the query (0), one of them contains it (1), the folder's path or the title its
+/// terminal set does (2: that title is often a path too), or only something said in one of its
+/// conversations (3). `query` is lowercase, as the search box hands it over.
+pub fn workspace_rank(label: &str, title: &str, folder: &std::path::Path, query: &str) -> u8 {
+    let folder_name = folder.file_name().map(|name| name.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let names = [label.trim().to_lowercase(), folder_name];
+    if names.iter().any(|name| name == query) {
+        0
+    } else if names.iter().any(|name| name.contains(query)) {
+        1
+    } else if title.to_lowercase().contains(query) || folder.to_string_lossy().to_lowercase().contains(query) {
+        2
+    } else {
+        3
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn a_workspace_named_like_the_query_comes_before_one_that_only_mentions_it() {
+        let rank = |label: &str, title: &str, folder: &str| workspace_rank(label, title, std::path::Path::new(folder), "agentty-web");
+        // The folder's own name is what was typed, whatever the workspace is called.
+        assert_eq!(rank("AgenttyWeb", "", "/Users/someone/Agentty/Agentty-Web"), 0);
+        assert_eq!(rank("Agentty-Web", "", "/Users/someone/elsewhere"), 0);
+        assert_eq!(rank(" agentty-web ", "", "/tmp/x"), 0);
+        // Part of a name, then part of the path above the folder, then conversations only.
+        assert_eq!(rank("Agentty-Web redesign", "", "/tmp/x"), 1);
+        assert_eq!(rank("Site", "", "/Users/someone/agentty-web-old"), 1);
+        assert_eq!(rank("Site", "", "/Users/someone/Agentty-Web/packages/ui"), 2);
+        assert_eq!(rank("Agentty", "", "/Users/someone/Agentty/Agentty"), 3);
+        // A terminal's title is often the path: it counts as the path does, not as a name.
+        assert_eq!(rank("packages", "/Users/someone/Agentty-Web/packages", "/Users/someone/Agentty-Web/packages"), 2);
+        assert_eq!(rank("ui", "agentty-web", "/tmp/x"), 2);
+    }
 
     fn keys(map: &HashMap<PathBuf, TranscriptHit>) -> HashSet<PathBuf> {
         map.keys().cloned().collect()
