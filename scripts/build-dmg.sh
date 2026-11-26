@@ -38,6 +38,25 @@ ok()  { printf "\033[1;32m[  ok ]\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m[warn ]\033[0m %s\n" "$*"; }
 die() { printf "\033[1;31m[error]\033[0m %s\n" "$*" >&2; exit 1; }
 
+# Detaches a mounted disk image. CI stopped here now and then, right after the installer window
+# was styled, and `-quiet` kept the reason out of the log; a volume something still holds (Finder,
+# Spotlight) is the usual one. Wait and try again, say why each try failed, and force it only at
+# the end.
+detach_volume() {
+  local dir="$1" try out
+  for try in 1 2 3 4 5; do
+    if out="$(hdiutil detach "$dir" 2>&1)"; then return 0; fi
+    warn "hdiutil detach failed (try $try of 5): $out"
+    sleep $((try * 2))
+  done
+  for try in 1 2 3; do
+    if out="$(hdiutil detach "$dir" -force 2>&1)"; then return 0; fi
+    warn "hdiutil detach -force failed (try $try of 3): $out"
+    sleep 5
+  done
+  die "could not detach $dir: $out"
+}
+
 # ─── 1. Mode and credentials ───
 PUBLISH="false"
 case "$MODE" in
@@ -245,8 +264,8 @@ else
 fi
 chmod -Rf go-w "$MOUNT_DIR" 2>/dev/null || true
 sync
-hdiutil detach "$MOUNT_DIR" -quiet || hdiutil detach "$MOUNT_DIR" -force -quiet
-hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
+detach_volume "$MOUNT_DIR"
+hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null || die "could not convert the disk image"
 rm -f "$RW_DMG"
 if [[ "$SIGN_ID" != "-" ]]; then
   codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
@@ -268,7 +287,7 @@ if [[ "$NOTARIZE" == "true" ]]; then
   hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$CHECK_DIR" >/dev/null
   INSIDE="ok"
   xcrun stapler validate "$CHECK_DIR/$APP_NAME.app" >/dev/null 2>&1 || INSIDE="no ticket"
-  hdiutil detach "$CHECK_DIR" -quiet || hdiutil detach "$CHECK_DIR" -force -quiet
+  detach_volume "$CHECK_DIR"
   [[ "$INSIDE" == "ok" ]] || die "the app inside the DMG has no stapled notarization ticket"
   ok "Notarized and stapled"
 fi
