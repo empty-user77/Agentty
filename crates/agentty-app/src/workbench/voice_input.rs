@@ -572,7 +572,11 @@ impl Workbench {
                     }
                 }))
                 .child(self.render_voice_card(cx));
-            div().absolute().bottom(px(24.)).right_0().child(gpui::deferred(crate::ui::fade_in("status-mic-fade", panel)).with_priority(3))
+            div().absolute().bottom(px(24.)).right_0().child(crate::ui::snapped(
+                crate::ui::fade_in("status-mic-fade", panel),
+                gpui::Anchor::BottomRight,
+                3,
+            ))
         });
         Some(div().relative().h_full().flex().items_center().child(button).children(setup).into_any_element())
     }

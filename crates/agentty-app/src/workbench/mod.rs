@@ -4140,18 +4140,16 @@ impl Render for Workbench {
                                         }),
                                 )
                             })
-                            .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
+                            .when(self.launcher_open, |d| d.child(self.render_launcher(window, cx)))
                             // A selection's bar, menu or side-chat question (a chat's, or a terminal's).
                             .children(self.render_select_ui(cx))
                             // Opens under the sync icon, left of the bell.
                             .when(self.sync.popover_open, |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .top(px(4.))
-                                        .right(px(36.))
-                                        .child(gpui::deferred(self.render_sync_popover(cx)).with_priority(3)),
-                                )
+                                d.child(div().absolute().top(px(4.)).right(px(36.)).child(crate::ui::snapped(
+                                    self.render_sync_popover(cx),
+                                    gpui::Anchor::TopRight,
+                                    3,
+                                )))
                             })
                             // Opens under the bell: at the right end of the title bar, or beside the
                             // sidebar when the bell is in its header.
@@ -4163,7 +4161,11 @@ impl Render for Workbench {
                                         .top(px(4.))
                                         .when(in_sidebar, |d| d.left(px(4.)))
                                         .when(!in_sidebar, |d| d.right(px(8.)))
-                                        .child(gpui::deferred(self.render_notices(cx)).with_priority(3)),
+                                        .child(crate::ui::snapped(
+                                            self.render_notices(cx),
+                                            if in_sidebar { gpui::Anchor::TopLeft } else { gpui::Anchor::TopRight },
+                                            3,
+                                        )),
                                 )
                             }),
                     ),
@@ -5738,6 +5740,10 @@ impl Workbench {
                         _ => view.replace_and_mark_text_in_range(None, &text, None, window, cx),
                     });
                 }
+            }
+            // `group-menu <n>`: opens the n-th group's menu, as a right-click on its header does.
+            "group-menu" => {
+                self.group_menu = argument.trim().parse::<usize>().ok().and_then(|i| self.groups.get(i)).map(|g| g.id);
             }
             "group" => {
                 let id = self.create_group(window, cx);

@@ -336,7 +336,7 @@ impl Workbench {
                 .items_start()
                 .justify_center()
                 .pt(px(4.))
-                .child(list)
+                .child(div().child(crate::ui::snapped(list, gpui::Anchor::TopCenter, 3)))
                 .into_any_element(),
         )
     }

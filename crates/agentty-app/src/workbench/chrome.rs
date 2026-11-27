@@ -1222,7 +1222,11 @@ impl Workbench {
                     ),
             })
             .children(group.filter(|gid| self.group_menu == Some(*gid)).map(|gid| {
-                div().absolute().top(px(26.)).left(px(8.)).child(gpui::deferred(self.render_group_menu(gid, cx)).with_priority(3))
+                div().absolute().top(px(26.)).left(px(8.)).child(crate::ui::snapped(
+                    self.render_group_menu(gid, cx),
+                    gpui::Anchor::TopLeft,
+                    3,
+                ))
             }))
     }
 
@@ -2724,7 +2728,7 @@ impl Workbench {
             })
     }
 
-    pub(super) fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_launcher(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let entry = |id: SharedString,
                      logo: Option<&'static str>,
                      label: String,
@@ -2760,7 +2764,8 @@ impl Workbench {
         let mut menu = popover()
             .id("launcher")
             .w(px(300.))
-            .max_h(px(560.))
+            // Never taller than the window leaves room for (a short window scrolls it).
+            .max_h(px(560.).min(window.viewport_size().height - px(16.)))
             .overflow_y_scroll()
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -2951,7 +2956,7 @@ impl Workbench {
                 .absolute()
                 .top(px(TAB_HEIGHT + 4.))
                 .right(px(8.))
-                .child(gpui::deferred(crate::ui::fade_in("launcher-fade", menu)).with_priority(3))
+                .child(crate::ui::snapped(crate::ui::fade_in("launcher-fade", menu), gpui::Anchor::TopRight, 3))
                 .into_any_element(),
         }
     }

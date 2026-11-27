@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Menus opened near an edge of the window stay inside it: a group's menu at the bottom of the sidebar, a text
+  field's right-click menu, the status bar's menus, the account menu, the new-tab menu, the sync and notification
+  panels, the Git page's repository and branch menus, and the browser's device list.
+
 ## [0.4.12] - 2026-11-26
 
 ### Added
