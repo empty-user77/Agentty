@@ -910,7 +910,7 @@ impl GitView {
             .absolute()
             .top(px(52.))
             .left_0()
-            .child(gpui::deferred(crate::ui::fade_in("git-repo-menu-fade", menu)).with_priority(3))
+            .child(crate::ui::snapped(crate::ui::fade_in("git-repo-menu-fade", menu), gpui::Anchor::TopLeft, 3))
             .into_any_element()
     }
 
@@ -965,7 +965,7 @@ impl GitView {
             .absolute()
             .top(px(52.))
             .left(px(SIDEBAR_WIDTH))
-            .child(gpui::deferred(crate::ui::fade_in("git-branch-menu-fade", menu)).with_priority(3))
+            .child(crate::ui::snapped(crate::ui::fade_in("git-branch-menu-fade", menu), gpui::Anchor::TopLeft, 3))
             .children(popup)
             .into_any_element()
     }

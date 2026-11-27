@@ -692,7 +692,7 @@ impl Workbench {
                 .absolute()
                 .left(px(super::chrome::ACTIVITY_BAR_WIDTH + 4.))
                 .bottom(px(0.))
-                .child(gpui::deferred(crate::ui::fade_in("account-menu-fade", panel)).with_priority(3))
+                .child(crate::ui::snapped(crate::ui::fade_in("account-menu-fade", panel), gpui::Anchor::BottomLeft, 3))
                 .into_any_element(),
         )
     }

@@ -247,23 +247,22 @@ impl Workbench {
         // off and on differ only by the icon's colour, so its words have to be right there.
         let hovered = self.inventory.computer_use_hovered;
         let bubble = hovered.then(|| {
-            gpui::deferred(
-                div().absolute().bottom(px(24.)).right_0().child(
-                    div()
-                        .w(px(250.))
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(hex(Chrome::OVERLAY))
-                        .border_1()
-                        .border_color(hex(Chrome::OVERLAY_BORDER))
-                        .shadow_md()
-                        .t_small()
-                        .text_color(hex(Chrome::BRIGHT))
-                        .child(words),
-                ),
-            )
-            .with_priority(1)
+            div().absolute().bottom(px(24.)).right_0().child(crate::ui::snapped(
+                div()
+                    .w(px(250.))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(hex(Chrome::OVERLAY))
+                    .border_1()
+                    .border_color(hex(Chrome::OVERLAY_BORDER))
+                    .shadow_md()
+                    .t_small()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .child(words),
+                gpui::Anchor::BottomRight,
+                1,
+            ))
         });
         Some(
             div()
@@ -515,7 +514,7 @@ impl Workbench {
             .absolute()
             .bottom(px(24.))
             .right_0()
-            .child(gpui::deferred(crate::ui::fade_in("status-menu-fade", panel)).with_priority(3))
+            .child(crate::ui::snapped(crate::ui::fade_in("status-menu-fade", panel), gpui::Anchor::BottomRight, 3))
             .into_any_element()
     }
 }
@@ -599,7 +598,11 @@ impl Workbench {
                 .child(list)
                 .child(div().h(px(1.)).my_1().bg(hex(Chrome::OVERLAY_BORDER)))
                 .child(div().px_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "advisor.menu_hint")));
-            div().absolute().bottom(px(24.)).left_0().child(gpui::deferred(crate::ui::fade_in("advisor-menu-fade", panel)).with_priority(3))
+            div().absolute().bottom(px(24.)).left_0().child(crate::ui::snapped(
+                crate::ui::fade_in("advisor-menu-fade", panel),
+                gpui::Anchor::BottomLeft,
+                3,
+            ))
         });
         Some(div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element())
     }
@@ -692,7 +695,11 @@ impl Workbench {
                 )
                 .child(div().h(px(1.)).mb_1().bg(hex(Chrome::OVERLAY_BORDER)))
                 .child(list);
-            div().absolute().bottom(px(24.)).right_0().child(gpui::deferred(crate::ui::fade_in("sleep-menu-fade", panel)).with_priority(3))
+            div().absolute().bottom(px(24.)).right_0().child(crate::ui::snapped(
+                crate::ui::fade_in("sleep-menu-fade", panel),
+                gpui::Anchor::BottomRight,
+                3,
+            ))
         });
         div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element()
     }

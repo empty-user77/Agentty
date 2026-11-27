@@ -218,12 +218,9 @@ impl Render for UsageView {
                     .when(self.agent_menu, |d| {
                         // Deferred: painted above the cards below the header.
                         d.child(
-                            gpui::deferred(
+                            div().absolute().top(px(26.)).left_0().child(crate::ui::snapped(
                                 popover()
                                     .id("agent-menu")
-                                    .absolute()
-                                    .top(px(26.))
-                                    .left_0()
                                     .w(px(160.))
                                     .occlude()
                                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -242,8 +239,9 @@ impl Render for UsageView {
                                         "Codex",
                                         cx.listener(|this, _: &ClickEvent, _, cx| this.select_agent(Agent::Codex, cx)),
                                     )),
-                            )
-                            .with_priority(2),
+                                gpui::Anchor::TopLeft,
+                                2,
+                            )),
                         )
                     }),
             )

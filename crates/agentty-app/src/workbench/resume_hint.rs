@@ -296,7 +296,7 @@ impl Workbench {
                         ),
                 );
             }
-            bar = bar.child(div().absolute().top(px(30.)).right(px(8.)).child(gpui::deferred(list).with_priority(2)));
+            bar = bar.child(div().absolute().top(px(30.)).right(px(8.)).child(crate::ui::snapped(list, gpui::Anchor::TopRight, 2)));
         }
         Some(bar.into_any_element())
     }

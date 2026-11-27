@@ -188,7 +188,11 @@ impl Workbench {
             )
             .when(open, |d| {
                 // Out to the right, over the terminals: the list it changes stays in sight.
-                d.child(div().absolute().top(px(26.)).left_0().child(gpui::deferred(self.render_workspace_options(cx)).with_priority(3)))
+                d.child(div().absolute().top(px(26.)).left_0().child(crate::ui::snapped(
+                    self.render_workspace_options(cx),
+                    gpui::Anchor::TopLeft,
+                    3,
+                )))
             })
             .into_any_element()
     }

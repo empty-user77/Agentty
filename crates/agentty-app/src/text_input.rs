@@ -1417,7 +1417,7 @@ impl TextInput {
         };
         Some(
             div().absolute().left(px(f32::from(at.x - self.last_bounds.map(|b| b.origin.x).unwrap_or(px(0.))))).top(px(18.)).child(
-                gpui::deferred(
+                crate::ui::snapped(
                     crate::ui::popover()
                         .id("text-input-menu")
                         .w(px(220.))
@@ -1438,8 +1438,9 @@ impl TextInput {
                             MenuAction::SelectAll,
                             cx,
                         )),
-                )
-                .with_priority(4),
+                    gpui::Anchor::TopLeft,
+                    4,
+                ),
             ),
         )
     }

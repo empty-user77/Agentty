@@ -515,6 +515,14 @@ pub fn fit_to_window(menu: Div, id: impl Into<ElementId>, window: &Window) -> St
     menu.id(id).max_h(room.max(px(80.))).overflow_y_scroll()
 }
 
+/// A menu hung on a holder (an absolutely placed div with nothing else in it): the menu's `corner`
+/// sits at the holder's origin, and a window edge it would cross pushes it back in, 8 px clear.
+/// Every menu placed beside its control goes through this or an `anchored` of its own: a bare
+/// `deferred` under an offset runs off the window when its control is near an edge.
+pub fn snapped(menu: impl IntoElement, corner: gpui::Anchor, priority: usize) -> gpui::Deferred {
+    gpui::deferred(gpui::anchored().anchor(corner).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(priority)
+}
+
 /// Spinner + text, for anything loading.
 pub fn loading_row(text: impl Into<SharedString>) -> Div {
     div()
